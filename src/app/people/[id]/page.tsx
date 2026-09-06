@@ -2,15 +2,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { navCounts, person, resourceList } from "@/lib/queries";
+import { navCounts, person, resourceList, hubFunnels } from "@/lib/queries";
 import { date, dateTime, fullName, money } from "@/lib/format";
-import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson } from "@/lib/actions";
+import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson, enrollToFunnel } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function Person({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [counts, d, res] = await Promise.all([navCounts(), person(Number(id)), resourceList()]);
+  const [counts, d, res, fun] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels()]);
   if (!d) notFound();
   const { p, subs, orders, events, identities, entitlements } = d;
   const hub = identities.find((i) => i.botKey === "hub");
@@ -55,6 +55,9 @@ export default async function Person({ params }: { params: Promise<{ id: string 
           <form action={saveNotes} className="form"><input type="hidden" name="personId" value={p.id} /><textarea name="notes" rows={4} defaultValue={p.notes ?? ""} className="field" style={{ width: "100%", border: "1px solid var(--line-2)", borderRadius: 9, padding: 8 }} placeholder="Нотатка для команди…" /><div><button className="btn sm" type="submit">Зберегти</button></div></form>
           {Object.keys(p.customFields ?? {}).length ? <dl className="kv" style={{ marginTop: 12 }}>{Object.entries(p.customFields ?? {}).map(([k, v]) => <><dt key={k + "k"}>{k}</dt><dd key={k + "v"}>{String(v)}</dd></>)}</dl> : null}
           {p.utm?.length ? <p className="note">UTM: {p.utm.map((u) => Object.entries(u).map(([k, v]) => `${k}=${v}`).join(" ")).join("; ")}</p> : null}
+        </div>
+        <div className="card"><h3>Додати у воронку Hub</h3>
+          {hub && !hub.blockedAt ? (fun.length ? <form action={enrollToFunnel} className="row-actions"><input type="hidden" name="personId" value={p.id} /><select name="funnelId" className="btn sm">{fun.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select><button className="btn sm pri" type="submit">Додати</button></form> : <p className="muted">Активних воронок Hub ще немає: <Link href="/funnels">створити</Link>.</p>) : <p className="muted">Людина ще не запускала Hub-бот.</p>}
         </div>
         <div className="card"><h3>Написати в Hub-боті</h3>
           {hub && !hub.blockedAt ? <form action={replyToPerson} className="form"><input type="hidden" name="personId" value={p.id} /><textarea name="text" rows={3} className="field" style={{ width: "100%", border: "1px solid var(--line-2)", borderRadius: 9, padding: 8 }} placeholder="Повідомлення…" required /><div><button className="btn sm pri" type="submit">Надіслати</button></div></form>

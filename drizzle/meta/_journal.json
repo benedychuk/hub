@@ -8,6 +8,13 @@
       "when": 1788710553012,
       "tag": "0000_plain_tomorrow_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788713500010,
+      "tag": "0001_absent_tomorrow_man",
+      "breakpoints": true
     }
   ]
 }

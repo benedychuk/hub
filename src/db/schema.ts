@@ -180,6 +180,30 @@ export const funnelSteps = pgTable("funnel_steps", {
   config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
 });
 
+// Проходження воронки конкретною людиною.
+export const funnelEnrollments = pgTable("funnel_enrollments", {
+  id: serial("id").primaryKey(),
+  funnelId: integer("funnel_id").notNull().references(() => funnels.id, { onDelete: "cascade" }),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("active"), // active | done | stopped
+  nextPosition: integer("next_position").notNull().default(0),
+  nextAt: timestamp("next_at", { withTimezone: true }),
+  stopReason: text("stop_reason"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (t) => [index("fe_due_idx").on(t.status, t.nextAt), index("fe_person_idx").on(t.personId)]);
+
+// Факт відправлення кроку людині (для статистики).
+export const funnelDeliveries = pgTable("funnel_deliveries", {
+  id: serial("id").primaryKey(),
+  enrollmentId: integer("enrollment_id").notNull().references(() => funnelEnrollments.id, { onDelete: "cascade" }),
+  stepId: integer("step_id").notNull().references(() => funnelSteps.id, { onDelete: "cascade" }),
+  personId: integer("person_id").notNull(),
+  telegramMessageId: integer("telegram_message_id"),
+  clicked: boolean("clicked").notNull().default(false),
+  sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("fd_step_idx").on(t.stepId)]);
+
 export const broadcasts = pgTable("broadcasts", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -193,6 +217,7 @@ export const broadcasts = pgTable("broadcasts", {
   status: text("status").notNull().default("draft"), // draft | scheduled | sending | sent | failed
   sentCount: integer("sent_count").notNull().default(0),
   failedCount: integer("failed_count").notNull().default(0),
+  lastError: text("last_error"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -2,6 +2,7 @@ import { Bot, InlineKeyboard, webhookCallback } from "grammy";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
+import { enroll, matchEntry, markClick } from "./funnels";
 
 const { persons, identities, subscriptions, plans, events, bots } = schema;
 
@@ -44,6 +45,7 @@ export function getBot() {
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
     const payload = ctx.match?.toString() || "";
     await db().insert(events).values({ personId, type: "bot.start", source: "hub", payload: { payload } });
+    if (payload) { const f = await matchEntry("start", payload); if (f) { await enroll(f.id, personId, "start:" + payload); return; } }
     const sub = await db().select().from(subscriptions).where(eq(subscriptions.personId, personId)).orderBy(desc(subscriptions.updatedAt)).limit(1);
     const active = sub[0] && ["active", "trialing", "past_due"].includes(sub[0].status);
     const kb = new InlineKeyboard().text("Мої підписки", "subs").row().text("Тарифи", "plans");
@@ -78,10 +80,18 @@ export function getBot() {
   bot.command("plans", (ctx) => showPlans(ctx));
   bot.callbackQuery("plans", async (ctx) => { await ctx.answerCallbackQuery(); await showPlans(ctx); });
 
+  bot.callbackQuery(/^fs:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
+    if (p[0]) await markClick(Number(ctx.match[1]), p[0].id);
+  });
+
   bot.on("message", async (ctx) => {
     if (!ctx.from) return;
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
     await db().insert(events).values({ personId, type: "bot.message", source: "hub", payload: { text: ctx.message.text ?? null, message_id: ctx.message.message_id, has_media: !ctx.message.text } });
+    if (ctx.message.text) { const f = await matchEntry("keyword", ctx.message.text); if (f) { await enroll(f.id, personId, "keyword"); return; } }
     await ctx.reply("Дякую! Повідомлення отримано, команда відповість у робочі години.");
   });
 

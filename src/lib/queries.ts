@@ -126,7 +126,20 @@ export async function offerList() {
     return rows;
   }, []);
 }
-export async function funnelList() { return safe(() => db().select().from(funnels).orderBy(desc(funnels.isActive), desc(funnels.subscribersCount)), []); }
+export async function funnelList() { return safe(() => db().select().from(funnels).orderBy(desc(sql`${funnels.source} = 'hub'`), desc(funnels.isActive), desc(funnels.subscribersCount)), []); }
+export async function funnelDetail(id: number) {
+  return safe(async () => {
+    const d = db();
+    const [f] = await d.select().from(funnels).where(eq(funnels.id, id));
+    if (!f) return null;
+    const steps = await d.select().from(schema.funnelSteps).where(eq(schema.funnelSteps.funnelId, id)).orderBy(sql`position`);
+    const stats = await d.select({ stepId: schema.funnelDeliveries.stepId, sent: count(), clicked: sql<number>`count(*) filter (where clicked)::int` }).from(schema.funnelDeliveries).groupBy(schema.funnelDeliveries.stepId);
+    const enr = await d.select({ e: schema.funnelEnrollments, p: persons }).from(schema.funnelEnrollments).innerJoin(persons, eq(persons.id, schema.funnelEnrollments.personId)).where(eq(schema.funnelEnrollments.funnelId, id)).orderBy(desc(schema.funnelEnrollments.startedAt)).limit(50);
+    const waiting = await d.select({ pos: schema.funnelEnrollments.nextPosition, c: count() }).from(schema.funnelEnrollments).where(and(eq(schema.funnelEnrollments.funnelId, id), eq(schema.funnelEnrollments.status, "active"))).groupBy(schema.funnelEnrollments.nextPosition);
+    return { f, steps, stats, enr, waiting };
+  }, null);
+}
+export async function hubFunnels() { return safe(() => db().select().from(funnels).where(and(eq(funnels.source, "hub"), eq(funnels.isActive, true))).orderBy(funnels.name), []); }
 export async function resourceList() { return safe(() => db().select().from(resources).orderBy(resources.id), []); }
 export async function broadcastList() { return safe(() => db().select().from(broadcasts).orderBy(desc(broadcasts.createdAt)).limit(50), []); }
 export async function automationList() { return safe(() => db().select().from(automations).orderBy(automations.id), []); }
