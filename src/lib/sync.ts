@@ -24,6 +24,9 @@ export async function getZenBotId(): Promise<number> {
 }
 
 const parseDate = (s: string | null | undefined) => (s ? new Date(s) : null);
+// ZenEdu віддає utm_tags і custom_fields то списком, то об'єктом, то null.
+const normList = (v: unknown): Record<string, string>[] => Array.isArray(v) ? v : v && typeof v === "object" ? [v as Record<string, string>] : [];
+const normObj = (v: unknown): Record<string, unknown> => Array.isArray(v) ? Object.assign({}, ...v.filter((x) => x && typeof x === "object")) : v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 const splitTags = (t: string | null | undefined) => (t ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 
 function personRow(s: ZenSubscriber) {
@@ -31,7 +34,7 @@ function personRow(s: ZenSubscriber) {
     telegramUserId: s.user_id,
     firstName: s.first_name, lastName: s.last_name, username: s.username, phone: s.phone, email: s.email,
     tags: splitTags(s.tags), notes: s.notes, zenSubscriberId: s.id, zenIsActive: s.is_active, zenIsBlocked: s.is_blocked,
-    utm: s.utm_tags ?? [], customFields: Object.assign({}, ...((s.custom_fields ?? []) as Record<string, unknown>[])),
+    utm: normList(s.utm_tags), customFields: normObj(s.custom_fields),
     lastActiveAt: parseDate(s.last_active_at), zenCreatedAt: parseDate(s.created_at), updatedAt: new Date(),
   };
 }
