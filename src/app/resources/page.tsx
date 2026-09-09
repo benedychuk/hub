@@ -2,7 +2,8 @@ import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
-import { navCounts, resourceList, settingsMap } from "@/lib/queries";
+import { navCounts, resourceList, settingsMap, botList } from "@/lib/queries";
+import { ConnectChatDialog, Modal } from "@/components/modal";
 import { connectChat, saveResource, refreshChatInfo, toggleResource, deleteResource, runAccessTickNow, runReconcileNow } from "@/lib/actions";
 import { botRightsIn, channelStats, type ChannelConfig } from "@/lib/telegram-access";
 import { dateTime } from "@/lib/format";
@@ -14,7 +15,8 @@ type Cfg = ChannelConfig & { cover?: string; memberCount?: number; username?: st
 
 export default async function Resources({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string; view?: string; err?: string }> }) {
   const sp = await searchParams;
-  const [counts, res, st] = await Promise.all([navCounts(), resourceList(), settingsMap()]);
+  const [counts, res, st, bl] = await Promise.all([navCounts(), resourceList(), settingsMap(), botList()]);
+  const botUser = bl.find((b) => b.key === "hub")?.username ?? null;
   const tab = sp.tab === "digital" ? "digital" : "channels";
   const known = (st["known_chats"] as { id: number; title: string; type: string; status: string; at: string }[] | undefined) ?? [];
   const hasToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
@@ -38,25 +40,20 @@ export default async function Resources({ searchParams }: { searchParams: Promis
         <div className="seg"><Link href={link({ view: "grid" })} className={view === "grid" ? "on" : ""} title="Сітка">▦</Link><Link href={link({ view: "list" })} className={view === "list" ? "on" : ""} title="Список">☰</Link></div>
         <span className="spacer" />
         {tab === "channels" ? (
-          <details className="menu"><summary className="btn pri" style={{ width: "auto", height: 36 }}>+ Підключити канал або групу{free.length ? <span className="cnt" style={{ marginLeft: 8, background: "rgba(255,255,255,.25)", color: "#fff" }}>{free.length} готові</span> : null}</summary>
-            <div className="dd" style={{ minWidth: 380, padding: 12 }}>
-              <b style={{ fontSize: 13 }}>Чати, де Hub-бот уже адміністратор</b>
-              {free.map((c) => <form key={c.id} action={connectChat} className="row-actions" style={{ padding: "6px 0", borderBottom: "1px solid var(--line)" }}><input type="hidden" name="chatId" value={c.id} /><span className="steptype">{c.type === "channel" ? "📣" : "👥"}</span><span style={{ flex: 1 }}>{c.title}<br /><small className="muted mono">{c.type} · {c.id}</small></span><button type="submit" className="btn sm pri">Підключити</button></form>)}
-              {!free.length && <p className="muted" style={{ margin: "6px 0" }}>Немає нових. Додайте Hub-бот у канал або групу адміністратором із правами «Додавати учасників» і «Блокувати користувачів»: чат з’явиться тут автоматично.</p>}
-              <form action={connectChat} className="form" style={{ marginTop: 10 }}><label className="field">Або вкажіть chat_id вручну<div className="row-actions"><input name="chatId" placeholder="-1001234567890" className="btn sm" style={{ flex: 1 }} /><button type="submit" className="btn sm">Підключити</button></div></label></form>
-            </div></details>
+          <ConnectChatDialog chats={free.map((c) => ({ id: c.id, title: c.title, type: c.type }))} botUsername={botUser} action={connectChat} />
         ) : (
-          <details className="menu"><summary className="btn pri" style={{ width: "auto", height: 36 }}>+ Додати цифровий продукт</summary>
-            <div className="dd" style={{ minWidth: 340, padding: 12 }}><form action={saveResource} className="form">
-              <label className="field">Назва<input name="name" placeholder="Архів ефірів" required autoFocus /></label>
+          <Modal title="Новий цифровий продукт" width={480} trigger={<button type="button" className="btn pri">+ Додати цифровий продукт</button>}>
+            <form action={saveResource} className="form">
+              <label className="field">Назва<input name="name" placeholder="Архів ефірів" required /></label>
               <label className="field">Тип<select name="kind" defaultValue="external_url"><option value="external_url">Посилання (сайт, Notion, Drive)</option><option value="course">Курс</option><option value="bot_feature">Функція бота (наприклад «Щиро»)</option></select></label>
-              <label className="field">Код<input name="key" placeholder="archive.access" pattern="[a-z0-9_.]+" required /></label>
-              <button className="btn sm pri" type="submit">Створити</button>
-            </form></div></details>
+              <label className="field">Код (латиниця, крапки)<input name="key" placeholder="archive.access" pattern="[a-z0-9_.]+" required /></label>
+              <div className="modal-f"><button className="btn pri" type="submit">Створити</button></div>
+            </form>
+          </Modal>
         )}
       </div>
 
-      {tab === "channels" && free.length > 0 && <div className="alert">Hub-бот уже адміністратор у {free.length === 1 ? "чаті" : "чатах"}: {free.map((c) => c.title).join(", ")}. Натисніть «+ Підключити канал або групу» і оберіть {free.length === 1 ? "його" : "їх"} зі списку.</div>}
+      {tab === "channels" && free.length > 0 && <div className="alert">Hub-бот уже адміністратор у {free.length === 1 ? "чаті" : "чатах"} {free.map((c) => `«${c.title}»`).join(", ")}, але {free.length === 1 ? "він ще не підключений" : "вони ще не підключені"}. Натисніть «+ Підключити канал або групу».</div>}
       {!rows.length && <div className="card" style={{ textAlign: "center", padding: 40 }}><p className="muted">{q ? "Нічого не знайдено." : tab === "channels" ? "Ще немає підключених каналів чи груп. Натисніть «+ Підключити канал або групу»." : "Цифрових продуктів ще немає."}</p></div>}
       <div className={view === "grid" ? "fgrid" : "grid flist"}>
         {rows.map((r) => { const c = (r.config ?? {}) as Cfg; const x = stats.find((z) => z.key === r.key); const chat = isChat(r.kind); const members = c.memberCount ?? x?.s?.joined ?? null; const rightsBad = chat && c.chatId && x?.rights && !x.rights.ok; return (

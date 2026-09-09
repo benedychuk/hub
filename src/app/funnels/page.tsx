@@ -2,6 +2,7 @@ import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
+import { Modal } from "@/components/modal";
 import { navCounts, funnelList, funnelFolders, botList } from "@/lib/queries";
 import { createFunnel, createFolder, renameFolder, deleteFolder, setFunnelStatus, moveFunnel, duplicateFunnel, deleteFunnel } from "@/lib/actions";
 import { date } from "@/lib/format";
@@ -30,7 +31,7 @@ export default async function Funnels({ searchParams }: { searchParams: Promise<
         {folders.map((f) => <Link key={f.id} href={link({ folder: String(f.id) })} className={`folder ${folderId === f.id ? "on" : ""}`}>📁 {f.name} <span className="n">{f.n}</span></Link>)}
         {noneCount > 0 && folders.length > 0 && <Link href={link({ folder: "none" })} className={`folder ${folderId === "none" ? "on" : ""}`}>Без папки <span className="n">{noneCount}</span></Link>}
         {zenCount > 0 && <Link href={link({ folder: "zen" })} className={`folder ${folderId === "zen" ? "on" : ""}`}>ZenEdu <span className="n">{zenCount}</span></Link>}
-        <details className="menu left"><summary title="Нова папка">+</summary><div className="dd" style={{ minWidth: 260 }}><form action={createFolder} className="form" style={{ padding: 6 }}><label className="field">Назва папки<input name="name" placeholder="Онбординг" required autoFocus /></label><button className="btn sm pri" type="submit">Створити папку</button></form></div></details>
+        <Modal title="Нова папка" width={420} trigger={<button type="button" className="folder" title="Нова папка">+ Папка</button>}><form action={createFolder} className="form"><label className="field">Назва папки<input name="name" placeholder="Онбординг" required /></label><div className="modal-f"><button className="btn pri" type="submit">Створити папку</button></div></form></Modal>
       </div>
       {cur && <div className="card" style={{ marginBottom: 14, padding: "10px 16px" }}><div className="row-actions">
         <form action={renameFolder} className="row-actions"><input type="hidden" name="id" value={cur.id} /><input name="name" defaultValue={cur.name} className="btn sm" style={{ width: 240 }} /><button className="btn sm" type="submit">Перейменувати</button></form>
@@ -41,10 +42,9 @@ export default async function Funnels({ searchParams }: { searchParams: Promise<
         <div className="seg">{[["updated", "Змінені"], ["created", "Нові"], ["name", "За назвою"], ["subs", "За людьми"]].map(([k, l]) => <Link key={k} href={link({ sort: k })} className={sort === k ? "on" : ""}>{l}</Link>)}</div>
         <div className="seg"><Link href={link({ view: "grid" })} className={view === "grid" ? "on" : ""} title="Сітка">▦</Link><Link href={link({ view: "list" })} className={view === "list" ? "on" : ""} title="Список">☰</Link></div>
         <span className="spacer" />
-        <details className="menu"><summary style={{ width: "auto", padding: "0 14px", height: 36, background: "linear-gradient(135deg, var(--orange), var(--orange-2))", color: "#fff", borderColor: "transparent" }}>+ Воронка</summary>
-          <div className="dd" style={{ minWidth: 300 }}><form action={createFunnel} className="form" style={{ padding: 6 }}><label className="field">Назва<input name="name" placeholder="Онбординг після оплати" required autoFocus /></label>
+        <Modal title="Нова воронка" width={460} trigger={<button type="button" className="btn pri">+ Воронка</button>}><form action={createFunnel} className="form"><label className="field">Назва<input name="name" placeholder="Онбординг після оплати" required /></label>
             <label className="field">Папка<select name="folderId" defaultValue={cur?.id ?? ""}><option value="">Без папки</option>{folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
-            <button className="btn sm pri" type="submit">Створити воронку</button></form></div></details>
+            <div className="modal-f"><button className="btn pri" type="submit">Створити воронку</button></div></form></Modal>
       </div>
       {!rows.length && <div className="card" style={{ textAlign: "center", padding: 40 }}><p className="muted">{q ? "Нічого не знайдено." : folderId === "zen" ? "Воронки ZenEdu ще не імпортовано (Налаштування → Синхронізація)." : "У цій папці ще немає воронок. Натисніть «+ Воронка»."}</p></div>}
       <div className={view === "grid" ? "fgrid" : "grid flist"}>
