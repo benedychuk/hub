@@ -5,7 +5,7 @@ import { db, schema } from "@/db";
 import { enroll, matchEntry, markClick } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
-const { persons, identities, subscriptions, plans, events, bots } = schema;
+const { persons, identities, subscriptions, plans, events, bots, media } = schema;
 
 export const BOT_KEY = "hub";
 
@@ -91,7 +91,24 @@ export function getBot() {
   bot.on("message", async (ctx) => {
     if (!ctx.from) return;
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
-    await db().insert(events).values({ personId, type: "bot.message", source: "hub", payload: { text: ctx.message.text ?? null, message_id: ctx.message.message_id, has_media: !ctx.message.text } });
+    const m = ctx.message;
+    // Медіа від адміністратора потрапляє в бібліотеку і далі використовується у кроках воронок і розсилках.
+    const adminId = Number(String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "")) || 0;
+    const med = m.video_note ? { kind: "video_note", f: m.video_note, w: m.video_note.length, h: m.video_note.length, d: m.video_note.duration }
+      : m.photo ? { kind: "photo", f: m.photo[m.photo.length - 1], w: m.photo[m.photo.length - 1].width, h: m.photo[m.photo.length - 1].height }
+      : m.video ? { kind: "video", f: m.video, w: m.video.width, h: m.video.height, d: m.video.duration, mime: m.video.mime_type }
+      : m.animation ? { kind: "animation", f: m.animation, w: m.animation.width, h: m.animation.height, d: m.animation.duration }
+      : m.voice ? { kind: "voice", f: m.voice, d: m.voice.duration } : m.audio ? { kind: "audio", f: m.audio, d: m.audio.duration, mime: m.audio.mime_type }
+      : m.document ? { kind: "document", f: m.document, mime: m.document.mime_type } : m.sticker ? { kind: "sticker", f: m.sticker } : null;
+    await db().insert(events).values({ personId, type: "bot.message", source: "hub", payload: { text: m.text ?? m.caption ?? null, message_id: m.message_id, media: med ? { kind: med.kind, file_id: med.f.file_id } : null } });
+    if (med && ctx.from.id === adminId) {
+      const f = med.f as { file_id: string; file_unique_id: string; file_size?: number; file_name?: string };
+      const [row] = await db().insert(media).values({ kind: med.kind, fileId: f.file_id, fileUniqueId: f.file_unique_id, title: f.file_name ?? null, caption: m.caption ?? null, width: med.w ?? null, height: med.h ?? null, duration: med.d ?? null, fileSize: f.file_size ?? null, mimeType: med.mime ?? null, fromPersonId: personId })
+        .onConflictDoUpdate({ target: media.fileUniqueId, set: { fileId: f.file_id, caption: m.caption ?? null } }).returning({ id: media.id });
+      const label: Record<string, string> = { video_note: "кружечок", photo: "фото", video: "відео", animation: "GIF", voice: "голосове", audio: "аудіо", document: "файл", sticker: "стікер" };
+      await ctx.reply(`Збережено в бібліотеку медіа: ${label[med.kind] ?? med.kind} #${row.id}${med.w ? ` · ${med.w}×${med.h}` : ""}${med.d ? ` · ${med.d} с` : ""}. Його можна вставити в крок воронки або розсилку.`);
+      return;
+    }
     if (ctx.message.text) { const f = await matchEntry("keyword", ctx.message.text); if (f) { await enroll(f.id, personId, "keyword"); return; } }
     await ctx.reply("Дякую! Повідомлення отримано, команда відповість у робочі години.");
   });

@@ -227,6 +227,20 @@ export const funnelDeliveries = pgTable("funnel_deliveries", {
   sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index("fd_step_idx").on(t.stepId)]);
 
+// Бібліотека медіа: файли, надіслані в Hub-бот (file_id придатний для повторного надсилання цим ботом).
+export const media = pgTable("media", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(), // photo | video | video_note | audio | voice | document | animation | sticker
+  fileId: text("file_id").notNull(),
+  fileUniqueId: text("file_unique_id").notNull(),
+  title: text("title"),
+  caption: text("caption"),
+  width: integer("width"), height: integer("height"), duration: integer("duration"), fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  fromPersonId: integer("from_person_id").references(() => persons.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("media_unique_uidx").on(t.fileUniqueId)]);
+
 export const broadcasts = pgTable("broadcasts", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
