@@ -5,6 +5,7 @@ import { appUrl, botToken, sendToPerson } from "./bot";
 import { accessTick } from "./telegram-access";
 import { creds, charge as wfpCharge, refund as wfpRefund, purchaseForm, verifyResponse, type Creds, type WfpResponse } from "./wayforpay";
 import { money } from "./format";
+import { adminTelegramId } from "./auth";
 
 const { persons, plans, subscriptions, orders, events, settings, paymentMethods, paymentAttempts, identities } = schema;
 export type Attempt = typeof paymentAttempts.$inferSelect;
@@ -15,9 +16,9 @@ const RETRY_DAYS = [1, 3, 5];
 
 // ---------- налаштування ----------
 export async function paymentSettings() {
-  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto"]));
+  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled"]));
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true };
+  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true };
 }
 export async function setSetting(key: string, value: unknown) {
   await db().insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
@@ -44,8 +45,15 @@ export function chargeTime(d: Date) {
 const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86400_000);
 
 // ---------- початок оплати ----------
+/** Поки оплати не увімкнені власником, ними може користуватись лише адміністратор (ADMIN_TELEGRAM_ID) для тестів. */
+export async function paymentsAllowedFor(personId: number) {
+  const st = await paymentSettings(); if (st.enabled) return true;
+  const [p] = await db().select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, personId));
+  return Boolean(p && p.tg === adminTelegramId());
+}
 export async function beginPayment(personId: number, planKey: string, kind: "first" | "card" | "migrate") {
   const d = db();
+  if (!(await paymentsAllowedFor(personId))) throw new Error("Оплати ще не увімкнені. Спробуйте пізніше.");
   const [pl] = await d.select().from(plans).where(eq(plans.key, planKey)); if (!pl || !pl.isActive) throw new Error("Тариф недоступний");
   const [p] = await d.select().from(persons).where(eq(persons.id, personId)); if (!p) throw new Error("Людину не знайдено");
   const s = await paymentSettings(); const c = creds(s.mode);

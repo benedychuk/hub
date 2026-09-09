@@ -509,7 +509,7 @@ const { memberships: membershipsT } = schema;
 export async function saveChannelResource(fd: FormData) {
   const key = str(fd, "key"); if (!key) return;
   const [cur] = await db().select().from(resources).where(eq(resources.key, key));
-  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), graceDays: Number(fd.get("graceDays") || 0), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined };
+  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), graceDays: Number(fd.get("graceDays") || 0), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined, enforce: fd.get("enforce") === "on" };
   await db().update(resources).set({ name: str(fd, "name") || cur?.name || key, config }).where(eq(resources.key, key));
   revalidatePath("/resources"); revalidatePath(`/resources/${key}`);
   redirect(`/resources/${key}?saved=1`);
@@ -586,6 +586,7 @@ export async function savePaymentSettings(fd: FormData) {
   await setPaySetting("payments.reminderDays", Math.max(1, Number(fd.get("reminderDays") || 3)));
   await setPaySetting("payments.trialVerifyAmount", Math.max(1, Number(fd.get("verifyAmount") || 1)));
   await setPaySetting("payments.migrationAuto", fd.get("migrationAuto") === "on");
+  await setPaySetting("payments.enabled", fd.get("enabled") === "on");
   revalidatePath("/settings"); redirect("/settings?tab=payments&ok=" + encodeURIComponent(`Збережено. Режим: ${mode === "live" ? "бойовий" : "тестовий"}.`));
 }
 export async function makeTestPayLink(fd: FormData) {

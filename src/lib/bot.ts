@@ -4,7 +4,7 @@ import { createHash } from "crypto";
 import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
 import { onBroadcastButton } from "./broadcasts";
-import { payLink, cancelAtEnd, resumeSub } from "./payments";
+import { payLink, cancelAtEnd, resumeSub, paymentsAllowedFor } from "./payments";
 import { enroll, matchEntry, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
@@ -98,6 +98,8 @@ export function getBot() {
     if (!list.length) { await ctx.reply("Тарифи ще не налаштовані."); return; }
     const per: Record<string, string> = { month: "міс", quarter: "3 міс", year: "рік" };
     const text = list.map((p) => `${p.isFeatured ? "⭐ " : ""}${p.name} — ${money(p.price, p.currency)} / ${per[p.period] ?? p.period}` + (p.trialDays ? `\n  пробний: ${p.trialDays} дн${p.trialPrice ? ` за ${money(p.trialPrice, p.currency)}` : ""}` : "")).join("\n\n");
+    const allowed = await paymentsAllowedFor(personId);
+    if (!allowed) { await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата в цьому боті з'явиться після переїзду з ZenEdu."); return; }
     const kb = new InlineKeyboard();
     for (const p of list) kb.url(`Оплатити: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
     await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці WayForPay. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });

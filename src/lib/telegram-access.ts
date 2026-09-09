@@ -8,6 +8,7 @@ const { resources, entitlements, memberships, identities, persons, events, subsc
 export type ChannelConfig = {
   chatId?: string; joinMode?: "invite" | "request"; inviteTtlHours?: number; graceDays?: number;
   inviteText?: string; kickText?: string; remindDays?: number; note?: string;
+  enforce?: boolean; // автоматика доступу: посилання тим, хто має право, і виключення тих, хто не має. Вимкнено = лише спостереження
 };
 
 const CHANNEL_KINDS = ["telegram_channel", "telegram_group"];
@@ -16,6 +17,8 @@ async function channelResources() {
   const rows = await db().select().from(resources).where(and(inArray(resources.kind, CHANNEL_KINDS), eq(resources.isActive, true)));
   return rows.map((r) => ({ r, cfg: (r.config ?? {}) as ChannelConfig })).filter((x) => x.cfg.chatId);
 }
+/** Лише канали, де власник явно увімкнув автоматику доступу. */
+async function enforcedResources() { return (await channelResources()).filter((x) => x.cfg.enforce === true); }
 
 async function sendTo(personId: number, text: string, kb?: InlineKeyboard) {
   const [idn] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
@@ -62,7 +65,7 @@ export async function processGrants(limit = 30) {
   const d = db();
   const bot = getBot();
   let invited = 0, skipped = 0, failed = 0;
-  for (const { r, cfg } of await channelResources()) {
+  for (const { r, cfg } of await enforcedResources()) {
     const now = new Date();
     const due = await d.execute(sql`
       select distinct e.person_id from entitlements e
@@ -99,7 +102,7 @@ export async function processRevocations(limit = 30) {
   const d = db();
   const bot = getBot();
   let kicked = 0, failed = 0;
-  for (const { r, cfg } of await channelResources()) {
+  for (const { r, cfg } of await enforcedResources()) {
     const due = await d.execute(sql`
       select m.person_id, p.telegram_user_id from memberships m join persons p on p.id = m.person_id
       where m.resource_key = ${r.key} and m.status = 'joined'
@@ -171,7 +174,7 @@ export async function onChatMember(chatId: number, user: { id: number; first_nam
 /** Заявка на вступ (режим request): схвалюємо лише за наявності права. */
 export async function onJoinRequest(chatId: number, user: { id: number; first_name?: string; last_name?: string; username?: string }) {
   const d = db();
-  const list = await channelResources();
+  const list = await enforcedResources(); // без увімкненої автоматики заявки лишаються на розгляд адміністраторам чату
   const hit = list.find((x) => String(x.cfg.chatId) === String(chatId));
   if (!hit) return;
   const [p] = await d.select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, user.id));

@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 const KINDS: Record<string, string> = { telegram_channel: "Канал", telegram_group: "Група", bot_feature: "Функція бота", external_url: "Посилання", course: "Курс" };
 const KIND_ICON: Record<string, React.ReactNode> = { telegram_channel: <Megaphone size={13} />, telegram_group: <MessagesSquare size={13} />, bot_feature: <Bot size={13} />, external_url: <Link2 size={13} />, course: <GraduationCap size={13} /> };
-type Cfg = ChannelConfig & { cover?: string; memberCount?: number; username?: string; syncedAt?: string };
+type Cfg = ChannelConfig & { cover?: string; memberCount?: number; username?: string; syncedAt?: string; enforce?: boolean };
 
 export default async function Resources({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string; view?: string; err?: string }> }) {
   const sp = await searchParams;
@@ -59,7 +59,7 @@ export default async function Resources({ searchParams }: { searchParams: Promis
               <b><Link href={`/resources/${r.key}`}>{r.name}</Link></b>
               <div className="meta"><span title={chat ? "Учасників у чаті" : "Людей із правом"}><Users size={12} /> {members ?? "—"}</span>{chat && x?.s ? <span title="Людей із правом доступу"><Check size={12} /> {x.s.withRight} з правом</span> : null}{chat && x?.s?.withoutRight ? <span style={{ color: "var(--crit)" }} title="У чаті без права"><AlertTriangle size={12} /> {x.s.withoutRight} без права</span> : null}</div>
               <div className="row-actions"><span className="fld-h" style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>{KIND_ICON[r.kind]} {KINDS[r.kind] ?? r.kind}</span><span className="spacer" />
-                {!r.isActive ? <Pill tone="mute">Вимкнено</Pill> : !chat ? <Pill tone="good">Active</Pill> : !c.chatId ? <Pill tone="warn">Не підключено</Pill> : rightsBad ? <Pill tone="crit">Бот без прав</Pill> : <Pill tone="good">Active</Pill>}</div>
+                {!r.isActive ? <Pill tone="mute">Вимкнено</Pill> : !chat ? <Pill tone="good">Active</Pill> : !c.chatId ? <Pill tone="warn">Не підключено</Pill> : rightsBad ? <Pill tone="crit">Бот без прав</Pill> : c.enforce === true ? <Pill tone="good">Автоматика</Pill> : <Pill tone="moon">Спостереження</Pill>}</div>
             </div>
             <Kebab>
               <MenuLink href={`/resources/${r.key}`} icon={<Settings />}>Налаштування</MenuLink>

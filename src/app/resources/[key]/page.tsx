@@ -31,6 +31,7 @@ export default async function ResourcePage({ params, searchParams }: { params: P
           <Kebab><MenuAction action={toggleResource} fields={{ key: r.key }} icon={r.isActive ? <Pause /> : <Play />}>{r.isActive ? "Вимкнути" : "Увімкнути"}</MenuAction><MenuSep /><MenuAction action={deleteResource} fields={{ key: r.key }} icon={<Trash2 />} danger confirm={`Видалити «${r.name}» з Hub?`}>Видалити</MenuAction></Kebab></>} />
       {sp.new && <Alert tone="ok">{chat ? "Канал підключено. Перевірте режим вступу й тексти, а право доступу додайте в тарифі." : "Продукт створено. Додайте його до тарифу, щоб видавати доступ."}</Alert>}
       {sp.saved && <Alert tone="ok">Збережено.</Alert>}
+      {chat && c.enforce !== true && <Alert tone="info">Автоматика доступу для цього чату вимкнена: Hub нікого не запрошує й не виключає. Увімкніть перемикач у налаштуваннях нижче, коли будете готові (для бойового каналу лише після тестів).</Alert>}
       {chat && rights && !rights.ok && <Alert tone="bad">Hub-бот не має потрібних прав у цьому чаті: {(rights as { error?: string }).error ?? `статус ${(rights as { status?: string }).status}`}. Зробіть бота адміністратором із правами «Додавати учасників» і «Блокувати користувачів».</Alert>}
       {chat && s && <div className="grid g4" style={{ marginBottom: 16 }}>
         <Stat label="З правом" value={s.withRight} hint="за тарифом чи вручну" />
@@ -42,6 +43,7 @@ export default async function ResourcePage({ params, searchParams }: { params: P
         {chat ? (
           <form action={saveChannelResource}><input type="hidden" name="key" value={r.key} />
             <Section title="Налаштування" description={`Код ${r.key}${c.syncedAt ? ` · оновлено ${dateTime(c.syncedAt)}` : ""}`}>
+              <Switch name="enforce" defaultChecked={c.enforce === true} label="Автоматика доступу увімкнена" hint="посилання тим, хто має право, виключення тих, хто не має, схвалення заявок. Вимкнено = Hub лише спостерігає і нікого не чіпає" />
               <FormRow><Field label="Назва"><input name="name" defaultValue={r.name} /></Field><Field label="ID чату" hint="заповнюється автоматично при підключенні"><input name="chatId" defaultValue={c.chatId ?? ""} placeholder="-1001234567890" /></Field></FormRow>
               <FormRow><Field label="Режим вступу"><select name="joinMode" defaultValue={c.joinMode ?? "invite"}><option value="invite">Одноразове посилання (як у ZenEdu)</option><option value="request">За заявкою: бот схвалює лише з правом</option></select></Field><Field label="Посилання діє, годин"><input name="inviteTtlHours" type="number" defaultValue={c.inviteTtlHours ?? 24} /></Field></FormRow>
               <FormRow><Field label="Grace після кінця підписки, днів" hint="скільки днів лишати в чаті після закінчення права"><input name="graceDays" type="number" defaultValue={c.graceDays ?? 0} /></Field><Field label="Нотатка"><input name="note" defaultValue={c.note ?? ""} /></Field></FormRow>

@@ -24,7 +24,9 @@ export default async function PaymentsTab({ link }: { link?: string }) {
               <Field label="Запрошувати на переїзд за, днів" hint="до дати списання в ZenEdu"><input name="migrationDays" type="number" min={1} defaultValue={st.migrationDays} /></Field>
               <Field label="Перевірочна сума картки, грн" hint="списується й повертається"><input name="verifyAmount" type="number" min={1} defaultValue={st.verifyAmount} /></Field>
             </FormRow>
-            <div style={{ marginTop: 14 }}><Switch name="migrationAuto" defaultChecked={st.migrationAuto} label="Автоматичні запрошення на переїзд" hint="поки вимкнено, Hub нікому з учасниць не пише сам; запросити окрему людину можна вручну на сторінці «Міграція»" /></div>
+            <div style={{ marginTop: 14 }}><Switch name="enabled" defaultChecked={st.enabled} label="Оплати увімкнено для учасниць" hint="поки вимкнено, кнопки оплати в боті бачите лише ви, а посилання працюють лише для вашого акаунта" /></div>
+            <div><Switch name="migrationAuto" defaultChecked={st.migrationAuto} label="Автоматичні запрошення на переїзд" hint="поки вимкнено, Hub нікому з учасниць не пише сам; запросити окрему людину можна вручну на сторінці «Міграція»" /></div>
+            {!st.enabled && <Alert tone="info">Режим тестування: жодна учасниця клубу не побачить оплату і не отримає повідомлень про підписку, поки ви не увімкнете «Оплати увімкнено для учасниць».</Alert>}
             {st.migrationAuto && <Alert tone="warn">Увімкнено: щодня Hub пише активним у ZenEdu, які запустили Hub-бот і в яких списання за {st.migrationDays} дн.</Alert>}
             <div className="row-actions" style={{ marginTop: 14 }}><button className="btn pri" type="submit">Зберегти</button></div>
           </Section>
