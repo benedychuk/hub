@@ -3,7 +3,7 @@ import { neon } from "@neondatabase/serverless";
 
 const COOKIE = "hub_session";
 const PUBLIC = ["/login", "/favicon.ico"];
-const PUBLIC_PREFIX = ["/api/", "/_next", "/f/", "/r/", "/invite/"];
+const PUBLIC_PREFIX = ["/api/", "/_next", "/f/", "/r/", "/invite/", "/pay/"];
 
 async function sha256(s: string) { const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)); return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join(""); }
 async function hmac(secret: string, msg: string) {
