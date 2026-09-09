@@ -15,6 +15,13 @@
       "when": 1788713500010,
       "tag": "0001_absent_tomorrow_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788953925556,
+      "tag": "0002_flowery_captain_marvel",
+      "breakpoints": true
     }
   ]
 }

@@ -92,9 +92,10 @@ export async function seedResources() {
 }
 export async function saveResource(fd: FormData) {
   const key = str(fd, "key"); if (!key) return;
-  await db().insert(resources).values({ key, name: str(fd, "name") || key, kind: str(fd, "kind") || "bot_feature", config: { note: str(fd, "note") } })
-    .onConflictDoUpdate({ target: resources.key, set: { name: str(fd, "name") || key, kind: str(fd, "kind") || "bot_feature", config: { note: str(fd, "note") } } });
-  revalidatePath("/resources");
+  const config = { note: str(fd, "note"), zenedu_grants: fd.get("zenedu_grants") === "on", offer_url: str(fd, "offer_url") || undefined, quota_per_day: Number(fd.get("quota_per_day") || 0) || undefined, chatId: str(fd, "chatId") || undefined };
+  await db().insert(resources).values({ key, name: str(fd, "name") || key, kind: str(fd, "kind") || "bot_feature", config })
+    .onConflictDoUpdate({ target: resources.key, set: { name: str(fd, "name") || key, kind: str(fd, "kind") || "bot_feature", config } });
+  revalidatePath("/resources"); revalidatePath("/bots");
 }
 
 export async function createBroadcast(fd: FormData) {
@@ -208,4 +209,26 @@ export async function stopFunnelEnrollment(fd: FormData) {
 export async function runTickNow() {
   await processDue(100);
   revalidatePath("/funnels");
+}
+
+// ---------- зовнішні боти (API-ключі) ----------
+import { hashKey, newApiKey } from "./access";
+const { bots: botsT } = schema;
+
+export async function createExternalBot(fd: FormData) {
+  const key = str(fd, "key").toLowerCase().replace(/[^a-z0-9_]/g, "") || `bot_${Date.now().toString(36)}`;
+  const apiKey = newApiKey(key);
+  await db().insert(botsT).values({ key, name: str(fd, "name") || key, username: str(fd, "username") || null, role: "external", mode: "external", resourceKey: str(fd, "resourceKey") || null, apiKeyHash: hashKey(apiKey), apiKeyPrefix: apiKey.slice(0, 12) })
+    .onConflictDoUpdate({ target: botsT.key, set: { name: str(fd, "name") || key, username: str(fd, "username") || null, mode: "external", resourceKey: str(fd, "resourceKey") || null, apiKeyHash: hashKey(apiKey), apiKeyPrefix: apiKey.slice(0, 12), isActive: true } });
+  revalidatePath("/bots"); redirect(`/bots?newkey=${encodeURIComponent(apiKey)}&for=${key}`);
+}
+export async function rotateBotKey(fd: FormData) {
+  const key = str(fd, "key"); const apiKey = newApiKey(key);
+  await db().update(botsT).set({ apiKeyHash: hashKey(apiKey), apiKeyPrefix: apiKey.slice(0, 12) }).where(eq(botsT.key, key));
+  revalidatePath("/bots"); redirect(`/bots?newkey=${encodeURIComponent(apiKey)}&for=${key}`);
+}
+export async function toggleBot(fd: FormData) {
+  const key = str(fd, "key"); const on = fd.get("on") === "1";
+  await db().update(botsT).set({ isActive: on }).where(eq(botsT.key, key));
+  revalidatePath("/bots");
 }

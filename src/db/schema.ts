@@ -35,6 +35,13 @@ export const bots = pgTable("bots", {
   name: text("name").notNull(),
   username: text("username"),
   role: text("role").notNull().default("club"),
+  mode: text("mode").notNull().default("managed"), // managed (токен у Hub) | external (свій сервер, API-ключ) | zenedu
+  resourceKey: text("resource_key"), // яке право перевіряє зовнішній бот
+  apiKeyHash: text("api_key_hash"),
+  apiKeyPrefix: text("api_key_prefix"),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  requestsToday: integer("requests_today").notNull().default(0),
+  requestsDay: text("requests_day"),
   webhookSetAt: timestamp("webhook_set_at", { withTimezone: true }),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
