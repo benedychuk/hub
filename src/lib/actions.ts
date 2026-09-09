@@ -167,11 +167,31 @@ export async function addStep(fd: FormData) {
 }
 export async function saveStep(fd: FormData) {
   const id = Number(fd.get("id")); const funnelId = Number(fd.get("funnelId"));
-  const buttons = [] as { text: string; url?: string; kind?: "url" | "next" }[];
-  for (let i = 0; i < 3; i++) { const t = str(fd, `btnText${i}`); if (t) buttons.push({ text: t, url: str(fd, `btnUrl${i}`) || undefined, kind: str(fd, `btnUrl${i}`) ? "url" : "next" }); }
-  const config = { delay: { value: Number(fd.get("delayValue") || 0), unit: (str(fd, "delayUnit") || "days") as "minutes" | "hours" | "days" }, quietHours: fd.get("quietHours") === "on", buttons, protect: fd.get("protect") === "on", disablePreview: fd.get("preview") !== "on" };
+  const buttons = [] as { text: string; url?: string; kind?: "url" | "next" | "goto" | "funnel" | "offer" | "tag"; target?: string; tag?: string }[];
+  for (let i = 0; i < 3; i++) {
+    const t = str(fd, `btnText${i}`); if (!t) continue;
+    const kind = (str(fd, `btnKind${i}`) || "url") as "url" | "next" | "goto" | "funnel" | "offer" | "tag";
+    const target = str(fd, `btnTarget${i}`);
+    buttons.push({ text: t, kind, url: kind === "url" ? target : undefined, target: kind === "url" ? undefined : target || undefined, tag: str(fd, `btnTag${i}`) || undefined });
+  }
+  const [h, m] = (str(fd, "atTime") || "12:00").split(":").map(Number);
+  const config = {
+    timing: (str(fd, "timing") || "delay") as "delay" | "at",
+    delay: { value: Number(fd.get("delayValue") || 0), unit: (str(fd, "delayUnit") || "days") as "minutes" | "hours" | "days" },
+    at: { hour: h || 0, minute: m || 0 },
+    quietHours: fd.get("quietHours") === "on", mediaId: Number(fd.get("mediaId") || 0) || null, buttons,
+    protect: fd.get("protect") === "on", disablePreview: fd.get("preview") !== "on", tag: str(fd, "tag") || undefined,
+  };
   await db().update(funnelSteps).set({ title: str(fd, "title") || null, body: str(fd, "body"), config }).where(eq(funnelSteps.id, id));
   revalidatePath(`/funnels/${funnelId}`);
+}
+export async function deleteMedia(fd: FormData) {
+  await db().delete(schema.media).where(eq(schema.media.id, Number(fd.get("id"))));
+  revalidatePath("/library");
+}
+export async function renameMedia(fd: FormData) {
+  await db().update(schema.media).set({ title: str(fd, "title") || null }).where(eq(schema.media.id, Number(fd.get("id"))));
+  revalidatePath("/library");
 }
 export async function deleteStep(fd: FormData) {
   const funnelId = Number(fd.get("funnelId"));

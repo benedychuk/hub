@@ -2,7 +2,7 @@ import { Bot, InlineKeyboard, webhookCallback } from "grammy";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
-import { enroll, matchEntry, markClick } from "./funnels";
+import { enroll, matchEntry, onButtonClick, stopAllForPerson } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
 const { persons, identities, subscriptions, plans, events, bots, media } = schema;
@@ -81,11 +81,11 @@ export function getBot() {
   bot.command("plans", (ctx) => showPlans(ctx));
   bot.callbackQuery("plans", async (ctx) => { await ctx.answerCallbackQuery(); await showPlans(ctx); });
 
-  bot.callbackQuery(/^fs:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^fs:(\d+)(?::(\d+))?$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
     const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
-    if (p[0]) await markClick(Number(ctx.match[1]), p[0].id);
+    if (p[0]) await onButtonClick(Number(ctx.match[1]), Number(ctx.match[2] ?? 0), p[0].id);
   });
 
   bot.on("message", async (ctx) => {
@@ -109,7 +109,8 @@ export function getBot() {
       await ctx.reply(`Збережено в бібліотеку медіа: ${label[med.kind] ?? med.kind} #${row.id}${med.w ? ` · ${med.w}×${med.h}` : ""}${med.d ? ` · ${med.d} с` : ""}. Його можна вставити в крок воронки або розсилку.`);
       return;
     }
-    if (ctx.message.text) { const f = await matchEntry("keyword", ctx.message.text); if (f) { await enroll(f.id, personId, "keyword"); return; } }
+    if (m.text && /^(стоп|stop)$/i.test(m.text.trim())) { const n = await stopAllForPerson(personId, "keyword:stop"); if (n) { await ctx.reply("Добре, більше не надсилатиму цю серію повідомлень."); return; } }
+    if (m.text) { const f = await matchEntry("keyword", m.text); if (f) { await enroll(f.id, personId, "keyword"); return; } }
     await ctx.reply("Дякую! Повідомлення отримано, команда відповість у робочі години.");
   });
 

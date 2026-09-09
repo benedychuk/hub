@@ -174,3 +174,13 @@ export async function migration() {
     return { bySource, cal, prices, inHub: (inHub.rows[0] as { c: number })?.c ?? 0 };
   }, null);
 }
+
+export async function mediaList() { return safe(() => db().select().from(schema.media).orderBy(desc(schema.media.createdAt)).limit(200), []); }
+export async function adminTexts() {
+  return safe(async () => {
+    const tg = Number(String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "")) || 0;
+    const rows = await db().select({ id: events.id, createdAt: events.createdAt, payload: events.payload }).from(events).innerJoin(persons, eq(persons.id, events.personId))
+      .where(and(eq(events.type, "bot.message"), eq(persons.telegramUserId, tg))).orderBy(desc(events.createdAt)).limit(100);
+    return rows.map((r) => ({ id: r.id, at: r.createdAt, text: String((r.payload as { text?: string })?.text ?? ""), media: (r.payload as { media?: { kind: string } })?.media?.kind ?? null })).filter((r) => r.text);
+  }, []);
+}

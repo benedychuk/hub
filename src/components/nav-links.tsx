@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 const ITEMS: ([string, string] | [string, string, string] | ["grp", string])[] = [
   ["/", "Дашборд"], ["/people", "Аудиторія", "people"], ["/chats", "Чати", "chats"], ["/subscriptions", "Підписки", "subs"], ["/payments", "Платежі"],
   ["grp", "Продукт"], ["/plans", "Тарифи й оффери"], ["/resources", "Доступи"],
-  ["grp", "Комунікація"], ["/funnels", "Воронки", "funnels"], ["/broadcasts", "Розсилки"], ["/automations", "Автоматизації"],
+  ["grp", "Комунікація"], ["/funnels", "Воронки", "funnels"], ["/broadcasts", "Розсилки"], ["/library", "Бібліотека"], ["/automations", "Автоматизації"],
   ["grp", "Система"], ["/bots", "Боти й меню"], ["/migration", "Міграція з ZenEdu"], ["/settings", "Налаштування"],
 ];
 
