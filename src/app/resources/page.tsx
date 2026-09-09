@@ -38,7 +38,7 @@ export default async function Resources({ searchParams }: { searchParams: Promis
         <div className="seg"><Link href={link({ view: "grid" })} className={view === "grid" ? "on" : ""} title="Сітка">▦</Link><Link href={link({ view: "list" })} className={view === "list" ? "on" : ""} title="Список">☰</Link></div>
         <span className="spacer" />
         {tab === "channels" ? (
-          <details className="menu"><summary className="btn pri" style={{ width: "auto", height: 36 }}>+ Підключити канал або групу</summary>
+          <details className="menu"><summary className="btn pri" style={{ width: "auto", height: 36 }}>+ Підключити канал або групу{free.length ? <span className="cnt" style={{ marginLeft: 8, background: "rgba(255,255,255,.25)", color: "#fff" }}>{free.length} готові</span> : null}</summary>
             <div className="dd" style={{ minWidth: 380, padding: 12 }}>
               <b style={{ fontSize: 13 }}>Чати, де Hub-бот уже адміністратор</b>
               {free.map((c) => <form key={c.id} action={connectChat} className="row-actions" style={{ padding: "6px 0", borderBottom: "1px solid var(--line)" }}><input type="hidden" name="chatId" value={c.id} /><span className="steptype">{c.type === "channel" ? "📣" : "👥"}</span><span style={{ flex: 1 }}>{c.title}<br /><small className="muted mono">{c.type} · {c.id}</small></span><button type="submit" className="btn sm pri">Підключити</button></form>)}
@@ -56,6 +56,7 @@ export default async function Resources({ searchParams }: { searchParams: Promis
         )}
       </div>
 
+      {tab === "channels" && free.length > 0 && <div className="alert">Hub-бот уже адміністратор у {free.length === 1 ? "чаті" : "чатах"}: {free.map((c) => c.title).join(", ")}. Натисніть «+ Підключити канал або групу» і оберіть {free.length === 1 ? "його" : "їх"} зі списку.</div>}
       {!rows.length && <div className="card" style={{ textAlign: "center", padding: 40 }}><p className="muted">{q ? "Нічого не знайдено." : tab === "channels" ? "Ще немає підключених каналів чи груп. Натисніть «+ Підключити канал або групу»." : "Цифрових продуктів ще немає."}</p></div>}
       <div className={view === "grid" ? "fgrid" : "grid flist"}>
         {rows.map((r) => { const c = (r.config ?? {}) as Cfg; const x = stats.find((z) => z.key === r.key); const chat = isChat(r.kind); const members = c.memberCount ?? x?.s?.joined ?? null; const rightsBad = chat && c.chatId && x?.rights && !x.rights.ok; return (
