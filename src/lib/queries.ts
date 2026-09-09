@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, ilike, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db, hasDb, schema } from "@/db";
 import { adminTelegramId } from "./auth";
 
@@ -128,17 +128,58 @@ export async function offerList() {
     return rows;
   }, []);
 }
-export async function funnelList() { return safe(() => db().select().from(funnels).orderBy(desc(sql`${funnels.source} = 'hub'`), desc(funnels.isActive), desc(funnels.subscribersCount)), []); }
+export async function funnelFolders() {
+  return safe(() => db().select({ id: schema.funnelFolders.id, name: schema.funnelFolders.name, n: sql<number>`(select count(*)::int from funnels f where f.folder_id = ${schema.funnelFolders.id})` }).from(schema.funnelFolders).orderBy(schema.funnelFolders.sortOrder, schema.funnelFolders.name), []);
+}
+export async function funnelList() {
+  return safe(() => db().select({
+    id: funnels.id, source: funnels.source, folderId: funnels.folderId, name: funnels.name, cover: funnels.cover, status: funnels.status, isActive: funnels.isActive,
+    subscribersCount: funnels.subscribersCount, stepsCount: funnels.stepsCount, createdAt: funnels.createdAt, updatedAt: funnels.updatedAt, settings: funnels.settings,
+    activeNow: sql<number>`(select count(*)::int from funnel_enrollments e where e.funnel_id = ${funnels.id} and e.status = 'active')`,
+  }).from(funnels).orderBy(desc(funnels.updatedAt)), []);
+}
 export async function funnelDetail(id: number) {
   return safe(async () => {
     const d = db();
     const [f] = await d.select().from(funnels).where(eq(funnels.id, id));
     if (!f) return null;
-    const steps = await d.select().from(schema.funnelSteps).where(eq(schema.funnelSteps.funnelId, id)).orderBy(sql`position`);
-    const stats = await d.select({ stepId: schema.funnelDeliveries.stepId, sent: count(), clicked: sql<number>`count(*) filter (where clicked)::int` }).from(schema.funnelDeliveries).groupBy(schema.funnelDeliveries.stepId);
-    const enr = await d.select({ e: schema.funnelEnrollments, p: persons }).from(schema.funnelEnrollments).innerJoin(persons, eq(persons.id, schema.funnelEnrollments.personId)).where(eq(schema.funnelEnrollments.funnelId, id)).orderBy(desc(schema.funnelEnrollments.startedAt)).limit(50);
-    const waiting = await d.select({ pos: schema.funnelEnrollments.nextPosition, c: count() }).from(schema.funnelEnrollments).where(and(eq(schema.funnelEnrollments.funnelId, id), eq(schema.funnelEnrollments.status, "active"))).groupBy(schema.funnelEnrollments.nextPosition);
-    return { f, steps, stats, enr, waiting };
+    const [steps, modules, commands, stats, enr, waiting, totals] = await Promise.all([
+      d.select().from(schema.funnelSteps).where(eq(schema.funnelSteps.funnelId, id)).orderBy(asc(schema.funnelSteps.position), asc(schema.funnelSteps.id)),
+      d.select().from(schema.funnelModules).where(eq(schema.funnelModules.funnelId, id)).orderBy(asc(schema.funnelModules.position), asc(schema.funnelModules.id)),
+      d.select().from(schema.funnelCommands).where(eq(schema.funnelCommands.funnelId, id)).orderBy(asc(schema.funnelCommands.position), asc(schema.funnelCommands.id)),
+      d.select({ stepId: schema.funnelDeliveries.stepId, sent: count(), people: sql<number>`count(distinct person_id)::int`, clicked: sql<number>`count(*) filter (where clicked)::int`, answered: sql<number>`count(*) filter (where answer is not null)::int` })
+        .from(schema.funnelDeliveries).innerJoin(schema.funnelSteps, eq(schema.funnelSteps.id, schema.funnelDeliveries.stepId)).where(eq(schema.funnelSteps.funnelId, id)).groupBy(schema.funnelDeliveries.stepId),
+      d.select({ e: schema.funnelEnrollments, p: persons }).from(schema.funnelEnrollments).innerJoin(persons, eq(persons.id, schema.funnelEnrollments.personId)).where(eq(schema.funnelEnrollments.funnelId, id)).orderBy(desc(schema.funnelEnrollments.startedAt)).limit(100),
+      d.select({ pos: schema.funnelEnrollments.nextPosition, c: count() }).from(schema.funnelEnrollments).where(and(eq(schema.funnelEnrollments.funnelId, id), eq(schema.funnelEnrollments.status, "active"))).groupBy(schema.funnelEnrollments.nextPosition),
+      d.select({ status: schema.funnelEnrollments.status, c: count(), people: sql<number>`count(distinct person_id)::int` }).from(schema.funnelEnrollments).where(eq(schema.funnelEnrollments.funnelId, id)).groupBy(schema.funnelEnrollments.status),
+    ]);
+    const by = (st: string) => totals.find((t) => t.status === st)?.c ?? 0;
+    const started = totals.reduce((a, t) => a + t.c, 0);
+    return { f, steps, modules, commands, stats, enr, waiting, summary: { started, active: by("active"), stopped: by("stopped"), finished: by("done") } };
+  }, null);
+}
+export async function stepDetail(funnelId: number, stepId: number) {
+  return safe(async () => {
+    const d = db();
+    const [f] = await d.select().from(funnels).where(eq(funnels.id, funnelId));
+    if (!f) return null;
+    const [steps, modules, med, allFunnels, offers] = await Promise.all([
+      d.select().from(schema.funnelSteps).where(eq(schema.funnelSteps.funnelId, funnelId)).orderBy(asc(schema.funnelSteps.position), asc(schema.funnelSteps.id)),
+      d.select().from(schema.funnelModules).where(eq(schema.funnelModules.funnelId, funnelId)).orderBy(asc(schema.funnelModules.position)),
+      d.select().from(schema.media).orderBy(desc(schema.media.createdAt)).limit(300),
+      d.select({ id: funnels.id, name: funnels.name }).from(funnels).where(eq(funnels.source, "hub")).orderBy(funnels.name),
+      d.select({ id: schema.offers.id, name: schema.offers.name, url: schema.offers.link }).from(schema.offers).where(eq(schema.offers.isActive, true)).orderBy(schema.offers.name),
+    ]);
+    const step = steps.find((s) => s.id === stepId);
+    if (!step) return null;
+    return { f, step, steps, modules, media: med, allFunnels, offers };
+  }, null);
+}
+export async function funnelPublic(id: number) {
+  return safe(async () => {
+    const [f] = await db().select({ id: funnels.id, name: funnels.name, description: funnels.description, buttonText: funnels.buttonText, cover: funnels.cover, isActive: funnels.isActive }).from(funnels).where(eq(funnels.id, id));
+    const [b] = await db().select({ username: bots.username }).from(bots).where(eq(bots.key, "hub"));
+    return f ? { f, botUsername: b?.username ?? null } : null;
   }, null);
 }
 export async function hubFunnels() { return safe(() => db().select().from(funnels).where(and(eq(funnels.source, "hub"), eq(funnels.isActive, true))).orderBy(funnels.name), []); }

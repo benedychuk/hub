@@ -1,5 +1,5 @@
 import { and, eq, lte } from "drizzle-orm";
-import { processDue } from "@/lib/funnels";
+import { processDue, processDeletions } from "@/lib/funnels";
 import { accessTick } from "@/lib/telegram-access";
 import { runBroadcast } from "@/lib/actions";
 import { db, hasDb, schema } from "@/db";
@@ -15,12 +15,13 @@ export async function GET(req: Request) {
   if (!hasDb() || !process.env.TELEGRAM_BOT_TOKEN) return Response.json({ ok: false, reason: "not configured" });
   try {
     const funnels = await processDue();
+    const deletions = await processDeletions().catch((e) => ({ error: String(e).slice(0, 200) }));
     const access = await accessTick().catch((e) => ({ error: String(e).slice(0, 200) }));
     // заплановані розсилки, чий час настав
     const due = await db().select({ id: schema.broadcasts.id }).from(schema.broadcasts)
       .where(and(eq(schema.broadcasts.status, "scheduled"), lte(schema.broadcasts.scheduledAt, new Date()))).limit(3);
     for (const b of due) { await db().update(schema.broadcasts).set({ status: "sending" }).where(eq(schema.broadcasts.id, b.id)); await runBroadcast(b.id); }
-    return Response.json({ ok: true, funnels, access, broadcasts: due.length });
+    return Response.json({ ok: true, funnels, deletions, access, broadcasts: due.length });
   }
   catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 500 }); }
 }

@@ -3,7 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
-import { enroll, matchEntry, onButtonClick, stopAllForPerson } from "./funnels";
+import { enroll, matchEntry, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
 const { persons, identities, subscriptions, plans, events, bots, media } = schema;
@@ -47,7 +47,8 @@ export function getBot() {
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
     const payload = ctx.match?.toString() || "";
     await db().insert(events).values({ personId, type: "bot.start", source: "hub", payload: { payload } });
-    if (payload) { const f = await matchEntry("start", payload); if (f) { await enroll(f.id, personId, "start:" + payload); return; } }
+    if (payload) { const f = await matchEntry("start", payload); if (f) { if (await sendIntro(f.id, personId)) return; await enroll(f.id, personId, "start:" + payload); await processDue(5); return; } }
+    if (await enrollDirectAccess(personId)) { await processDue(5); return; }
     const sub = await db().select().from(subscriptions).where(eq(subscriptions.personId, personId)).orderBy(desc(subscriptions.updatedAt)).limit(1);
     const active = sub[0] && ["active", "trialing", "past_due"].includes(sub[0].status);
     const kb = new InlineKeyboard().text("Мої підписки", "subs").row().text("Тарифи", "plans");
@@ -82,11 +83,17 @@ export function getBot() {
   bot.command("plans", (ctx) => showPlans(ctx));
   bot.callbackQuery("plans", async (ctx) => { await ctx.answerCallbackQuery(); await showPlans(ctx); });
 
+  bot.callbackQuery(/^fstart:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
+    if (p[0]) { await enroll(Number(ctx.match[1]), p[0].id, "intro"); await processDue(5); }
+  });
   bot.callbackQuery(/^fs:(\d+)(?::(\d+))?$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
     const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
-    if (p[0]) await onButtonClick(Number(ctx.match[1]), Number(ctx.match[2] ?? 0), p[0].id);
+    if (p[0]) { const reply = await onButtonClick(Number(ctx.match[1]), Number(ctx.match[2] ?? 0), p[0].id); if (reply) await ctx.reply(reply); }
   });
 
   bot.on("message", async (ctx) => {
@@ -111,7 +118,9 @@ export function getBot() {
       return;
     }
     if (m.text && /^(стоп|stop)$/i.test(m.text.trim())) { const n = await stopAllForPerson(personId, "keyword:stop"); if (n) { await ctx.reply("Добре, більше не надсилатиму цю серію повідомлень."); return; } }
-    if (m.text) { const f = await matchEntry("keyword", m.text); if (f) { await enroll(f.id, personId, "keyword"); return; } }
+    if (m.text?.startsWith("/")) { const r = await onCommand(personId, m.text.slice(1).split(/[\s@]/)[0]); if (r !== null) { if (r) await ctx.reply(r); return; } }
+    if (m.text || m.caption || med) { if (await onFreeText(personId, m.text ?? m.caption ?? `[${med?.kind ?? "медіа"}]`)) { await ctx.reply("Дякую, відповідь збережено 🤍"); return; } }
+    if (m.text) { const f = await matchEntry("keyword", m.text); if (f) { await enroll(f.id, personId, "keyword"); await processDue(5); return; } }
     await ctx.reply("Дякую! Повідомлення отримано, команда відповість у робочі години.");
   });
 

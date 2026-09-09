@@ -179,28 +179,63 @@ export const events = pgTable("events", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index("events_person_idx").on(t.personId), index("events_type_idx").on(t.type), index("events_created_idx").on(t.createdAt)]);
 
-// Воронки і кроки (структура; імпорт із ZenEdu + власні).
+// Папки воронок.
+export const funnelFolders = pgTable("funnel_folders", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Воронки (структура як у ZenEdu; імпорт із ZenEdu + власні).
 export const funnels = pgTable("funnels", {
   id: serial("id").primaryKey(),
   source: text("source").notNull().default("hub"),
   zenFunnelId: integer("zen_funnel_id"),
+  folderId: integer("folder_id").references(() => funnelFolders.id, { onDelete: "set null" }),
   name: text("name").notNull(),
+  description: text("description"),
+  buttonText: text("button_text"),
+  cover: text("cover"), // data URL зображення обкладинки
   entry: text("entry"),
-  isActive: boolean("is_active").notNull().default(true),
+  status: text("status").notNull().default("draft"), // draft | active | stopped
+  isActive: boolean("is_active").notNull().default(false),
   subscribersCount: integer("subscribers_count").notNull().default(0),
   stepsCount: integer("steps_count").notNull().default(0),
   settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [uniqueIndex("funnels_zen_uidx").on(t.zenFunnelId)]);
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("funnels_zen_uidx").on(t.zenFunnelId), index("funnels_folder_idx").on(t.folderId)]);
+
+// Модулі (секції) всередині воронки.
+export const funnelModules = pgTable("funnel_modules", {
+  id: serial("id").primaryKey(),
+  funnelId: integer("funnel_id").notNull().references(() => funnels.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  position: integer("position").notNull().default(0),
+});
 
 export const funnelSteps = pgTable("funnel_steps", {
   id: serial("id").primaryKey(),
   funnelId: integer("funnel_id").notNull().references(() => funnels.id, { onDelete: "cascade" }),
+  moduleId: integer("module_id").references(() => funnelModules.id, { onDelete: "set null" }),
   position: integer("position").notNull().default(0),
-  type: text("type").notNull().default("message"), // message | delay | condition | question | assignment | action
+  type: text("type").notNull().default("message"), // message | lesson | assignment | survey | quiz | question
   title: text("title"),
   body: text("body"),
+  isActive: boolean("is_active").notNull().default(true),
   config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Команди меню, прив'язані до воронки.
+export const funnelCommands = pgTable("funnel_commands", {
+  id: serial("id").primaryKey(),
+  funnelId: integer("funnel_id").notNull().references(() => funnels.id, { onDelete: "cascade" }),
+  command: text("command").notNull(), // без слеша
+  description: text("description"),
+  action: jsonb("action").$type<{ type: "step" | "text"; stepId?: number; text?: string }>().notNull().default({ type: "text", text: "" }),
+  position: integer("position").notNull().default(0),
 });
 
 // Проходження воронки конкретною людиною.
@@ -211,6 +246,8 @@ export const funnelEnrollments = pgTable("funnel_enrollments", {
   status: text("status").notNull().default("active"), // active | done | stopped
   nextPosition: integer("next_position").notNull().default(0),
   nextAt: timestamp("next_at", { withTimezone: true }),
+  awaitingStepId: integer("awaiting_step_id"), // крок, що чекає відповіді (завдання, запитання)
+  lastStepAt: timestamp("last_step_at", { withTimezone: true }),
   stopReason: text("stop_reason"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -223,9 +260,14 @@ export const funnelDeliveries = pgTable("funnel_deliveries", {
   stepId: integer("step_id").notNull().references(() => funnelSteps.id, { onDelete: "cascade" }),
   personId: integer("person_id").notNull(),
   telegramMessageId: integer("telegram_message_id"),
+  extraMessageIds: jsonb("extra_message_ids").$type<number[]>().notNull().default([]),
   clicked: boolean("clicked").notNull().default(false),
+  answer: text("answer"),
+  answeredAt: timestamp("answered_at", { withTimezone: true }),
+  deleteAt: timestamp("delete_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index("fd_step_idx").on(t.stepId)]);
+}, (t) => [index("fd_step_idx").on(t.stepId), index("fd_delete_idx").on(t.deleteAt)]);
 
 // Бібліотека медіа: файли, надіслані в Hub-бот (file_id придатний для повторного надсилання цим ботом).
 export const media = pgTable("media", {
