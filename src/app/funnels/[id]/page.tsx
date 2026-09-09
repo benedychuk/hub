@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, CoverInput, AutoSubmitToggle } from "@/components/funnel-ui";
+import { ConfirmSubmit, CoverInput, AutoSubmitToggle, StepText } from "@/components/funnel-ui";
 import { Kebab } from "@/components/kebab";
 import { navCounts, funnelDetail, botList } from "@/lib/queries";
 import { saveFunnelSettings, deleteFunnel, setFunnelStatus, addStep, deleteStep, moveStep, toggleStep, duplicateStep, testFunnelOnMe, stopFunnelEnrollment, runTickNow, addModule, renameModule, deleteModule, moveModule, saveCommand, deleteCommand } from "@/lib/actions";
@@ -130,7 +130,7 @@ export default async function FunnelEditor({ params, searchParams }: { params: P
         <div className="form">
           <div className="card form"><h3>Основне</h3>
             <label className="field">Назва<input name="name" defaultValue={f.name} required maxLength={120} /></label>
-            <label className="field">Опис (показується у вступному повідомленні перед кнопкою; можна теги &lt;b&gt;, &lt;i&gt;, &lt;a&gt;)<textarea name="description" rows={5} defaultValue={f.description ?? ""} maxLength={3000} /></label>
+            <div className="field">Опис (показується у вступному повідомленні перед кнопкою)<StepText name="description" defaultValue={f.description ?? ""} max={3000} minHeight={120} placeholder="Про що ця воронка й що отримає людина…" /></div>
             <label className="field">Текст кнопки<input name="buttonText" defaultValue={f.buttonText ?? "Отримати доступ"} maxLength={64} /></label>
             <div className="field">Обкладинка<CoverInput current={f.cover} /></div>
           </div>

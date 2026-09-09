@@ -61,7 +61,7 @@ export default async function BroadcastEditor({ params, searchParams }: { params
           <div className="form">
             <div className="card form">
               <label className="field">Назва (внутрішня)<input name="name" defaultValue={b.name} required maxLength={120} /></label>
-              <div className="field">Текст <span className="muted">змінні: {"{first_name} {last_name} {name} {username}"}</span><StepText name="text" defaultValue={b.text ?? ""} /></div>
+              <div className="field">Текст<StepText name="text" defaultValue={b.text ?? ""} variables={[{ key: "first_name", label: "ім’я" }, { key: "last_name", label: "прізвище" }, { key: "name", label: "ім’я та прізвище" }, { key: "username", label: "@username" }]} /></div>
             </div>
             <div className="card"><h3>Вкладення <span className="sub">файли з Бібліотеки; надішліть їх у Hub-бот</span></h3>
               <AttachmentsPicker media={media} initial={b.attachments ?? []} />

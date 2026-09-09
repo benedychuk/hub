@@ -37,7 +37,7 @@ export default async function StepEditor({ params, searchParams }: { params: Pro
               <label className="field">Назва кроку (для себе; для уроків може показуватись у повідомленні)<input name="title" defaultValue={step.title ?? ""} maxLength={120} /></label>
               <label className="field">Модуль<select name="moduleId" defaultValue={step.moduleId ?? ""}><option value="">Без модуля</option>{modules.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
             </div>
-            <div className="field">Текст<StepText name="body" defaultValue={step.body ?? ""} /></div>
+            <div className="field">Текст<StepText name="body" defaultValue={step.body ?? ""} variables={[{ key: "first_name", label: "ім’я" }, { key: "name", label: "ім’я та прізвище" }, { key: "username", label: "@username" }]} /></div>
           </div>
           <div className="card"><h3>Вкладення <span className="sub">фото, відео, кружечок, голосове, файл, GIF, стікер</span></h3><AttachmentsPicker media={media} initial={c.attachments ?? []} /></div>
           <div className="card"><h3>{isOptions ? "Варіанти відповіді" : "Кнопки"}</h3>

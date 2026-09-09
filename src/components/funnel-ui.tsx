@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { StepButton } from "@/lib/funnels";
+import { RichText } from "./rich-text";
 
 /** Кнопка сабміту з підтвердженням (видалення тощо). */
 export function ConfirmSubmit({ message, className, children, formAction, name, value }: { message: string; className?: string; children: React.ReactNode; formAction?: (fd: FormData) => void | Promise<void>; name?: string; value?: string }) {
@@ -44,35 +45,9 @@ export function CoverInput({ current }: { current: string | null }) {
   );
 }
 
-/** Текст кроку з панеллю форматування (HTML-теги Telegram) і лічильником до 4096 знаків. */
-export function StepText({ name, defaultValue, max = 4096, rows = 10 }: { name: string; defaultValue: string; max?: number; rows?: number }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const [len, setLen] = useState(defaultValue.length);
-  function wrap(open: string, close: string, prompt?: string) {
-    const ta = ref.current; if (!ta) return;
-    const s = ta.selectionStart, e = ta.selectionEnd; const sel = ta.value.slice(s, e) || "текст";
-    let o = open;
-    if (prompt) { const v = window.prompt(prompt, "https://"); if (!v) return; o = open.replace("%s", v); }
-    const next = ta.value.slice(0, s) + o + sel + close + ta.value.slice(e);
-    ta.value = next; setLen(next.length); ta.focus(); ta.setSelectionRange(s + o.length, s + o.length + sel.length);
-  }
-  const B = ({ t, title, onClick }: { t: string; title: string; onClick: () => void }) => <button type="button" className="fmt" title={title} onClick={onClick}>{t}</button>;
-  return (
-    <div>
-      <div className="fmtbar">
-        <B t="Ж" title="Жирний" onClick={() => wrap("<b>", "</b>")} />
-        <B t="К" title="Курсив" onClick={() => wrap("<i>", "</i>")} />
-        <B t="П" title="Підкреслений" onClick={() => wrap("<u>", "</u>")} />
-        <B t="З" title="Закреслений" onClick={() => wrap("<s>", "</s>")} />
-        <B t="🔗" title="Посилання" onClick={() => wrap('<a href="%s">', "</a>", "Адреса посилання")} />
-        <B t="</>" title="Моноширинний" onClick={() => wrap("<code>", "</code>")} />
-        <B t="▒" title="Спойлер" onClick={() => wrap("<tg-spoiler>", "</tg-spoiler>")} />
-        <B t="❝" title="Цитата" onClick={() => wrap("<blockquote>", "</blockquote>")} />
-        <span className={`cnt ${len > max ? "over" : ""}`}>{len} / {max}</span>
-      </div>
-      <textarea ref={ref} name={name} rows={rows} defaultValue={defaultValue} maxLength={max} onChange={(e) => setLen(e.target.value.length)} placeholder="Текст повідомлення. Для медіа з підписом до 1024 знаків; інакше медіа піде окремим повідомленням." />
-    </div>
-  );
+/** Текст кроку: візуальний редактор Telegram-форматування. */
+export function StepText({ name, defaultValue, max = 4096, minHeight = 200, variables, placeholder }: { name: string; defaultValue: string; max?: number; rows?: number; minHeight?: number; variables?: { key: string; label: string }[]; placeholder?: string }) {
+  return <RichText name={name} defaultValue={defaultValue} max={max} minHeight={minHeight} variables={variables} placeholder={placeholder} />;
 }
 
 type Media = { id: number; kind: string; title: string | null; caption: string | null; duration: number | null; width: number | null; height: number | null };
