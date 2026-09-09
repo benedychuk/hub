@@ -126,8 +126,9 @@ const list = (fd: FormData, k: string) => fd.getAll(k).map(String).map((x) => x.
 const nums = (fd: FormData, k: string) => list(fd, k).map(Number).filter((n) => n > 0);
 export async function saveBroadcastAudience(fd: FormData) {
   const id = Number(fd.get("id"));
-  const a: BroadcastAudience = {
-    onlyAdmin: fd.get("onlyAdmin") === "on",
+  const mode = str(fd, "mode") || "filters";
+  const a: BroadcastAudience = mode === "me" ? { onlyAdmin: true } : mode === "all" ? {} : {
+    onlyAdmin: false,
     customer: (str(fd, "customer") || "any") as BroadcastAudience["customer"],
     subStatus: list(fd, "subStatus"),
     tagsAny: str(fd, "tagsAny").split(",").map((x) => x.trim()).filter(Boolean),
