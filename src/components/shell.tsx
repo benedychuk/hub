@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import NavLinks from "./nav-links";
 import { hasDb } from "@/db";
 
@@ -7,8 +8,8 @@ export default function Shell({ title, children, counts }: { title: string; chil
   return (
     <div className="app">
       <aside className="side">
-        <Link className="brand" href="/"><i />Hub <small>клуб Марії</small></Link>
-        <NavLinks counts={counts ?? {}} />
+        <Link className="brand" href="/"><i /><span>Hub</span> <small>клуб Марії</small></Link>
+        <Suspense fallback={null}><NavLinks counts={counts ?? {}} /></Suspense>
         <div className="foot"><b>Адміністратор</b>{process.env.ADMIN_PASSWORD ? "вхід за паролем" : "пароль не заданий"}</div>
       </aside>
       <div className="main">

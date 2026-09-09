@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
-import { installWebhook, sendToPerson } from "./bot";
+import { installWebhook, sendToPerson, getBot, botToken } from "./bot";
 
 const { plans, persons, events, broadcasts, entitlements, resources, subscriptions, identities } = schema;
 
@@ -93,10 +93,12 @@ export async function seedResources() {
 }
 export async function saveResource(fd: FormData) {
   const key = str(fd, "key"); if (!key) return;
-  const config = { note: str(fd, "note"), zenedu_grants: fd.get("zenedu_grants") === "on", offer_url: str(fd, "offer_url") || undefined, quota_per_day: Number(fd.get("quota_per_day") || 0) || undefined, chatId: str(fd, "chatId") || undefined };
+  const [cur] = await db().select().from(resources).where(eq(resources.key, key));
+  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), note: str(fd, "note"), zenedu_grants: fd.get("zenedu_grants") === "on", offer_url: str(fd, "offer_url") || undefined, quota_per_day: Number(fd.get("quota_per_day") || 0) || undefined, url: str(fd, "url") || undefined, description: str(fd, "description") || undefined };
   await db().insert(resources).values({ key, name: str(fd, "name") || key, kind: str(fd, "kind") || "bot_feature", config })
-    .onConflictDoUpdate({ target: resources.key, set: { name: str(fd, "name") || key, kind: str(fd, "kind") || "bot_feature", config } });
-  revalidatePath("/resources"); revalidatePath("/bots");
+    .onConflictDoUpdate({ target: resources.key, set: { name: str(fd, "name") || key, kind: str(fd, "kind") || cur?.kind || "bot_feature", config } });
+  revalidatePath("/resources"); revalidatePath("/bots"); revalidatePath(`/resources/${key}`);
+  redirect(cur ? `/resources/${key}?saved=1` : `/resources/${key}?new=1`);
 }
 
 // ---------- розсилки (Зміст → Отримувачі → Надсилання, як у ZenEdu) ----------
@@ -507,10 +509,61 @@ export async function saveChannelResource(fd: FormData) {
   const [cur] = await db().select().from(resources).where(eq(resources.key, key));
   const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), graceDays: Number(fd.get("graceDays") || 0), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined };
   await db().update(resources).set({ name: str(fd, "name") || cur?.name || key, config }).where(eq(resources.key, key));
-  revalidatePath("/resources");
+  revalidatePath("/resources"); revalidatePath(`/resources/${key}`);
+  redirect(`/resources/${key}?saved=1`);
 }
 export async function runAccessTickNow() { await accessTick(); revalidatePath("/resources"); }
 export async function runReconcileNow() { await reconcileChannels(); revalidatePath("/resources"); }
+
+/** Дані чату з Telegram: назва, тип, аватар (маленький, як data URL), кількість учасників. */
+async function fetchChatInfo(chatId: string) {
+  const api = getBot().api;
+  const chat = await api.getChat(chatId);
+  const count = await api.getChatMemberCount(chatId).catch(() => null);
+  let cover: string | undefined;
+  const photoId = (chat as { photo?: { small_file_id: string } }).photo?.small_file_id;
+  if (photoId) {
+    try {
+      const f = await api.getFile(photoId);
+      if (f.file_path) { const res = await fetch(`https://api.telegram.org/file/bot${botToken()}/${f.file_path}`); if (res.ok) cover = `data:image/jpeg;base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`; }
+    } catch { /* без аватара */ }
+  }
+  const type = (chat as { type: string }).type;
+  return { title: (chat as { title?: string }).title ?? chatId, kind: type === "channel" ? "telegram_channel" : "telegram_group", cover, memberCount: count ?? undefined, username: (chat as { username?: string }).username };
+}
+/** Підключити канал або групу (як «Connect channel or group» у ZenEdu): бот уже має бути адміністратором у чаті. */
+export async function connectChat(fd: FormData) {
+  const chatId = str(fd, "chatId").replace(/\s/g, ""); if (!chatId) return;
+  const [dup] = await db().select({ key: resources.key }).from(resources).where(sql`${resources.config}->>'chatId' = ${chatId}`);
+  if (dup) redirect(`/resources/${dup.key}`);
+  let info: Awaited<ReturnType<typeof fetchChatInfo>>;
+  try { info = await fetchChatInfo(chatId); } catch (e) { redirect(`/resources?err=${encodeURIComponent("Telegram не віддає чат " + chatId + ": " + String(e).slice(0, 120) + ". Додайте Hub-бот у чат адміністратором.")}`); }
+  const key = `tg.${chatId.replace(/^-100|^-/, "")}`;
+  const config = { chatId, cover: info.cover, memberCount: info.memberCount, username: info.username, joinMode: "invite", inviteTtlHours: 24, graceDays: 0, syncedAt: new Date().toISOString() };
+  await db().insert(resources).values({ key, name: str(fd, "name") || info.title, kind: info.kind, config }).onConflictDoUpdate({ target: resources.key, set: { name: str(fd, "name") || info.title, kind: info.kind, config } });
+  revalidatePath("/resources"); redirect(`/resources/${key}?new=1`);
+}
+/** Оновити назву, аватар і кількість учасників із Telegram. */
+export async function refreshChatInfo(fd: FormData) {
+  const key = str(fd, "key");
+  const [r] = await db().select().from(resources).where(eq(resources.key, key)); if (!r) return;
+  const cfg = (r.config ?? {}) as Record<string, unknown>;
+  if (cfg.chatId) {
+    try { const info = await fetchChatInfo(String(cfg.chatId)); await db().update(resources).set({ config: { ...cfg, cover: info.cover ?? cfg.cover, memberCount: info.memberCount, username: info.username, syncedAt: new Date().toISOString() } }).where(eq(resources.key, key)); }
+    catch (e) { redirect(`/resources?err=${encodeURIComponent(String(e).slice(0, 160))}`); }
+  }
+  revalidatePath("/resources"); revalidatePath(`/resources/${key}`);
+}
+export async function toggleResource(fd: FormData) {
+  const key = str(fd, "key");
+  await db().update(resources).set({ isActive: sql`not ${resources.isActive}` }).where(eq(resources.key, key));
+  revalidatePath("/resources"); revalidatePath(`/resources/${key}`);
+}
+export async function deleteResource(fd: FormData) {
+  const key = str(fd, "key");
+  await db().delete(resources).where(eq(resources.key, key));
+  revalidatePath("/resources"); revalidatePath("/plans"); redirect("/resources");
+}
 export async function resendInvite(fd: FormData) {
   const personId = Number(fd.get("personId")); const key = str(fd, "resourceKey");
   await db().update(membershipsT).set({ status: "none", inviteLink: null, updatedAt: new Date() }).where(and(eq(membershipsT.personId, personId), eq(membershipsT.resourceKey, key)));
