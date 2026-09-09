@@ -381,3 +381,5 @@ ol.stepper a:hover { color: var(--ink); }
 .bars { display: grid; gap: 3px; }
 .lnk-ink { color: var(--ink); font-weight: 500; text-decoration: none; } .lnk-ink:hover { text-decoration: underline; }
 .chat-list .empty { padding: 30px 14px; } .empty p { max-width: 100%; }
+.btn.danger-solid { background: var(--crit); border-color: transparent; color: #fff; box-shadow: 0 8px 18px rgba(209,77,77,.3); }
+.btn.danger-solid:hover { filter: brightness(1.05); }

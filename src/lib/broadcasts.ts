@@ -39,9 +39,9 @@ export function audienceWhere(a: BroadcastAudience) {
   if (a.planIds?.length) parts.push(sql`exists (select 1 from subscriptions s where s.person_id = p.id and s.status in ('active','trialing','past_due') and s.plan_id in (${sql.join(a.planIds.map((x) => sql`${x}`), sql`, `)}))`);
   if (a.offerIds?.length) parts.push(sql`exists (select 1 from subscriptions s where s.person_id = p.id and s.status in ('active','trialing','past_due') and s.offer_id in (${sql.join(a.offerIds.map((x) => sql`${x}`), sql`, `)}))`);
   if (a.entitlements?.length) parts.push(sql`exists (select 1 from entitlements en where en.person_id = p.id and en.revoked_at is null and (en.valid_until is null or en.valid_until > now()) and en.resource_key in (${sql.join(a.entitlements.map((x) => sql`${x}`), sql`, `)}))`);
-  if (a.activeDays) parts.push(sql`coalesce(i.last_message_at, i.started_at) > now() - (${a.activeDays} || ' days')::interval`);
-  if (a.startedAfter) parts.push(sql`i.started_at >= ${a.startedAfter}::timestamptz`);
-  if (a.startedBefore) parts.push(sql`i.started_at < ${a.startedBefore}::timestamptz + interval '1 day'`);
+  if (a.activeDays) parts.push(sql`coalesce(i.last_message_at, i.started_at) > now() - (${a.activeDays}::int * interval '1 day')`);
+  if (a.startedAfter) parts.push(sql`i.started_at >= ${a.startedAfter}::text::timestamptz`);
+  if (a.startedBefore) parts.push(sql`i.started_at < ${a.startedBefore}::text::timestamptz + interval '1 day'`);
   if (a.excludeIds?.length) parts.push(sql`p.id not in (${sql.join(a.excludeIds.map((x) => sql`${x}`), sql`, `)})`);
   let w = sql.join(parts, sql` and `);
   if (a.includeIds?.length) w = sql`((${w}) or (p.id in (${sql.join(a.includeIds.map((x) => sql`${x}`), sql`, `)}) and i.bot_key = ${BOT_KEY} and i.chat_id is not null and i.blocked_at is null))`;
@@ -65,7 +65,7 @@ export async function previewAudience(a: BroadcastAudience, limit = 50, offset =
 export async function snapshotRecipients(id: number) {
   const d = db();
   const [b] = await d.select().from(broadcasts).where(eq(broadcasts.id, id)); if (!b) return 0;
-  await d.execute(sql`insert into broadcast_recipients (broadcast_id, person_id, status) select distinct ${id}, p.id, 'pending' from persons p join identities i on i.person_id = p.id where ${audienceWhere(b.audience)} on conflict do nothing`);
+  await d.execute(sql`insert into broadcast_recipients (broadcast_id, person_id, status) select distinct ${id}::int, p.id, 'pending' from persons p join identities i on i.person_id = p.id where ${audienceWhere(b.audience)} on conflict do nothing`);
   const [t] = await d.select({ c: sql<number>`count(*)::int` }).from(broadcastRecipients).where(eq(broadcastRecipients.broadcastId, id));
   await d.update(broadcasts).set({ totalCount: t.c, updatedAt: new Date() }).where(eq(broadcasts.id, id));
   return t.c;

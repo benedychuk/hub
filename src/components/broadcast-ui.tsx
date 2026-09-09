@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Send, CalendarClock, Plus, ChevronDown, ChevronUp, ArrowUp, ArrowDown, X } from "lucide-react";
 import { Segmented } from "@/components/ui/controls";
+import { ConfirmSubmitButton } from "@/components/ui/confirm";
 import type { BroadcastButton } from "@/db/schema";
 
 type Ref = { id: number; name: string };
@@ -91,9 +92,9 @@ export function SendTimePicker({ initial, count }: { initial: { mode: "now" | "s
         <div className="fld"><label className="fld-l">Час</label><input type="time" name="time" value={time} onChange={(e) => setTime(e.target.value)} required /><div className="fld-h">Київський час (GMT+3)</div></div>
       </div>}
       <div className="row-actions" style={{ marginTop: 18 }}>
-        <button type="submit" className="btn pri" disabled={!count || (mode === "schedule" && !date)} onClick={(e) => { if (!window.confirm(mode === "now" ? `Надіслати розсилку ${people} зараз?` : `Запланувати розсилку ${people} на ${when}?`)) e.preventDefault(); }}>
+        <ConfirmSubmitButton className="btn pri" disabled={!count || (mode === "schedule" && !date)} title={mode === "now" ? "Надіслати розсилку" : "Запланувати розсилку"} message={mode === "now" ? `Розсилка піде ${people} одразу після підтвердження. Скасувати відправку після старту не можна.` : `Розсилка піде ${people} ${when}. До старту її можна скасувати або змінити.`} confirmLabel={mode === "now" ? "Надіслати" : "Запланувати"}>
           {mode === "now" ? <><Send size={15} /> Надіслати зараз {count ? people : ""}</> : <><CalendarClock size={15} /> Запланувати{when ? ` на ${when}` : ""}</>}
-        </button>
+        </ConfirmSubmitButton>
         <Link href="/broadcasts" className="btn ghost">Зберегти чернетку</Link>
       </div>
     </div>

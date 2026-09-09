@@ -2,11 +2,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { StepButton } from "@/lib/funnels";
 import { RichText } from "./rich-text";
+import { ConfirmSubmitButton } from "./ui/confirm";
 import { ArrowUp, ArrowDown, X, Plus, Upload, Trash2 } from "lucide-react";
 
 /** Кнопка сабміту з підтвердженням (видалення тощо). */
 export function ConfirmSubmit({ message, className, children, formAction, name, value }: { message: string; className?: string; children: React.ReactNode; formAction?: (fd: FormData) => void | Promise<void>; name?: string; value?: string }) {
-  return <button type="submit" className={className} formAction={formAction} name={name} value={value} onClick={(e) => { if (!confirm(message)) e.preventDefault(); }}>{children}</button>;
+  return <ConfirmSubmitButton message={message} danger className={className} formAction={formAction} name={name} value={value}>{children}</ConfirmSubmitButton>;
 }
 
 /** Обкладинка: PNG/JPG/WEBP до 20 МБ; стискається в браузері до 1200px і зберігається як data URL. */

@@ -148,13 +148,14 @@ export async function saveBroadcastAudience(fd: FormData) {
 }
 export async function sendBroadcast(fd: FormData) {
   const id = Number(fd.get("id")); const mode = str(fd, "mode");
+  const fail = (m: string) => redirect(`/broadcasts/${id}?step=send&err=${encodeURIComponent(m)}`);
   if (mode === "schedule") {
     const at = str(fd, "date") && str(fd, "time") ? kyivToDate(str(fd, "date"), str(fd, "time")) : null;
-    if (!at || at.getTime() < Date.now() - 60_000) redirect(`/broadcasts/${id}?step=send&err=${encodeURIComponent("Вкажіть дату й час у майбутньому")}`);
-    await scheduleBroadcast(id, at);
+    if (!at || at.getTime() < Date.now() - 60_000) fail("Вкажіть дату й час у майбутньому");
+    try { await scheduleBroadcast(id, at!); } catch (e) { fail("Не вдалося запланувати: " + String(e).slice(0, 200)); }
     revalidatePath("/broadcasts"); redirect("/broadcasts");
   }
-  await startSending(id);
+  try { await startSending(id); } catch (e) { fail("Не вдалося зафіксувати отримувачів: " + String(e).slice(0, 200)); }
   revalidatePath("/broadcasts");
   // перша порція одразу, решту дошле щохвилинний тік
   await processBroadcasts(40_000).catch(() => null);

@@ -5,7 +5,8 @@ import * as RRadio from "@radix-ui/react-radio-group";
 import * as RMenu from "@radix-ui/react-dropdown-menu";
 import * as RTooltip from "@radix-ui/react-tooltip";
 import { Check, MoreVertical } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useConfirm } from "./confirm";
 
 /** Чекбокс, сумісний із формами: у FormData йде name=value, коли увімкнено. */
 export function Checkbox({ name, value = "on", defaultChecked, label, hint, disabled }: { name: string; value?: string; defaultChecked?: boolean; label: React.ReactNode; hint?: React.ReactNode; disabled?: boolean }) {
@@ -58,10 +59,18 @@ export function MenuLink({ href, icon, children, external }: { href: string; ico
 }
 /** Пункт меню, що виконує server action; confirm — текст підтвердження для небезпечних дій. */
 export function MenuAction({ action, fields = {}, icon, children, confirm, danger, disabled }: { action: (fd: FormData) => void | Promise<void>; fields?: Record<string, string | number>; icon?: React.ReactNode; children: React.ReactNode; confirm?: string; danger?: boolean; disabled?: boolean }) {
+  const ask = useConfirm();
+  const formRef = useRef<HTMLFormElement>(null);
   return (
-    <form action={action}>
+    <form action={action} ref={formRef}>
       {Object.entries(fields).map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
-      <RMenu.Item asChild disabled={disabled}><button type="submit" className={danger ? "danger" : ""} onClick={(e) => { if (confirm && !window.confirm(confirm)) e.preventDefault(); }}>{icon}{children}</button></RMenu.Item>
+      <RMenu.Item asChild disabled={disabled}><button type="submit" className={danger ? "danger" : ""} onClick={(e) => {
+        if (!confirm) return;
+        e.preventDefault();
+        // меню закриється і форма зникне з DOM, тому копіюємо її у провайдер і надсилаємо звідти
+        const fd = new FormData(formRef.current ?? undefined);
+        ask({ message: confirm, danger, confirmLabel: typeof children === "string" ? children : undefined, onConfirm: () => { void action(fd); } });
+      }}>{icon}{children}</button></RMenu.Item>
     </form>
   );
 }
