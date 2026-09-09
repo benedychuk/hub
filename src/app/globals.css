@@ -235,3 +235,6 @@ html[data-nav="compact"] .nav .lbl, html[data-nav="compact"] .nav .chev, html[da
 html[data-nav="compact"] .nav .top { justify-content: center; padding: 10px 0; }
 html[data-nav="compact"] .nav .grpx:hover .fly { display: block; }
 html[data-nav="compact"] .nav .collapse { text-align: center; }
+.lnk { background: none; border: 0; padding: 0; color: var(--orange-2); font-size: 12px; cursor: pointer; }
+.lnk:hover { text-decoration: underline; }
+.copybox { display: flex; gap: 8px; align-items: center; background: #fff; border: 1px solid var(--line-2); border-radius: 9px; padding: 8px 10px; font-family: var(--mono); font-size: 12px; word-break: break-all; }

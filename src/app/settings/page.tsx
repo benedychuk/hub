@@ -1,25 +1,43 @@
+import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { navCounts, syncRunList, settingsMap } from "@/lib/queries";
 import { dateTime } from "@/lib/format";
 import { hasDb } from "@/db";
 import SyncPanel from "./sync-panel";
+import UsersTab from "./users-tab";
+import AccountTab from "./account-tab";
+import { currentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+const TABS = [["general", "Загальні"], ["users", "Користувачі та доступ"], ["account", "Мій акаунт"]] as const;
 
-export default async function Settings() {
-  const [counts, runs, st] = await Promise.all([navCounts(), syncRunList(), settingsMap()]);
+export default async function Settings({ searchParams }: { searchParams: Promise<{ tab?: string; ok?: string; err?: string; link?: string; for?: string; reset?: string }> }) {
+  const sp = await searchParams;
+  const tab = TABS.some((t) => t[0] === sp.tab) ? sp.tab! : "general";
+  const [counts, runs, st, me] = await Promise.all([navCounts(), syncRunList(), settingsMap(), currentUser()]);
+  if (tab !== "general") {
+    return (
+      <Shell title="Налаштування" counts={counts}>
+        <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`/settings?tab=${k}`} className={tab === k ? "on" : ""}>{l}</Link>)}</div>
+        {sp.ok && <div className="alert ok">{sp.ok}</div>}
+        {sp.err && <div className="alert bad">{sp.err}</div>}
+        {tab === "users" ? <UsersTab me={me} link={sp.link} linkFor={sp.for} reset={Boolean(sp.reset)} /> : <AccountTab me={me} />}
+      </Shell>
+    );
+  }
   const env = [
     ["DATABASE_URL", hasDb(), "база Neon; додається інтеграцією Vercel → Storage"],
     ["ZENEDU_API_TOKEN", Boolean(process.env.ZENEDU_API_TOKEN), "токен воркспейсу ZenEdu"],
     ["TELEGRAM_BOT_TOKEN", Boolean(process.env.TELEGRAM_BOT_TOKEN), "токен Hub-бота з BotFather"],
-    ["ADMIN_PASSWORD", Boolean(process.env.ADMIN_PASSWORD), "пароль входу в панель; поки не заданий, панель відкрита"],
+    ["ADMIN_PASSWORD", Boolean(process.env.ADMIN_PASSWORD), "спільний пароль: потрібен лише для створення акаунта власника; далі вхід за акаунтами"],
     ["ADMIN_TELEGRAM_ID", Boolean(process.env.ADMIN_TELEGRAM_ID), "ваш telegram id для тестових розсилок"],
     ["ZENEDU_WEBHOOK_SECRET", Boolean(process.env.ZENEDU_WEBHOOK_SECRET), "довільний секрет для адреси вебхука ZenEdu"],
     ["CRON_SECRET", Boolean(process.env.CRON_SECRET), "захист щоденного cron; Vercel підставляє сам"],
   ] as const;
   return (
     <Shell title="Налаштування" counts={counts}>
+      <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`/settings?tab=${k}`} className={tab === k ? "on" : ""}>{l}</Link>)}</div>
       <div className="grid g2">
         <div className="card"><h3>Змінні оточення <span className="sub">Vercel → Settings → Environment Variables</span></h3>
           {env.map(([k, ok, d]) => <div className="ent" key={k}><span className={`dot ${ok ? "" : "off"}`} /><div><b className="mono">{k}</b><small>{d}</small></div><Pill tone={ok ? "good" : "mute"}>{ok ? "є" : "немає"}</Pill></div>)}

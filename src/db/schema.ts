@@ -385,3 +385,34 @@ export const settings = pgTable("settings", {
   value: jsonb("value").$type<unknown>(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Акаунти панелі: власник і адміністратори. Пароль зберігається як scrypt-хеш, токени запрошень і сесій лише як sha256.
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  email: text("email").notNull(),
+  name: text("name").notNull(),
+  role: text("role").notNull().default("admin"), // owner | admin
+  passwordHash: text("password_hash"),
+  status: text("status").notNull().default("invited"), // invited | active | disabled
+  inviteTokenHash: text("invite_token_hash"),
+  inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
+  invitePurpose: text("invite_purpose"), // invite | reset
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  createdBy: integer("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("users_email_uidx").on(t.email)]);
+
+export const userSessions = pgTable("user_sessions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+}, (t) => [uniqueIndex("user_sessions_token_uidx").on(t.tokenHash), index("user_sessions_user_idx").on(t.userId)]);

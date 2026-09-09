@@ -50,6 +50,13 @@
       "when": 1788958529475,
       "tag": "0006_blushing_captain_cross",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788959774351,
+      "tag": "0007_thankful_ezekiel",
+      "breakpoints": true
     }
   ]
 }

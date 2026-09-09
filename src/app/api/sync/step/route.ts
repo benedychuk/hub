@@ -1,15 +1,17 @@
 import { cookies } from "next/headers";
 import { runFullSyncStep, runIncrementalSync, resetSyncCursor } from "@/lib/sync";
-import { COOKIE, authEnabled, sessionToken } from "@/lib/auth";
+import { COOKIE, authEnabled, legacySessionToken, currentUser, usersExist } from "@/lib/auth";
 import { hasDb } from "@/db";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 async function authorized() {
+  if (await currentUser()) return true;
+  if (await usersExist()) return false;
   if (!authEnabled()) return true;
   const c = (await cookies()).get(COOKIE)?.value;
-  return c === sessionToken();
+  return c === legacySessionToken();
 }
 
 export async function POST(req: Request) {
