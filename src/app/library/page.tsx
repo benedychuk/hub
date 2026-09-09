@@ -1,4 +1,5 @@
 import Shell from "@/components/shell";
+import { adminTelegramId } from "@/lib/auth";
 import { Pill } from "@/components/ui";
 import { navCounts, mediaList, adminTexts, recentSenders } from "@/lib/queries";
 import { deleteMedia, renameMedia } from "@/lib/actions";
@@ -9,7 +10,7 @@ const LABEL: Record<string, string> = { video_note: "кружечок", photo: "
 
 export default async function Library() {
   const [counts, med, texts, senders] = await Promise.all([navCounts(), mediaList(), adminTexts(), recentSenders()]);
-  const adminId = String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "");
+  const adminId = String(adminTelegramId() || "");
   const adminWrote = senders.some((x) => String(x.tg) === adminId);
   return (
     <Shell title="Бібліотека" counts={counts}>

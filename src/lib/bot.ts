@@ -2,6 +2,7 @@ import { Bot, InlineKeyboard, webhookCallback } from "grammy";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
+import { adminTelegramId } from "./auth";
 import { enroll, matchEntry, onButtonClick, stopAllForPerson } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
@@ -93,7 +94,7 @@ export function getBot() {
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
     const m = ctx.message;
     // Медіа від адміністратора потрапляє в бібліотеку і далі використовується у кроках воронок і розсилках.
-    const adminId = Number(String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "")) || 0;
+    const adminId = adminTelegramId();
     const med = m.video_note ? { kind: "video_note", f: m.video_note, w: m.video_note.length, h: m.video_note.length, d: m.video_note.duration }
       : m.photo ? { kind: "photo", f: m.photo[m.photo.length - 1], w: m.photo[m.photo.length - 1].width, h: m.photo[m.photo.length - 1].height }
       : m.video ? { kind: "video", f: m.video, w: m.video.width, h: m.video.height, d: m.video.duration, mime: m.video.mime_type }

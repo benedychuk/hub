@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
+import { adminTelegramId } from "./auth";
 import { installWebhook, sendToPerson } from "./bot";
 
 const { plans, persons, events, broadcasts, entitlements, resources, subscriptions, identities } = schema;
@@ -117,7 +118,7 @@ export async function runBroadcast(id: number) {
   const kind = (b.audience as { kind?: string }).kind ?? "hub_all";
   let where = sql`i.bot_key = 'hub' and i.blocked_at is null`;
   if (kind === "hub_active") where = sql`${where} and exists (select 1 from subscriptions s where s.person_id = i.person_id and s.status in ('active','trialing','past_due'))`;
-  const adminId = Number(String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "")) || 0;
+  const adminId = adminTelegramId();
   if (kind === "hub_test") where = sql`${where} and p.telegram_user_id = ${adminId}`;
   const targets = await d.execute(sql`select i.person_id from identities i join persons p on p.id = i.person_id where ${where}`);
   let sent = 0, failed = 0, lastError: string | null = null;
@@ -216,7 +217,7 @@ export async function enrollToFunnel(fd: FormData) {
 }
 export async function testFunnelOnMe(fd: FormData) {
   const funnelId = Number(fd.get("funnelId"));
-  const tg = Number(process.env.ADMIN_TELEGRAM_ID ?? 0);
+  const tg = adminTelegramId();
   const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, tg));
   if (p[0]) { await enrollPerson(funnelId, p[0].id, "test"); await processDue(20); }
   revalidatePath(`/funnels/${funnelId}`);

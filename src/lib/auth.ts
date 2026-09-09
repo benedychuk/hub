@@ -13,3 +13,8 @@ export function sessionToken() {
 export function checkPassword(input: string) {
   return authEnabled() && input === process.env.ADMIN_PASSWORD;
 }
+
+/** Числовий Telegram id адміністратора зі змінної ADMIN_TELEGRAM_ID; літери й пробіли відкидаються. */
+export function adminTelegramId(): number {
+  return Number(String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "")) || 0;
+}
