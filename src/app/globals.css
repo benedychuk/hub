@@ -239,7 +239,7 @@ html[data-nav="compact"] .nav .collapse { text-align: center; }
 .lnk:hover { text-decoration: underline; }
 .copybox { display: flex; gap: 8px; align-items: center; background: #fff; border: 1px solid var(--line-2); border-radius: 9px; padding: 8px 10px; font-family: var(--mono); font-size: 12px; word-break: break-all; }
 /* --- модальні вікна --- */
-dialog.modal { border: 0; border-radius: 16px; padding: 0; box-shadow: var(--shadow); background: #fff; color: var(--ink); }
+dialog.modal { position: fixed; inset: 0; margin: auto; max-height: min(90vh, 900px); overflow: auto; border: 0; border-radius: 16px; padding: 0; box-shadow: var(--shadow); background: #fff; color: var(--ink); }
 dialog.modal::backdrop { background: rgba(40,43,43,.45); backdrop-filter: blur(3px); }
 .modal-in { padding: 20px 22px 22px; display: grid; gap: 14px; }
 .modal-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
