@@ -585,6 +585,7 @@ export async function savePaymentSettings(fd: FormData) {
   await setPaySetting("payments.migrationDays", Math.max(1, Number(fd.get("migrationDays") || 5)));
   await setPaySetting("payments.reminderDays", Math.max(1, Number(fd.get("reminderDays") || 3)));
   await setPaySetting("payments.trialVerifyAmount", Math.max(1, Number(fd.get("verifyAmount") || 1)));
+  await setPaySetting("payments.migrationAuto", fd.get("migrationAuto") === "on");
   revalidatePath("/settings"); redirect("/settings?tab=payments&ok=" + encodeURIComponent(`Збережено. Режим: ${mode === "live" ? "бойовий" : "тестовий"}.`));
 }
 export async function makeTestPayLink(fd: FormData) {

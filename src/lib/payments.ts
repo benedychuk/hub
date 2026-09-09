@@ -15,9 +15,9 @@ const RETRY_DAYS = [1, 3, 5];
 
 // ---------- налаштування ----------
 export async function paymentSettings() {
-  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount"]));
+  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto"]));
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1) };
+  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true };
 }
 export async function setSetting(key: string, value: unknown) {
   await db().insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
@@ -244,8 +244,8 @@ export async function dailyPayments() {
     await notify(s.personId, `Нагадуємо: ${s.nextChargeAt.toLocaleDateString("uk-UA")} спишемо ${money(s.price, s.currency)} за підписку${pm?.cardPan ? ` з картки ${pm.cardPan}` : ""}. Керувати підпискою: /subscriptions`);
     await d.update(subscriptions).set({ remindedFor: s.nextChargeAt }).where(eq(subscriptions.id, s.id)); reminded++;
   }
-  // переїзд: активні в ZenEdu, запустили Hub-бот, без Hub-підписки, до списання ≤ N днів
-  const [defaultPlan] = await d.select().from(plans).where(eq(plans.isActive, true)).orderBy(desc(plans.isFeatured), plans.sortOrder).limit(1);
+  // переїзд: лише якщо власник явно увімкнув автоматичні запрошення в Налаштування → Оплати
+  const [defaultPlan] = st.migrationAuto ? await d.select().from(plans).where(eq(plans.isActive, true)).orderBy(desc(plans.isFeatured), plans.sortOrder).limit(1) : [];
   if (defaultPlan) {
     const rows = await d.execute(sql`select z.id, z.person_id, z.current_period_end, z.price, z.currency from subscriptions z
       join identities i on i.person_id = z.person_id and i.bot_key = 'hub' and i.blocked_at is null

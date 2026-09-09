@@ -1,7 +1,7 @@
 import { CreditCard, Link2 } from "lucide-react";
 import { Pill } from "@/components/ui";
 import { Section, Field, FormRow, KV, Alert, Row } from "@/components/ui/layout";
-import { RadioCards } from "@/components/ui/controls";
+import { RadioCards, Switch } from "@/components/ui/controls";
 import { CopyBox } from "./copy-box";
 import { paymentSettings } from "@/lib/payments";
 import { liveConfigured, TEST_MERCHANT } from "@/lib/wayforpay";
@@ -24,6 +24,8 @@ export default async function PaymentsTab({ link }: { link?: string }) {
               <Field label="Запрошувати на переїзд за, днів" hint="до дати списання в ZenEdu"><input name="migrationDays" type="number" min={1} defaultValue={st.migrationDays} /></Field>
               <Field label="Перевірочна сума картки, грн" hint="списується й повертається"><input name="verifyAmount" type="number" min={1} defaultValue={st.verifyAmount} /></Field>
             </FormRow>
+            <div style={{ marginTop: 14 }}><Switch name="migrationAuto" defaultChecked={st.migrationAuto} label="Автоматичні запрошення на переїзд" hint="поки вимкнено, Hub нікому з учасниць не пише сам; запросити окрему людину можна вручну на сторінці «Міграція»" /></div>
+            {st.migrationAuto && <Alert tone="warn">Увімкнено: щодня Hub пише активним у ZenEdu, які запустили Hub-бот і в яких списання за {st.migrationDays} дн.</Alert>}
             <div className="row-actions" style={{ marginTop: 14 }}><button className="btn pri" type="submit">Зберегти</button></div>
           </Section>
         </form>
