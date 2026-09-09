@@ -31,7 +31,8 @@ export default function NavLinks({ counts }: { counts: Record<string, number> })
   const [compact, setCompact] = useState(false);
   useEffect(() => { try { const o = JSON.parse(localStorage.getItem("nav.open") ?? "{}"); setOpen(o); setCompact(localStorage.getItem("nav.compact") === "1"); } catch { /* ignore */ } }, []);
   useEffect(() => { document.documentElement.dataset.nav = compact ? "compact" : ""; try { localStorage.setItem("nav.compact", compact ? "1" : "0"); } catch { /* ignore */ } }, [compact]);
-  const toggle = (k: string) => setOpen((o) => { const n = { ...o, [k]: !(o[k] ?? k === activeGroup) }; try { localStorage.setItem("nav.open", JSON.stringify(n)); } catch { /* ignore */ } return n; });
+  // акордеон: відкрита лише одна група, решта згортаються
+  const toggle = (k: string) => setOpen((o) => { const wasOpen = o[k] ?? k === activeGroup; const n: Record<string, boolean> = Object.fromEntries(GROUPS.map((g) => [g.key, false])); n[k] = !wasOpen; try { localStorage.setItem("nav.open", JSON.stringify(n)); } catch { /* ignore */ } return n; });
   const cnt = (k?: string) => k && counts[k] != null ? <span className="cnt">{counts[k]}</span> : null;
   return (
     <nav className="nav">

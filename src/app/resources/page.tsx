@@ -1,7 +1,8 @@
 import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
+import { ConfirmSubmit } from "@/components/funnel-ui";
+import { Kebab } from "@/components/kebab";
 import { navCounts, resourceList, settingsMap, botList } from "@/lib/queries";
 import { ConnectChatDialog, Modal } from "@/components/modal";
 import { connectChat, saveResource, refreshChatInfo, toggleResource, deleteResource, runAccessTickNow, runReconcileNow } from "@/lib/actions";
@@ -32,8 +33,7 @@ export default async function Resources({ searchParams }: { searchParams: Promis
   const link = (p: Record<string, string>) => { const u = new URLSearchParams({ ...(tab === "digital" ? { tab } : {}), ...(sp.q ? { q: sp.q } : {}), ...(sp.view ? { view: sp.view } : {}), ...p }); const s = u.toString(); return "/resources" + (s ? "?" + s : ""); };
   return (
     <Shell title={tab === "channels" ? "Канали і групи" : "Цифрові продукти"} counts={counts}>
-      <MenuCloser />
-      {sp.err && <div className="alert bad">{sp.err}</div>}
+            {sp.err && <div className="alert bad">{sp.err}</div>}
       <div className="tabs"><Link href="/resources" className={tab === "channels" ? "on" : ""}>Канали і групи · {res.filter((r) => isChat(r.kind)).length}</Link><Link href="/resources?tab=digital" className={tab === "digital" ? "on" : ""}>Цифрові продукти · {res.filter((r) => !isChat(r.kind)).length}</Link></div>
       <div className="toolbar">
         <form className="search" method="get"><span className="muted">⌕</span><input name="q" defaultValue={sp.q ?? ""} placeholder="Пошук" />{tab === "digital" && <input type="hidden" name="tab" value="digital" />}</form>
@@ -65,14 +65,14 @@ export default async function Resources({ searchParams }: { searchParams: Promis
               <div className="row-actions"><span className="muted" style={{ fontSize: 12 }}>{r.kind === "telegram_channel" ? "📣" : r.kind === "telegram_group" ? "👥" : r.kind === "bot_feature" ? "🤖" : r.kind === "course" ? "🎓" : "🔗"} {KINDS[r.kind] ?? r.kind}</span><span className="spacer" style={{ flex: 1 }} />
                 {!r.isActive ? <Pill tone="mute">Вимкнено</Pill> : !chat ? <Pill tone="good">Active</Pill> : !c.chatId ? <Pill tone="warn">Не підключено</Pill> : rightsBad ? <Pill tone="crit" >Бот без прав</Pill> : <Pill tone="good">Active</Pill>}</div>
             </div>
-            <details className="menu"><summary>⋮</summary><div className="dd">
+            <Kebab>
               <Link href={`/resources/${r.key}`}>⚙ Налаштування</Link>
               {chat && c.chatId && <form action={refreshChatInfo}><input type="hidden" name="key" value={r.key} /><button type="submit">⟳ Оновити з Telegram</button></form>}
               {chat && c.username && <a href={`https://t.me/${c.username}`} target="_blank" rel="noreferrer">↗ Відкрити в Telegram</a>}
               <form action={toggleResource}><input type="hidden" name="key" value={r.key} /><button type="submit">{r.isActive ? "⏸ Вимкнути" : "▶ Увімкнути"}</button></form>
               <div className="sep" />
               <form action={deleteResource}><input type="hidden" name="key" value={r.key} /><ConfirmSubmit className="danger" message={`Видалити «${r.name}» з Hub? Людей із чату це не виключить, але право доступу до нього зникне з тарифів.`}>🗑 Видалити</ConfirmSubmit></form>
-            </div></details>
+            </Kebab>
           </div>); })}
       </div>
 

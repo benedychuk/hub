@@ -1,7 +1,8 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { db, hasDb, schema } from "@/db";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
+import { ConfirmSubmit } from "@/components/funnel-ui";
+import { Kebab } from "@/components/kebab";
 import { CopyBox } from "./copy-box";
 import { ROLE_LABEL, INVITE_HOURS, type User } from "@/lib/auth";
 import { createUser, resetUserPassword, toggleUser, changeRole, revokeUserSessions, deleteUser } from "@/lib/users";
@@ -18,8 +19,7 @@ export default async function UsersTab({ me, link, linkFor, reset }: { me: (User
   if (!me) return <div className="card"><h3>Акаунтів ще немає</h3><p>Зараз у Hub діє спільний пароль зі змінної ADMIN_PASSWORD. Щоб додавати інших людей і бачити, хто що робив, спершу створіть акаунт власника: вийдіть на сторінку <a href="/login">/login</a> і заповніть форму «Перший вхід».</p><p className="note">Після цього спільний пароль перестане діяти для входу, а кожен адміністратор матиме власні email і пароль.</p></div>;
   return (
     <div>
-      <MenuCloser />
-      {link && <div className="card" style={{ marginBottom: 16, borderColor: "var(--orange)" }}><h3>{reset ? "Посилання для нового пароля" : "Запрошення створено"} <span className="sub">для {linkFor}</span></h3>
+            {link && <div className="card" style={{ marginBottom: 16, borderColor: "var(--orange)" }}><h3>{reset ? "Посилання для нового пароля" : "Запрошення створено"} <span className="sub">для {linkFor}</span></h3>
         <p style={{ margin: "0 0 8px" }}>Надішліть це посилання людині особисто (наприклад, у Telegram). Воно діє {INVITE_HOURS} год і спрацьовує один раз; повторно його побачити не можна, але можна створити нове.</p><CopyBox text={link} /></div>}
       <div className="grid g21">
         <div className="card tbl"><h3>Користувачі <span className="sub">{list.length}</span></h3>
@@ -31,14 +31,14 @@ export default async function UsersTab({ me, link, linkFor, reset }: { me: (User
                 <td><Pill tone={st}>{sl}</Pill>{u.lockedUntil && u.lockedUntil.getTime() > Date.now() && <div className="muted" style={{ fontSize: 11.5 }}>заблоковано до {dateTime(u.lockedUntil)}</div>}</td>
                 <td className="mono">{u.lastLoginAt ? dateTime(u.lastLoginAt) : "—"}</td>
                 <td className="num">{sessions}</td>
-                <td>{canManage(u) && <details className="menu"><summary>⋮</summary><div className="dd">
+                <td>{canManage(u) && <Kebab>
                   <form action={resetUserPassword}><input type="hidden" name="id" value={u.id} /><ConfirmSubmit message={`Створити посилання для нового пароля для ${u.name}? Поточні сесії цієї людини завершаться.`}>🔑 {u.status === "invited" ? "Нове посилання-запрошення" : "Скинути пароль"}</ConfirmSubmit></form>
                   {sessions > 0 && <form action={revokeUserSessions}><input type="hidden" name="id" value={u.id} /><button type="submit">⏏ Вийти на всіх пристроях</button></form>}
                   {me.role === "owner" && <form action={changeRole}><input type="hidden" name="id" value={u.id} /><input type="hidden" name="role" value={u.role === "owner" ? "admin" : "owner"} /><ConfirmSubmit message={u.role === "owner" ? `Зробити ${u.name} адміністратором?` : `Зробити ${u.name} власником? Власник може керувати всіма акаунтами.`}>{u.role === "owner" ? "↓ Зробити адміністратором" : "↑ Зробити власником"}</ConfirmSubmit></form>}
                   <form action={toggleUser}><input type="hidden" name="id" value={u.id} /><button type="submit">{u.status === "disabled" ? "▶ Увімкнути" : "⏸ Вимкнути доступ"}</button></form>
                   <div className="sep" />
                   <form action={deleteUser}><input type="hidden" name="id" value={u.id} /><ConfirmSubmit className="danger" message={`Видалити акаунт ${u.name} (${u.email})? Історія дій залишиться.`}>🗑 Видалити</ConfirmSubmit></form>
-                </div></details>}</td>
+                </Kebab>}</td>
               </tr>); })}
           </tbody></table>
           <p className="note">Власник керує всіма акаунтами й ролями. Адміністратор має повний доступ до Hub і може запрошувати інших адміністраторів, але не змінює власників. Себе кожен редагує у вкладці «Мій акаунт».</p>

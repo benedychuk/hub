@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, MenuCloser, StepText, AttachmentsPicker } from "@/components/funnel-ui";
+import { ConfirmSubmit, StepText, AttachmentsPicker } from "@/components/funnel-ui";
+import { Kebab } from "@/components/kebab";
 import { BroadcastButtonsEditor, SendTimePicker } from "@/components/broadcast-ui";
 import { navCounts, broadcastDetail } from "@/lib/queries";
 import { saveBroadcastContent, saveBroadcastAudience, sendBroadcast, cancelBroadcast, deleteBroadcastFromSubscribers, deleteBroadcast, duplicateBroadcast, previewBroadcast, runBroadcastsNow } from "@/lib/actions";
@@ -36,19 +37,18 @@ export default async function BroadcastEditor({ params, searchParams }: { params
     <div className="tabs">{[["content", "Зміст"], ["recipients", "Отримувачі"], ["clicked", "Клікнули"]].map(([k, l]) => <Link key={k} href={`/broadcasts/${b.id}?step=${k}`} className={step === k ? "on" : ""}>{l}{k === "recipients" ? ` · ${b.sentCount}` : k === "clicked" ? ` · ${b.clickedCount}` : ""}</Link>)}</div>);
   return (
     <Shell title="Розсилки" counts={counts}>
-      <MenuCloser />
-      <div className="fhead">
+            <div className="fhead">
         <Link href="/broadcasts" className="btn sm ghost">← Розсилки</Link>
         <h2>➤ {b.name}</h2>
         <Pill tone={tone}>{statusLabel}{b.scheduledAt && b.status === "scheduled" ? " · " + dateTime(b.scheduledAt) : ""}</Pill>
         <form action={previewBroadcast}><input type="hidden" name="id" value={b.id} /><input type="hidden" name="step" value={step} /><button className="btn sm" type="submit" title="Надіслати собі для перегляду">👁 Перегляд</button></form>
         <form action={duplicateBroadcast}><input type="hidden" name="id" value={b.id} /><button className="btn sm" type="submit">⧉ Дублювати</button></form>
-        <details className="menu"><summary>⋮</summary><div className="dd">
+        <Kebab>
           {b.status === "scheduled" && <form action={cancelBroadcast}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit message="Скасувати заплановану розсилку?">⏹ Скасувати розклад</ConfirmSubmit></form>}
           {b.status === "sending" && <form action={runBroadcastsNow}><button type="submit">⟳ Продовжити надсилання зараз</button></form>}
           {b.status === "sent" && <form action={deleteBroadcastFromSubscribers}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit className="danger" message={`Видалити повідомлення у всіх ${b.sentCount} отримувачів? Лише впродовж 48 годин після надсилання.`}>🗑 Видалити у підписників</ConfirmSubmit></form>}
           {b.status !== "sending" && <><div className="sep" /><form action={deleteBroadcast}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit className="danger" message="Видалити розсилку з Hub?">✕ Видалити з Hub</ConfirmSubmit></form></>}
-        </div></details>
+        </Kebab>
       </div>
       {sp.sent && <div className="alert ok">Надіслано вам у Telegram для перегляду.</div>}
       {sp.err && <div className="alert bad">{sp.err}</div>}

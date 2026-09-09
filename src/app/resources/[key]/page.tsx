@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
+import { ConfirmSubmit } from "@/components/funnel-ui";
+import { Kebab } from "@/components/kebab";
 import { navCounts, resourceList, planList } from "@/lib/queries";
 import { saveResource, saveChannelResource, refreshChatInfo, toggleResource, deleteResource } from "@/lib/actions";
 import { botRightsIn, channelStats, type ChannelConfig } from "@/lib/telegram-access";
@@ -23,19 +24,18 @@ export default async function ResourcePage({ params, searchParams }: { params: P
   const inPlans = plans.filter((p) => Object.keys((p.entitlements ?? {}) as Record<string, string>).includes(r.key));
   return (
     <Shell title={chat ? "Канали і групи" : "Цифрові продукти"} counts={counts}>
-      <MenuCloser />
-      <div className="fhead">
+            <div className="fhead">
         <Link href={chat ? "/resources" : "/resources?tab=digital"} className="btn sm ghost">← Назад</Link>
         {c.cover && <span style={{ width: 36, height: 36, borderRadius: 10, backgroundImage: `url(${c.cover})`, backgroundSize: "cover" }} />}
         <h2>{r.name}</h2>
         <Pill tone="moon">{KINDS[r.kind] ?? r.kind}</Pill>
         {!r.isActive ? <Pill tone="mute">Вимкнено</Pill> : chat && !c.chatId ? <Pill tone="warn">Не підключено</Pill> : chat && rights && !rights.ok ? <Pill tone="crit">Бот без прав</Pill> : <Pill tone="good">Active</Pill>}
         {chat && c.chatId && <form action={refreshChatInfo}><input type="hidden" name="key" value={r.key} /><button className="btn sm" type="submit">⟳ Оновити з Telegram</button></form>}
-        <details className="menu"><summary>⋮</summary><div className="dd">
+        <Kebab>
           <form action={toggleResource}><input type="hidden" name="key" value={r.key} /><button type="submit">{r.isActive ? "⏸ Вимкнути" : "▶ Увімкнути"}</button></form>
           <div className="sep" />
           <form action={deleteResource}><input type="hidden" name="key" value={r.key} /><ConfirmSubmit className="danger" message={`Видалити «${r.name}» з Hub?`}>🗑 Видалити</ConfirmSubmit></form>
-        </div></details>
+        </Kebab>
       </div>
       {sp.new && <div className="alert ok">{chat ? "Канал підключено. Перевірте режим вступу й тексти нижче, а право доступу додайте в тарифі." : "Продукт створено. Додайте його до тарифу, щоб видавати доступ."}</div>}
       {sp.saved && <div className="alert ok">Збережено.</div>}

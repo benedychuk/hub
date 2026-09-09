@@ -3,7 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, MenuCloser, CoverInput, AutoSubmitToggle } from "@/components/funnel-ui";
+import { ConfirmSubmit, CoverInput, AutoSubmitToggle } from "@/components/funnel-ui";
+import { Kebab } from "@/components/kebab";
 import { navCounts, funnelDetail, botList } from "@/lib/queries";
 import { saveFunnelSettings, deleteFunnel, setFunnelStatus, addStep, deleteStep, moveStep, toggleStep, duplicateStep, testFunnelOnMe, stopFunnelEnrollment, runTickNow, addModule, renameModule, deleteModule, moveModule, saveCommand, deleteCommand } from "@/lib/actions";
 import { dateTime, fullName } from "@/lib/format";
@@ -31,13 +32,13 @@ export default async function FunnelEditor({ params, searchParams }: { params: P
       <td className="num">{s?.people ?? 0}</td><td className="num">{wait(st.position)}</td><td className="num">{summary.started ? Math.round(((s?.people ?? 0) / summary.started) * 100) : 0}%</td>
       <td className="mono" style={{ fontSize: 12.5 }}>{sendTimeLabel(c)}{c.autodelete?.mode === "in" ? " · 🗑" : ""}{c.protect || fs.contentProtection ? " · 🔒" : ""}</td>
       <td><form action={toggleStep}><input type="hidden" name="id" value={st.id} /><input type="hidden" name="funnelId" value={f.id} /><AutoSubmitToggle checked={st.isActive} label={st.isActive ? "Активний" : "Зупинений"} /></form></td>
-      <td><details className="menu"><summary>⋮</summary><div className="dd">
+      <td><Kebab>
         <Link href={`/funnels/${f.id}/steps/${st.id}`}>✎ Редагувати</Link>
         <form action={duplicateStep}><input type="hidden" name="id" value={st.id} /><input type="hidden" name="funnelId" value={f.id} /><button type="submit">⧉ Дублювати</button></form>
         <form action={moveStep}><input type="hidden" name="id" value={st.id} /><input type="hidden" name="funnelId" value={f.id} /><button type="submit" name="dir" value="up" disabled={i === 0}>↑ Вище</button><button type="submit" name="dir" value="down" disabled={i === steps.length - 1}>↓ Нижче</button></form>
         <div className="sep" />
         <form action={deleteStep}><input type="hidden" name="id" value={st.id} /><input type="hidden" name="funnelId" value={f.id} /><ConfirmSubmit className="danger" message={`Видалити крок «${st.title ?? ""}»?`}>🗑 Видалити</ConfirmSubmit></form>
-      </div></details></td>
+      </Kebab></td>
     </tr>); };
   const AddStep = ({ moduleId }: { moduleId?: number }) => (
     <form action={addStep} className="types"><input type="hidden" name="funnelId" value={f.id} />{moduleId ? <input type="hidden" name="moduleId" value={moduleId} /> : null}
@@ -45,20 +46,19 @@ export default async function FunnelEditor({ params, searchParams }: { params: P
     </form>);
   return (
     <Shell title="Воронки" counts={counts}>
-      <MenuCloser />
-      <div className="fhead">
+            <div className="fhead">
         <Link href="/funnels" className="btn sm ghost">← Воронки</Link>
         <h2>{f.name}</h2>
         <Pill tone={f.isActive ? "good" : f.status === "stopped" ? "warn" : "mute"}>{f.isActive ? "активна" : f.status === "stopped" ? "зупинена" : "чернетка"}</Pill>
         <a href={`/f/${f.id}`} target="_blank" rel="noreferrer" className="btn sm">👁 Перегляд</a>
         <form action={testFunnelOnMe}><input type="hidden" name="funnelId" value={f.id} /><button className="btn sm" type="submit" name="mode" value="steps" disabled={!f.isActive} title="Надішле кроки воронки на ваш Telegram">▶ Тест собі</button></form>
         <form action={setFunnelStatus}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="status" value={f.isActive ? "stopped" : "active"} /><button className={`btn sm ${f.isActive ? "" : "pri"}`} type="submit">{f.isActive ? "⏸ Зупинити" : "▶ Активувати"}</button></form>
-        <details className="menu"><summary>⋮</summary><div className="dd">
+        <Kebab>
           <form action={testFunnelOnMe}><input type="hidden" name="funnelId" value={f.id} /><button type="submit" name="mode" value="intro" disabled={!f.isActive}>💬 Тест вступу з кнопкою</button></form>
           <form action={runTickNow}><button type="submit">⟳ Надіслати належні кроки зараз</button></form>
           <div className="sep" />
           <form action={deleteFunnel}><input type="hidden" name="id" value={f.id} /><ConfirmSubmit className="danger" message={`Видалити воронку «${f.name}»?`}>🗑 Видалити воронку</ConfirmSubmit></form>
-        </div></details>
+        </Kebab>
       </div>
       {sp.saved && <div className="alert ok">Налаштування збережено.</div>}
       {sp.tested === "1" && <div className="alert ok">Надіслано на ваш Telegram. Кроки із затримкою прийдуть за розкладом (щохвилинний тік).</div>}

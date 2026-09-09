@@ -1,7 +1,8 @@
 import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
+import { ConfirmSubmit } from "@/components/funnel-ui";
+import { Kebab } from "@/components/kebab";
 import { navCounts, broadcastList } from "@/lib/queries";
 import { createBroadcast, duplicateBroadcast, cancelBroadcast, deleteBroadcastFromSubscribers, deleteBroadcast, previewBroadcast, runBroadcastsNow } from "@/lib/actions";
 import { deliveredLabel, clickedLabel, STATUS_UA } from "@/lib/broadcasts";
@@ -16,8 +17,7 @@ export default async function Broadcasts({ searchParams }: { searchParams: Promi
   const sending = list.some((b) => b.status === "sending" || b.status === "deleted" && !b.finishedAt);
   return (
     <Shell title="Розсилки" counts={counts}>
-      <MenuCloser />
-      {sp.err && <div className="alert bad">{sp.err}</div>}
+            {sp.err && <div className="alert bad">{sp.err}</div>}
       <div className="toolbar">
         <form className="search" method="get"><span className="muted">⌕</span><input name="q" defaultValue={sp.q ?? ""} placeholder="Пошук розсилки" />{sp.status && <input type="hidden" name="status" value={sp.status} />}</form>
         <form method="get" className="row-actions">{sp.q && <input type="hidden" name="q" value={sp.q} />}<select name="status" defaultValue={sp.status ?? ""} className="btn"><option value="">Статус: усі</option>{Object.entries(STATUS_UA).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}</select><button className="btn" type="submit">Фільтр</button></form>
@@ -34,14 +34,14 @@ export default async function Broadcasts({ searchParams }: { searchParams: Promi
               <td className="mono">{b.status === "draft" ? "" : dateTime(b.scheduledAt ?? b.startedAt)}</td>
               <td className="num">{deliveredLabel(b)}</td>
               <td className="num">{["sent", "sending", "deleted"].includes(b.status) ? clickedLabel(b) : ""}</td>
-              <td><details className="menu"><summary>⋮</summary><div className="dd">
+              <td><Kebab>
                 <form action={previewBroadcast}><input type="hidden" name="id" value={b.id} /><input type="hidden" name="step" value={editable ? "content" : "recipients"} /><button type="submit">👁 Перегляд (надіслати собі)</button></form>
                 <form action={duplicateBroadcast}><input type="hidden" name="id" value={b.id} /><button type="submit">⧉ Дублювати</button></form>
                 {editable && <Link href={`/broadcasts/${b.id}?step=content`}>✎ Редагувати</Link>}
                 {b.status === "scheduled" && <form action={cancelBroadcast}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit message="Скасувати заплановану розсилку? Вона стане чернеткою.">⏹ Скасувати</ConfirmSubmit></form>}
                 {b.status === "sent" && <form action={deleteBroadcastFromSubscribers}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit className="danger" message={`Видалити повідомлення «${b.name}» у всіх ${b.sentCount} отримувачів? Можливо лише впродовж 48 годин після надсилання.`}>🗑 Видалити у підписників</ConfirmSubmit></form>}
                 {b.status !== "sending" && <><div className="sep" /><form action={deleteBroadcast}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit className="danger" message={`Видалити розсилку «${b.name}» з Hub? Надіслані повідомлення в людей залишаться.`}>✕ Видалити з Hub</ConfirmSubmit></form></>}
-              </div></details></td>
+              </Kebab></td>
             </tr>); })}
           {!list.length && <tr><td colSpan={6} className="muted">Розсилок ще немає. Натисніть «+ Нова розсилка».</td></tr>}
         </tbody></table>

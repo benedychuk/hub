@@ -1,7 +1,8 @@
 import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
+import { ConfirmSubmit } from "@/components/funnel-ui";
+import { Kebab } from "@/components/kebab";
 import { Modal } from "@/components/modal";
 import { navCounts, funnelList, funnelFolders, botList } from "@/lib/queries";
 import { createFunnel, createFolder, renameFolder, deleteFolder, setFunnelStatus, moveFunnel, duplicateFunnel, deleteFunnel } from "@/lib/actions";
@@ -25,8 +26,7 @@ export default async function Funnels({ searchParams }: { searchParams: Promise<
   const zenCount = list.filter((f) => f.source !== "hub").length, noneCount = list.filter((f) => f.source === "hub" && !f.folderId).length, hubCount = list.filter((f) => f.source === "hub").length;
   return (
     <Shell title="Воронки" counts={counts}>
-      <MenuCloser />
-      <div className="folders">
+            <div className="folders">
         <Link href={link({ folder: "" })} className={`folder ${!folderId ? "on" : ""}`}>Усі <span className="n">{hubCount}</span></Link>
         {folders.map((f) => <Link key={f.id} href={link({ folder: String(f.id) })} className={`folder ${folderId === f.id ? "on" : ""}`}>📁 {f.name} <span className="n">{f.n}</span></Link>)}
         {noneCount > 0 && folders.length > 0 && <Link href={link({ folder: "none" })} className={`folder ${folderId === "none" ? "on" : ""}`}>Без папки <span className="n">{noneCount}</span></Link>}
@@ -56,7 +56,7 @@ export default async function Funnels({ searchParams }: { searchParams: Promise<
               <div className="row-actions"><Pill tone={f.isActive ? "good" : f.status === "stopped" ? "warn" : "mute"}>{f.isActive ? "активна" : f.status === "stopped" ? "зупинена" : "чернетка"}</Pill>{zen && <Pill tone="moon">ZenEdu</Pill>}</div>
               <div className="meta"><span>👥 {f.subscribersCount.toLocaleString("uk-UA")}</span><span>⚡ {f.activeNow} зараз</span><span>▤ {f.stepsCount} кроків</span><span>{date(f.updatedAt)}</span></div>
             </div>
-            {!zen && <details className="menu"><summary>⋮</summary><div className="dd">
+            {!zen && <Kebab>
               <Link href={`/funnels/${f.id}?tab=settings#links`}>🔗 Посилання</Link>
               <a href={`/f/${f.id}`} target="_blank" rel="noreferrer">👁 Перегляд</a>
               <form action={setFunnelStatus}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="status" value={f.isActive ? "stopped" : "active"} /><button type="submit">{f.isActive ? "⏸ Зупинити" : "▶ Активувати"}</button></form>
@@ -67,7 +67,7 @@ export default async function Funnels({ searchParams }: { searchParams: Promise<
               <form action={duplicateFunnel}><input type="hidden" name="id" value={f.id} /><button type="submit">⧉ Дублювати</button></form>
               <div className="sep" />
               <form action={deleteFunnel}><input type="hidden" name="id" value={f.id} /><ConfirmSubmit className="danger" message={`Видалити воронку «${f.name}» разом із кроками й статистикою?`}>🗑 Видалити</ConfirmSubmit></form>
-            </div></details>}
+            </Kebab>}
           </div>); })}
       </div>
       <p className="note" style={{ marginTop: 18 }}>Посилання на воронку: t.me/{botUser ?? "<hub-бот>"}?start=f_ID. Воронки ZenEdu показано для довідки; їхні кроки через API не віддаються, зміст переноситься в воронки Hub вручну.</p>
