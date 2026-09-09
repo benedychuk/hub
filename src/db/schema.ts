@@ -133,6 +133,15 @@ export const subscriptions = pgTable("subscriptions", {
   periodDays: integer("period_days").notNull().default(31),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
   cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+  paymentMethodId: integer("payment_method_id"),
+  nextChargeAt: timestamp("next_charge_at", { withTimezone: true }),
+  nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
+  retryCount: integer("retry_count").notNull().default(0),
+  pausedAt: timestamp("paused_at", { withTimezone: true }),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  remindedFor: timestamp("reminded_for", { withTimezone: true }),
+  migratedFromZen: integer("migrated_from_zen"),
+  zenCancelledAt: timestamp("zen_cancelled_at", { withTimezone: true }),
   startedAt: timestamp("started_at", { withTimezone: true }),
   lastPaymentAt: timestamp("last_payment_at", { withTimezone: true }),
   paymentsCount: integer("payments_count").notNull().default(0),
@@ -416,3 +425,40 @@ export const userSessions = pgTable("user_sessions", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 }, (t) => [uniqueIndex("user_sessions_token_uidx").on(t.tokenHash), index("user_sessions_user_idx").on(t.userId)]);
+
+// Збережені картки: лише токен WayForPay і маска, номер картки Hub не бачить.
+export const paymentMethods = pgTable("payment_methods", {
+  id: serial("id").primaryKey(),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull().default("wayforpay"),
+  recToken: text("rec_token").notNull(),
+  cardPan: text("card_pan"),
+  cardType: text("card_type"),
+  bank: text("bank"),
+  isActive: boolean("is_active").notNull().default(true),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("pm_token_uidx").on(t.personId, t.recToken), index("pm_person_idx").on(t.personId)]);
+
+// Спроби оплати: перший платіж, прив'язка картки, автосписання, повтори, повернення.
+export const paymentAttempts = pgTable("payment_attempts", {
+  id: serial("id").primaryKey(),
+  orderReference: text("order_reference").notNull(),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  planId: integer("plan_id").references(() => plans.id),
+  subscriptionId: integer("subscription_id"),
+  kind: text("kind").notNull(), // first | renewal | manual | card | migrate
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  currency: text("currency").notNull().default("UAH"),
+  status: text("status").notNull().default("pending"), // pending | approved | declined | refunded | expired | error
+  mode: text("mode").notNull().default("test"), // test | live
+  reasonCode: text("reason_code"),
+  reason: text("reason"),
+  cardPan: text("card_pan"),
+  recToken: text("rec_token"),
+  orderId: integer("order_id"),
+  raw: jsonb("raw"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+}, (t) => [uniqueIndex("pa_ref_uidx").on(t.orderReference), index("pa_person_idx").on(t.personId), index("pa_status_idx").on(t.status, t.createdAt)]);

@@ -8,10 +8,11 @@ import { hasDb } from "@/db";
 import SyncPanel from "./sync-panel";
 import UsersTab from "./users-tab";
 import AccountTab from "./account-tab";
+import PaymentsTab from "./payments-tab";
 import { currentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
-const TABS = [["general", "Загальні"], ["users", "Користувачі та доступ"], ["account", "Мій акаунт"]] as const;
+const TABS = [["general", "Загальні"], ["payments", "Оплати"], ["users", "Користувачі та доступ"], ["account", "Мій акаунт"]] as const;
 
 export default async function Settings({ searchParams }: { searchParams: Promise<{ tab?: string; ok?: string; err?: string; link?: string; for?: string; reset?: string }> }) {
   const sp = await searchParams;
@@ -23,7 +24,7 @@ export default async function Settings({ searchParams }: { searchParams: Promise
         <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`/settings?tab=${k}`} className={tab === k ? "on" : ""}>{l}</Link>)}</div>
         {sp.ok && <div className="alert ok">{sp.ok}</div>}
         {sp.err && <div className="alert bad">{sp.err}</div>}
-        {tab === "users" ? <UsersTab me={me} link={sp.link} linkFor={sp.for} reset={Boolean(sp.reset)} /> : <AccountTab me={me} />}
+        {tab === "users" ? <UsersTab me={me} link={sp.link} linkFor={sp.for} reset={Boolean(sp.reset)} /> : tab === "payments" ? <PaymentsTab link={sp.link} /> : <AccountTab me={me} />}
       </Shell>
     );
   }

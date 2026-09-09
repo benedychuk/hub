@@ -264,3 +264,34 @@ export async function recentSenders() {
     return rows.rows as { tg: number; first_name: string | null; username: string | null; last_at: string; n: number; with_media: number }[];
   }, []);
 }
+
+export async function paymentAttemptList(page = 1) {
+  return safe(async () => {
+    const d = db(); const per = 50;
+    const rows = await d.select({ a: schema.paymentAttempts, p: persons, plan: plans.name }).from(schema.paymentAttempts).innerJoin(persons, eq(persons.id, schema.paymentAttempts.personId)).leftJoin(plans, eq(plans.id, schema.paymentAttempts.planId)).orderBy(desc(schema.paymentAttempts.createdAt)).limit(per).offset((page - 1) * per);
+    const [t] = await d.select({ c: count() }).from(schema.paymentAttempts);
+    const [sum] = await d.select({ c: sql<number>`count(*)::int`, s: sql<string>`coalesce(sum(amount) filter (where status = 'approved' and kind in ('first','renewal','manual')), 0)` }).from(schema.paymentAttempts).where(sql`created_at > now() - interval '30 days' and mode = 'live'`);
+    return { rows, total: t.c, page, per, live30: sum };
+  }, { rows: [], total: 0, page: 1, per: 50, live30: { c: 0, s: "0" } });
+}
+export async function migrationList() {
+  return safe(async () => {
+    const r = await db().execute(sql`select z.id, z.person_id, p.first_name, p.last_name, p.username, z.price, z.currency, z.current_period_end, z.status,
+        exists (select 1 from identities i where i.person_id = z.person_id and i.bot_key = 'hub' and i.blocked_at is null) as in_hub,
+        (select max(e.created_at) from events e where e.person_id = z.person_id and e.type = 'payment.migrate_invite') as invited_at,
+        h.id as hub_id, h.next_charge_at as hub_next, h.zen_cancelled_at, (select card_pan from payment_methods m where m.id = h.payment_method_id) as card
+      from subscriptions z join persons p on p.id = z.person_id left join subscriptions h on h.person_id = z.person_id and h.source = 'hub'
+      where z.source = 'zenedu' and z.status in ('active','trialing','past_due') order by z.current_period_end asc nulls last limit 500`);
+    return r.rows as { id: number; person_id: number; first_name: string | null; last_name: string | null; username: string | null; price: string; currency: string; current_period_end: string | null; status: string; in_hub: boolean; invited_at: string | null; hub_id: number | null; hub_next: string | null; zen_cancelled_at: string | null; card: string | null }[];
+  }, []);
+}
+export async function personPayments(personId: number) {
+  return safe(async () => {
+    const d = db();
+    const [sub] = await d.select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub")));
+    const cards = await d.select().from(schema.paymentMethods).where(eq(schema.paymentMethods.personId, personId)).orderBy(desc(schema.paymentMethods.createdAt));
+    const attempts = await d.select().from(schema.paymentAttempts).where(eq(schema.paymentAttempts.personId, personId)).orderBy(desc(schema.paymentAttempts.createdAt)).limit(20);
+    const [plan] = sub?.planId ? await d.select().from(plans).where(eq(plans.id, sub.planId)) : [];
+    return { sub: (sub ?? null) as typeof sub | null, cards, attempts, plan: (plan ?? null) as typeof plan | null };
+  }, { sub: null as typeof subscriptions.$inferSelect | null, cards: [] as (typeof schema.paymentMethods.$inferSelect)[], attempts: [] as (typeof schema.paymentAttempts.$inferSelect)[], plan: null as typeof plans.$inferSelect | null });
+}

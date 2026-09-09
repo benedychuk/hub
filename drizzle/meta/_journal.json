@@ -57,6 +57,13 @@
       "when": 1788959774351,
       "tag": "0007_thankful_ezekiel",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788968159386,
+      "tag": "0008_lazy_tempest",
+      "breakpoints": true
     }
   ]
 }

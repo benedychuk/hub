@@ -4,15 +4,20 @@ import { X, Plus, Send, KeyRound, MessageSquare, History } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { PageHeader, Section, Field, FormRow, Row, Timeline, EmptyState, KV } from "@/components/ui/layout";
-import { navCounts, person, resourceList, hubFunnels } from "@/lib/queries";
+import { navCounts, person, resourceList, hubFunnels, personPayments } from "@/lib/queries";
+import { Kebab, MenuAction, MenuLink } from "@/components/ui/controls";
+import { subscriptionAction, refundPayment } from "@/lib/actions";
+import { payLink } from "@/lib/payments";
+import { Alert } from "@/components/ui/layout";
+import { CreditCard, Pause, Play, XCircle, RefreshCw, Undo2 } from "lucide-react";
 import { date, dateTime, fullName, money } from "@/lib/format";
 import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson, enrollToFunnel, resendInvite } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function Person({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const [counts, d, res, fun] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels()]);
+export default async function Person({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ ok?: string; err?: string }> }) {
+  const { id } = await params; const sp = await searchParams;
+  const [counts, d, res, fun, pay] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels(), personPayments(Number(id))]);
   if (!d) notFound();
   const { p, subs, orders, events, identities, entitlements, memberships } = d;
   const hub = identities.find((i) => i.botKey === "hub");
@@ -22,6 +27,7 @@ export default async function Person({ params }: { params: Promise<{ id: string 
     <Shell title="Люди" counts={counts}>
       <PageHeader back="/people" backLabel="Люди" icon={<span className="avatar avatar-lg" style={{ width: 32, height: 32, fontSize: 12, borderRadius: 9 }}>{initials}</span>} title={fullName(p)}
         status={<>{hub && !hub.blockedAt ? <Pill tone="acc">Hub-бот запущено</Pill> : <Pill tone="mute">Hub-бот не запускала</Pill>}{p.zenIsBlocked ? <Pill tone="crit">заблокувала бот ZenEdu</Pill> : p.zenIsActive === false ? <Pill tone="mute">неактивна в ZenEdu</Pill> : null}</>} />
+      {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}{sp.err && <Alert tone="bad">{sp.err}</Alert>}
       <Section className="sec" title={undefined}>
         <div className="grid g2">
           <KV items={[
@@ -40,9 +46,17 @@ export default async function Person({ params }: { params: Promise<{ id: string 
         </div>
       </Section>
       <div className="grid g2" style={{ marginTop: 16 }}>
-        <Section title="Підписки" description="Пауза, перенесення списання і скасування з’являться, коли підписка переїде в Hub.">
-          {subs.length ? subs.map((s) => <Row key={s.id} tone={["active", "trialing", "past_due"].includes(s.status) ? "on" : "off"} title={<>{money(s.price, s.currency)} / {period(s.periodDays)} <Pill status={s.status} /></>} sub={`до ${date(s.currentPeriodEnd)} · оплат ${s.paymentsCount} · з ${date(s.startedAt)} · ${s.source === "zenedu" ? "списує ZenEdu" : "списує Hub"}`} />)
+        <Section title="Підписки" actions={pay.sub ? <Kebab label="Керувати">
+            {["active", "trialing"].includes(pay.sub.status) && !pay.sub.cancelAtPeriodEnd && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "cancel" }} icon={<XCircle />} confirm="Вимкнути продовження? Доступ лишиться до кінця оплаченого періоду.">Вимкнути продовження</MenuAction>}
+            {(pay.sub.cancelAtPeriodEnd || ["paused", "cancelled", "expired"].includes(pay.sub.status)) && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "resume" }} icon={<Play />}>Відновити</MenuAction>}
+            {["active", "trialing", "past_due"].includes(pay.sub.status) && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "pause" }} icon={<Pause />} confirm="Поставити на паузу? Доступ закриється одразу, списань не буде до відновлення.">Пауза</MenuAction>}
+            {pay.sub.paymentMethodId && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "charge" }} icon={<RefreshCw />} confirm={`Списати ${money(pay.sub.price, pay.sub.currency)} зараз?`}>Списати зараз</MenuAction>}
+            {pay.plan && <MenuLink href={payLink(p.id, pay.plan.key, "card")} icon={<CreditCard />} external>Посилання на зміну картки</MenuLink>}
+          </Kebab> : undefined}>
+          {subs.length ? subs.map((s) => <Row key={s.id} tone={["active", "trialing", "past_due"].includes(s.status) ? "on" : "off"} title={<>{money(s.price, s.currency)} / {period(s.periodDays)} <Pill status={s.status} />{s.source === "hub" && s.cancelAtPeriodEnd && <Pill tone="warn">до кінця періоду</Pill>}</>} sub={`${s.source === "zenedu" ? "списує ZenEdu" : "списує Hub"} · до ${date(s.currentPeriodEnd)} · оплат ${s.paymentsCount} · з ${date(s.startedAt)}${s.source === "hub" && s.nextChargeAt ? ` · наступне списання ${dateTime(s.nextChargeAt)}` : ""}${s.source === "hub" && s.retryCount ? ` · невдалих спроб ${s.retryCount}` : ""}`} />)
             : <EmptyState title="Підписок немає" />}
+          {pay.cards.length > 0 && <div style={{ marginTop: 10 }}>{pay.cards.map((c) => <Row key={c.id} icon={<CreditCard size={14} />} tone={c.isActive && !c.failedAt ? "on" : "off"} title={`${c.cardPan ?? "картка"} ${c.cardType ?? ""}`} sub={`${c.bank ?? ""}${c.failedAt ? " · останнє списання не пройшло" : ""} · додано ${date(c.createdAt)}`} right={pay.sub?.paymentMethodId === c.id ? <Pill tone="good">основна</Pill> : undefined} />)}</div>}
+          {pay.attempts.length > 0 && <div className="tbl" style={{ marginTop: 10 }}><table><thead><tr><th>Коли</th><th>Тип</th><th className="num">Сума</th><th>Стан</th><th></th></tr></thead><tbody>{pay.attempts.slice(0, 8).map((a) => <tr key={a.id}><td className="mono">{dateTime(a.createdAt)}</td><td>{({ first: "перша оплата", renewal: "автосписання", manual: "поновлення", card: "зміна картки", migrate: "переїзд" } as Record<string, string>)[a.kind] ?? a.kind}{a.mode === "test" ? " · тест" : ""}</td><td className="num">{money(a.amount, a.currency)}</td><td><Pill tone={a.status === "approved" ? "good" : a.status === "pending" ? "warn" : a.status === "refunded" ? "moon" : "crit"}>{a.status}</Pill>{a.reason && a.status !== "approved" ? <div className="fld-h">{a.reason}</div> : null}</td><td>{a.status === "approved" && ["first", "renewal", "manual"].includes(a.kind) && <form action={refundPayment}><input type="hidden" name="id" value={a.id} /><input type="hidden" name="back" value={`/people/${p.id}`} /><button className="btn sm ghost" type="submit"><Undo2 size={13} /> Повернути</button></form>}</td></tr>)}</tbody></table></div>}
         </Section>
         <Section title="Права доступу" description="Ручні права поверх підписки: діють до вказаної дати.">
           {entitlements.filter((e) => !e.revokedAt).map((e) => <Row key={e.id} tone={e.validUntil && e.validUntil < new Date() ? "off" : "on"} title={res.find((r) => r.key === e.resourceKey)?.name ?? e.resourceKey} sub={`до ${date(e.validUntil)} · ${e.grantedBy === "manual" ? "видано вручну" : e.grantedBy}`}

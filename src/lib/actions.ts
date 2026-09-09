@@ -572,3 +572,52 @@ export async function resendInvite(fd: FormData) {
   await processGrants(5);
   revalidatePath(`/people/${personId}`);
 }
+
+// ---------- оплати WayForPay ----------
+import { setSetting as setPaySetting, payLink, chargeSubscription, cancelAtEnd, resumeSub, pauseSub, refundAttempt } from "./payments";
+import { liveConfigured } from "./wayforpay";
+import { money as fmtMoney } from "./format";
+const { subscriptions: subsT, plans: plansT } = schema;
+
+export async function savePaymentSettings(fd: FormData) {
+  const mode = str(fd, "mode") === "live" && liveConfigured() ? "live" : "test";
+  await setPaySetting("payments.mode", mode);
+  await setPaySetting("payments.migrationDays", Math.max(1, Number(fd.get("migrationDays") || 5)));
+  await setPaySetting("payments.reminderDays", Math.max(1, Number(fd.get("reminderDays") || 3)));
+  await setPaySetting("payments.trialVerifyAmount", Math.max(1, Number(fd.get("verifyAmount") || 1)));
+  revalidatePath("/settings"); redirect("/settings?tab=payments&ok=" + encodeURIComponent(`Збережено. Режим: ${mode === "live" ? "бойовий" : "тестовий"}.`));
+}
+export async function makeTestPayLink(fd: FormData) {
+  const planKey = str(fd, "planKey"); const kind = (str(fd, "kind") || "first") as "first" | "card" | "migrate";
+  const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, adminTelegramId()));
+  if (!p[0]) redirect("/settings?tab=payments&err=" + encodeURIComponent("Спершу натисніть /start у Hub-боті з акаунта ADMIN_TELEGRAM_ID"));
+  redirect(`/settings?tab=payments&link=${encodeURIComponent(payLink(p[0].id, planKey, kind))}`);
+}
+export async function refundPayment(fd: FormData) {
+  const id = Number(fd.get("id")); const back = str(fd, "back") || "/payments?tab=hub";
+  const r = await refundAttempt(id, str(fd, "comment") || "Повернення з Hub");
+  revalidatePath("/payments"); redirect(`${back}${back.includes("?") ? "&" : "?"}${r.ok ? "ok=" + encodeURIComponent("Повернення виконано") : "err=" + encodeURIComponent("Повернення не пройшло: " + r.reason)}`);
+}
+export async function subscriptionAction(fd: FormData) {
+  const id = Number(fd.get("id")); const personId = Number(fd.get("personId")); const act = str(fd, "act");
+  let msg = "";
+  if (act === "cancel") { await cancelAtEnd(id, "admin"); msg = "Продовження вимкнено"; }
+  else if (act === "resume") { await resumeSub(id, "admin"); msg = "Підписку відновлено"; }
+  else if (act === "pause") { await pauseSub(id, "admin"); msg = "Підписку поставлено на паузу"; }
+  else if (act === "charge") { const r = await chargeSubscription(id); msg = r.ok ? "Списання пройшло" : "Списання не пройшло: " + r.reason; }
+  revalidatePath(`/people/${personId}`); redirect(`/people/${personId}?${msg.includes("не пройшло") ? "err" : "ok"}=${encodeURIComponent(msg)}`);
+}
+export async function sendMigrateInvite(fd: FormData) {
+  const personId = Number(fd.get("personId")); const planKey = str(fd, "planKey");
+  const [zen] = await db().select().from(subsT).where(and(eq(subsT.personId, personId), eq(subsT.source, "zenedu")));
+  const link = payLink(personId, planKey, "migrate");
+  const ok = await sendToPerson(personId, `Клуб переїжджає на власну платформу. Щоб доступ не перервався, прив'яжіть картку за хвилину: ${link}\n\nЦіна ${zen ? fmtMoney(zen.price, zen.currency) : ""} і дата списання${zen?.currentPeriodEnd ? " " + zen.currentPeriodEnd.toLocaleDateString("uk-UA") : ""} лишаються без змін. Перевірочна сума повертається.`).catch(() => false);
+  if (ok) await db().insert(events).values({ personId, type: "payment.migrate_invite", source: "admin", payload: { zenSubId: zen?.id ?? null, periodEnd: zen?.currentPeriodEnd ?? null } });
+  revalidatePath("/migration"); redirect(`/migration?${ok ? "ok=" + encodeURIComponent("Запрошення надіслано") : "err=" + encodeURIComponent("Людина не запускала Hub-бот, надіслати неможливо")}`);
+}
+export async function markZenCancelled(fd: FormData) {
+  const id = Number(fd.get("id"));
+  await db().update(subsT).set({ zenCancelledAt: fd.get("undo") ? null : new Date(), updatedAt: new Date() }).where(eq(subsT.id, id));
+  revalidatePath("/migration"); redirect("/migration");
+}
+export async function planKeys() { return db().select({ key: plansT.key, name: plansT.name }).from(plansT).where(eq(plansT.isActive, true)).orderBy(plansT.sortOrder); }

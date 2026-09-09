@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
 import { onBroadcastButton } from "./broadcasts";
+import { payLink, cancelAtEnd, resumeSub } from "./payments";
 import { enroll, matchEntry, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
@@ -69,20 +70,40 @@ export function getBot() {
     const lines = subs.map((s) => `• ${money(s.price, s.currency)} / ${s.periodDays >= 360 ? "рік" : s.periodDays >= 90 ? "3 міс" : s.periodDays <= 14 ? "2 тижні" : "міс"} — ${STATUS_UA[s.status] ?? s.status}` +
       (s.currentPeriodEnd && ["active", "trialing", "past_due"].includes(s.status) ? `\n  наступне списання: ${s.currentPeriodEnd.toLocaleDateString("uk-UA")}` : "") +
       `\n  оплат: ${s.paymentsCount} · джерело: ${s.source === "zenedu" ? "ZenEdu" : "Hub"}`);
-    await ctx.reply("Ваші підписки:\n\n" + lines.join("\n\n") + "\n\nСкасувати або поставити на паузу можна буде тут, коли підписка переїде в Hub.");
+    const hub = subs.find((s) => s.source === "hub");
+    const kb = new InlineKeyboard();
+    if (hub && ["active", "trialing", "past_due"].includes(hub.status)) {
+      if (hub.cancelAtPeriodEnd) kb.text("Відновити продовження", "sub:resume").row(); else kb.text("Вимкнути продовження", "sub:cancel").row();
+      const [pl] = hub.planId ? await db().select({ key: plans.key }).from(plans).where(eq(plans.id, hub.planId)) : [];
+      if (pl) kb.url("Змінити картку", payLink(personId, pl.key, "card")).row();
+    } else if (hub && ["expired", "cancelled", "paused"].includes(hub.status)) kb.text("Відновити підписку", "sub:resume").row();
+    kb.text("Тарифи", "plans");
+    await ctx.reply("Ваші підписки:\n\n" + lines.join("\n\n") + (hub?.cancelAtPeriodEnd ? "\n\nПродовження вимкнено: доступ до кінця оплаченого періоду." : ""), { reply_markup: kb });
   };
+  bot.callbackQuery(/^sub:(cancel|resume)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from || !ctx.chat) return;
+    const personId = await upsertFrom(ctx.from, ctx.chat.id);
+    const [hub] = await db().select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub")));
+    if (!hub) { await ctx.reply("Підписки Hub ще немає. Оберіть тариф: /plans"); return; }
+    if (ctx.match[1] === "cancel") await cancelAtEnd(hub.id, "bot"); else await resumeSub(hub.id, "bot");
+  });
   bot.command("subscriptions", (ctx) => showSubs(ctx as unknown as Ctx));
   bot.callbackQuery("subs", async (ctx) => { await ctx.answerCallbackQuery(); await showSubs(ctx as unknown as Ctx); });
 
-  const showPlans = async (ctx: { reply: (t: string, o?: object) => Promise<unknown> }) => {
+  const showPlans = async (ctx: Ctx) => {
+    if (!ctx.from || !ctx.chat) return;
+    const personId = await upsertFrom(ctx.from, ctx.chat.id);
     const list = await db().select().from(plans).where(eq(plans.isActive, true)).orderBy(plans.sortOrder, plans.id);
     if (!list.length) { await ctx.reply("Тарифи ще не налаштовані."); return; }
     const per: Record<string, string> = { month: "міс", quarter: "3 міс", year: "рік" };
-    const text = list.map((p) => `${p.isFeatured ? "⭐ " : ""}${p.name} — ${money(p.price, p.currency)} / ${per[p.period] ?? p.period}` + (p.trialDays ? `\n  пробний: ${p.trialDays} дн${p.trialPrice ? ` за ${money(p.trialPrice, p.currency)}` : ""}` : "") + `\n  ${Object.keys(p.entitlements).length} прав доступу`).join("\n\n");
-    await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата в цьому боті з'явиться після переїзду з ZenEdu.");
+    const text = list.map((p) => `${p.isFeatured ? "⭐ " : ""}${p.name} — ${money(p.price, p.currency)} / ${per[p.period] ?? p.period}` + (p.trialDays ? `\n  пробний: ${p.trialDays} дн${p.trialPrice ? ` за ${money(p.trialPrice, p.currency)}` : ""}` : "")).join("\n\n");
+    const kb = new InlineKeyboard();
+    for (const p of list) kb.url(`Оплатити: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
+    await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці WayForPay. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });
   };
-  bot.command("plans", (ctx) => showPlans(ctx));
-  bot.callbackQuery("plans", async (ctx) => { await ctx.answerCallbackQuery(); await showPlans(ctx); });
+  bot.command("plans", (ctx) => showPlans(ctx as unknown as Ctx));
+  bot.callbackQuery("plans", async (ctx) => { await ctx.answerCallbackQuery(); await showPlans(ctx as unknown as Ctx); });
 
   bot.callbackQuery(/^bc(p?):(\d+):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
