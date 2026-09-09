@@ -99,40 +99,98 @@ export async function saveResource(fd: FormData) {
   revalidatePath("/resources"); revalidatePath("/bots");
 }
 
+// ---------- розсилки (Зміст → Отримувачі → Надсилання, як у ZenEdu) ----------
+import { resnapshot, startSending, schedule as scheduleBroadcast, cancelScheduled, deleteFromSubscribers, duplicate as duplicateBc, previewToAdmin, processBroadcasts } from "./broadcasts";
+import type { BroadcastAudience, BroadcastButton } from "@/db/schema";
+
 export async function createBroadcast(fd: FormData) {
-  const d = db();
-  const audience = str(fd, "audience") || "hub_all";
-  const text = str(fd, "text"); if (!text) return;
-  const btnText = str(fd, "btnText"), btnUrl = str(fd, "btnUrl");
-  const buttons = btnText && btnUrl ? [{ text: btnText, url: btnUrl }] : [];
-  const when = str(fd, "when");
-  const scheduledAt = when === "later" && str(fd, "at") ? new Date(str(fd, "at")) : null;
-  const [b] = await d.insert(broadcasts).values({ name: str(fd, "name") || text.slice(0, 40), audience: { kind: audience }, text, buttons, protectContent: fd.get("protect") === "on", disablePreview: fd.get("preview") !== "on", scheduledAt, status: scheduledAt ? "scheduled" : "sending" }).returning();
-  if (!scheduledAt) await runBroadcast(b.id).catch(async (e) => { await d.update(broadcasts).set({ status: "failed", lastError: String(e).slice(0, 500) }).where(eq(broadcasts.id, b.id)); });
+  const [b] = await db().insert(broadcasts).values({ name: str(fd, "name") || "Нова розсилка", status: "draft", audience: {} }).returning({ id: broadcasts.id });
+  revalidatePath("/broadcasts"); redirect(`/broadcasts/${b.id}?step=content`);
+}
+export async function saveBroadcastContent(fd: FormData) {
+  const id = Number(fd.get("id"));
+  let buttons: BroadcastButton[] = [];
+  try { buttons = (JSON.parse(str(fd, "buttonsJson") || "[]") as BroadcastButton[]).filter((b) => b && b.text).map((b) => ({ ...b, text: String(b.text).slice(0, 64), tags: (b.tags ?? []).map(String).filter(Boolean), actions: b.actions ?? [] })); } catch { /* залишаємо старі */ }
+  const attachments = str(fd, "attachmentsJson") ? (JSON.parse(str(fd, "attachmentsJson")) as unknown[]).map(Number).filter((n) => n > 0) : [];
+  const text = str(fd, "text").slice(0, 4096);
+  await db().update(broadcasts).set({ name: str(fd, "name") || "Без назви", text, attachments, attachedToText: fd.get("attachedToText") === "on", spoiler: fd.get("spoiler") === "on", buttons, protectContent: fd.get("protect") === "on", disablePreview: fd.get("preview") !== "on", updatedAt: new Date() }).where(eq(broadcasts.id, id));
+  revalidatePath(`/broadcasts/${id}`);
+  const next = str(fd, "after");
+  if (next === "preview") { const err = await previewToAdmin(id); redirect(`/broadcasts/${id}?step=content&${err ? "err=" + encodeURIComponent(err) : "sent=1"}`); }
+  if (next === "exit") redirect("/broadcasts");
+  redirect(`/broadcasts/${id}?step=recipients`);
+}
+const list = (fd: FormData, k: string) => fd.getAll(k).map(String).map((x) => x.trim()).filter(Boolean);
+const nums = (fd: FormData, k: string) => list(fd, k).map(Number).filter((n) => n > 0);
+export async function saveBroadcastAudience(fd: FormData) {
+  const id = Number(fd.get("id"));
+  const a: BroadcastAudience = {
+    onlyAdmin: fd.get("onlyAdmin") === "on",
+    customer: (str(fd, "customer") || "any") as BroadcastAudience["customer"],
+    subStatus: list(fd, "subStatus"),
+    tagsAny: str(fd, "tagsAny").split(",").map((x) => x.trim()).filter(Boolean),
+    tagsAll: str(fd, "tagsAll").split(",").map((x) => x.trim()).filter(Boolean),
+    tagsNone: str(fd, "tagsNone").split(",").map((x) => x.trim()).filter(Boolean),
+    funnelIn: nums(fd, "funnelIn"), funnelNotIn: nums(fd, "funnelNotIn"), planIds: nums(fd, "planIds"), offerIds: nums(fd, "offerIds"), entitlements: list(fd, "entitlements"),
+    activeDays: Number(fd.get("activeDays") || 0) || undefined, startedAfter: str(fd, "startedAfter") || undefined, startedBefore: str(fd, "startedBefore") || undefined,
+    excludeIds: str(fd, "excludeIds").split(/[\s,]+/).map(Number).filter((n) => n > 0), includeIds: str(fd, "includeIds").split(/[\s,]+/).map(Number).filter((n) => n > 0),
+  };
+  await db().update(broadcasts).set({ audience: a, updatedAt: new Date() }).where(eq(broadcasts.id, id));
+  const [b] = await db().select({ status: broadcasts.status }).from(broadcasts).where(eq(broadcasts.id, id));
+  if (b?.status === "scheduled") await resnapshot(id);
+  revalidatePath(`/broadcasts/${id}`);
+  const next = str(fd, "after");
+  if (next === "exit") redirect("/broadcasts");
+  redirect(`/broadcasts/${id}?step=${next === "stay" ? "recipients" : "send"}`);
+}
+export async function sendBroadcast(fd: FormData) {
+  const id = Number(fd.get("id")); const mode = str(fd, "mode");
+  if (mode === "schedule") {
+    const at = str(fd, "date") && str(fd, "time") ? kyivToDate(str(fd, "date"), str(fd, "time")) : null;
+    if (!at || at.getTime() < Date.now() - 60_000) redirect(`/broadcasts/${id}?step=send&err=${encodeURIComponent("Вкажіть дату й час у майбутньому")}`);
+    await scheduleBroadcast(id, at);
+    revalidatePath("/broadcasts"); redirect("/broadcasts");
+  }
+  await startSending(id);
+  revalidatePath("/broadcasts");
+  // перша порція одразу, решту дошле щохвилинний тік
+  await processBroadcasts(40_000).catch(() => null);
+  redirect(`/broadcasts/${id}?step=recipients`);
+}
+/** Дата й час за Києвом → Date. */
+function kyivToDate(date: string, time: string) {
+  const [y, m, d] = date.split("-").map(Number); const [hh, mm] = time.split(":").map(Number);
+  const guess = new Date(Date.UTC(y, m - 1, d, hh, mm));
+  const kyiv = new Date(guess.toLocaleString("en-US", { timeZone: "Europe/Kyiv" }));
+  const utc = new Date(guess.toLocaleString("en-US", { timeZone: "UTC" }));
+  return new Date(guess.getTime() - (kyiv.getTime() - utc.getTime()));
+}
+export async function cancelBroadcast(fd: FormData) {
+  const id = Number(fd.get("id")); await cancelScheduled(id);
+  revalidatePath("/broadcasts"); revalidatePath(`/broadcasts/${id}`);
+}
+export async function deleteBroadcastFromSubscribers(fd: FormData) {
+  const id = Number(fd.get("id")); const err = await deleteFromSubscribers(id);
+  revalidatePath("/broadcasts"); revalidatePath(`/broadcasts/${id}`);
+  if (err) redirect(`/broadcasts?err=${encodeURIComponent(err)}`);
+  await processBroadcasts(30_000).catch(() => null);
+}
+export async function duplicateBroadcast(fd: FormData) {
+  const nid = await duplicateBc(Number(fd.get("id")));
+  revalidatePath("/broadcasts"); if (nid) redirect(`/broadcasts/${nid}?step=content`);
+}
+export async function deleteBroadcast(fd: FormData) {
+  const id = Number(fd.get("id"));
+  const [b] = await db().select({ status: broadcasts.status }).from(broadcasts).where(eq(broadcasts.id, id));
+  if (b && b.status !== "sending") await db().delete(broadcasts).where(eq(broadcasts.id, id));
   revalidatePath("/broadcasts"); redirect("/broadcasts");
 }
-export async function runBroadcast(id: number) {
-  const d = db();
-  const [b] = await d.select().from(broadcasts).where(eq(broadcasts.id, id));
-  if (!b) return;
-  const kind = (b.audience as { kind?: string }).kind ?? "hub_all";
-  let where = sql`i.bot_key = 'hub' and i.blocked_at is null`;
-  if (kind === "hub_active") where = sql`${where} and exists (select 1 from subscriptions s where s.person_id = i.person_id and s.status in ('active','trialing','past_due'))`;
-  const adminId = adminTelegramId();
-  if (kind === "hub_test") where = sql`${where} and p.telegram_user_id = ${adminId}`;
-  const targets = await d.execute(sql`select i.person_id from identities i join persons p on p.id = i.person_id where ${where}`);
-  let sent = 0, failed = 0, lastError: string | null = null;
-  const rows = targets.rows as { person_id: number }[];
-  if (!rows.length) lastError = kind === "hub_test" ? `Немає кому надсилати: ADMIN_TELEGRAM_ID=${adminId || "не задано"} ще не натискав /start у Hub-боті` : "Немає жодної людини, яка запустила Hub-бот";
-  for (const t of rows) {
-    try { if (await sendToPerson(t.person_id, b.text, { buttons: b.buttons.filter((x): x is { text: string; url: string } => Boolean(x.url)), protect: b.protectContent, disablePreview: b.disablePreview })) sent++; else failed++; }
-    catch (e) { failed++; lastError = String(e).slice(0, 300); }
-    await new Promise((r) => setTimeout(r, 40));
-  }
-  await d.update(broadcasts).set({ status: sent || !rows.length ? "sent" : "failed", sentCount: sent, failedCount: failed, lastError }).where(eq(broadcasts.id, id));
+export async function previewBroadcast(fd: FormData) {
+  const id = Number(fd.get("id")); const err = await previewToAdmin(id);
+  redirect(`/broadcasts/${id}?step=${str(fd, "step") || "content"}&${err ? "err=" + encodeURIComponent(err) : "sent=1"}`);
 }
-export async function sendBroadcastNow(fd: FormData) {
-  await runBroadcast(Number(fd.get("id")));
+export async function runBroadcastsNow() {
+  await processBroadcasts(40_000);
   revalidatePath("/broadcasts");
 }
 

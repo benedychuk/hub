@@ -184,7 +184,33 @@ export async function funnelPublic(id: number) {
 }
 export async function hubFunnels() { return safe(() => db().select().from(funnels).where(and(eq(funnels.source, "hub"), eq(funnels.isActive, true))).orderBy(funnels.name), []); }
 export async function resourceList() { return safe(() => db().select().from(resources).orderBy(resources.id), []); }
-export async function broadcastList() { return safe(() => db().select().from(broadcasts).orderBy(desc(broadcasts.createdAt)).limit(50), []); }
+export async function broadcastList(f: { q?: string; status?: string } = {}) {
+  return safe(() => {
+    const conds = [];
+    if (f.q) conds.push(ilike(broadcasts.name, `%${f.q.trim()}%`));
+    if (f.status) conds.push(eq(broadcasts.status, f.status));
+    return db().select().from(broadcasts).where(conds.length ? and(...conds) : undefined).orderBy(desc(sql`coalesce(${broadcasts.scheduledAt}, ${broadcasts.createdAt})`)).limit(200);
+  }, []);
+}
+export async function broadcastDetail(id: number) {
+  return safe(async () => {
+    const d = db();
+    const [b] = await d.select().from(broadcasts).where(eq(broadcasts.id, id));
+    if (!b) return null;
+    const [recipients, clicks, med, tags, funs, plansL, offersL, res, byStatus] = await Promise.all([
+      d.select({ r: schema.broadcastRecipients, p: persons, customer: sql<boolean>`exists (select 1 from orders o where o.person_id = ${persons.id} and o.status = 'paid')` }).from(schema.broadcastRecipients).innerJoin(persons, eq(persons.id, schema.broadcastRecipients.personId)).where(eq(schema.broadcastRecipients.broadcastId, id)).orderBy(desc(schema.broadcastRecipients.sentAt), asc(schema.broadcastRecipients.id)).limit(500),
+      d.select({ c: schema.broadcastClicks, p: persons }).from(schema.broadcastClicks).innerJoin(persons, eq(persons.id, schema.broadcastClicks.personId)).where(eq(schema.broadcastClicks.broadcastId, id)).orderBy(desc(schema.broadcastClicks.createdAt)).limit(500),
+      d.select().from(schema.media).orderBy(desc(schema.media.createdAt)).limit(300),
+      d.execute(sql`select t as tag, count(*)::int as n from persons p, jsonb_array_elements_text(p.tags) t group by t order by n desc limit 300`).then((r) => r.rows as { tag: string; n: number }[]),
+      d.select({ id: funnels.id, name: funnels.name }).from(funnels).where(eq(funnels.source, "hub")).orderBy(funnels.name),
+      d.select({ id: plans.id, name: plans.name }).from(plans).orderBy(plans.sortOrder),
+      d.select({ id: offers.id, name: offers.name, link: offers.link }).from(offers).where(eq(offers.isActive, true)).orderBy(offers.name),
+      d.select({ key: resources.key, name: resources.name }).from(resources).orderBy(resources.id),
+      d.select({ status: schema.broadcastRecipients.status, c: count() }).from(schema.broadcastRecipients).where(eq(schema.broadcastRecipients.broadcastId, id)).groupBy(schema.broadcastRecipients.status),
+    ]);
+    return { b, recipients, clicks, media: med, tags, funnels: funs, plans: plansL, offers: offersL, resources: res, byStatus };
+  }, null);
+}
 export async function automationList() { return safe(() => db().select().from(automations).orderBy(automations.id), []); }
 export async function botList() { return safe(() => db().select().from(bots).orderBy(bots.id), []); }
 export async function syncRunList() { return safe(() => db().select().from(syncRuns).orderBy(desc(syncRuns.startedAt)).limit(8), []); }

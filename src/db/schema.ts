@@ -283,22 +283,80 @@ export const media = pgTable("media", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex("media_unique_uidx").on(t.fileUniqueId)]);
 
+export type BroadcastButton = {
+  text: string;
+  color?: "default" | "primary" | "success" | "danger";
+  type: "link" | "action" | "payment" | "miniapp";
+  url?: string;            // link / miniapp / payment (посилання на оплату оффера)
+  directLink?: boolean;    // link: без редиректу й трекінгу кліків
+  tags?: string[];         // теги за клік
+  actions?: { type: "send_text" | "call_command" | "add_offer" | "add_funnel" | "remove_funnel" | "add_tags" | "remove_tags" | "delete_message"; text?: string; command?: string; offerId?: number; funnelId?: number; tags?: string[] }[];
+};
+export type BroadcastAudience = {
+  customer?: "any" | "customer" | "not";
+  subStatus?: string[];      // active | trialing | past_due | cancelled | expired | none
+  tagsAny?: string[]; tagsAll?: string[]; tagsNone?: string[];
+  funnelIn?: number[]; funnelNotIn?: number[];
+  planIds?: number[]; offerIds?: number[];
+  entitlements?: string[];   // ключі ресурсів з активним доступом
+  activeDays?: number;       // активність у боті за останні N днів
+  startedAfter?: string; startedBefore?: string; // дата запуску Hub-бота
+  includeIds?: number[]; excludeIds?: number[];
+  onlyAdmin?: boolean;       // тест: лише адміністратор
+};
+
+// Розсилки (структура як у ZenEdu: Зміст → Отримувачі → Надсилання).
 export const broadcasts = pgTable("broadcasts", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   botKey: text("bot_key").notNull().default("hub"),
-  audience: jsonb("audience").$type<Record<string, unknown>>().notNull().default({}),
-  text: text("text").notNull(),
-  buttons: jsonb("buttons").$type<{ text: string; url?: string }[]>().notNull().default([]),
+  audience: jsonb("audience").$type<BroadcastAudience>().notNull().default({}),
+  text: text("text").notNull().default(""),
+  attachments: jsonb("attachments").$type<number[]>().notNull().default([]),
+  attachedToText: boolean("attached_to_text").notNull().default(true), // медіа з підписом (текст ≤ 1024)
+  spoiler: boolean("spoiler").notNull().default(false),               // приховати медіа спойлером
+  buttons: jsonb("buttons").$type<BroadcastButton[]>().notNull().default([]),
   protectContent: boolean("protect_content").notNull().default(false),
-  disablePreview: boolean("disable_preview").notNull().default(true),
+  disablePreview: boolean("disable_preview").notNull().default(false),
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
-  status: text("status").notNull().default("draft"), // draft | scheduled | sending | sent | failed
+  status: text("status").notNull().default("draft"), // draft | scheduled | sending | sent | cancelled | deleted | failed
+  totalCount: integer("total_count").notNull().default(0),
   sentCount: integer("sent_count").notNull().default(0),
   failedCount: integer("failed_count").notNull().default(0),
+  clickedCount: integer("clicked_count").notNull().default(0),
   lastError: text("last_error"),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("bc_status_idx").on(t.status, t.scheduledAt)]);
+
+// Знімок отримувачів розсилки: фіксується в момент надсилання чи планування; один рядок = одна людина.
+export const broadcastRecipients = pgTable("broadcast_recipients", {
+  id: serial("id").primaryKey(),
+  broadcastId: integer("broadcast_id").notNull().references(() => broadcasts.id, { onDelete: "cascade" }),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"), // pending | sending | sent | failed | deleted
+  telegramMessageId: integer("telegram_message_id"),
+  extraMessageIds: jsonb("extra_message_ids").$type<number[]>().notNull().default([]),
+  error: text("error"),
+  attempts: integer("attempts").notNull().default(0),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  clickedAt: timestamp("clicked_at", { withTimezone: true }),
+  clickedButton: integer("clicked_button"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (t) => [uniqueIndex("bcr_uidx").on(t.broadcastId, t.personId), index("bcr_status_idx").on(t.broadcastId, t.status), index("bcr_person_idx").on(t.personId)]);
+
+export const broadcastClicks = pgTable("broadcast_clicks", {
+  id: serial("id").primaryKey(),
+  broadcastId: integer("broadcast_id").notNull().references(() => broadcasts.id, { onDelete: "cascade" }),
+  recipientId: integer("recipient_id").notNull().references(() => broadcastRecipients.id, { onDelete: "cascade" }),
+  personId: integer("person_id").notNull(),
+  button: integer("button").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("bcc_bc_idx").on(t.broadcastId)]);
 
 export const automations = pgTable("automations", {
   id: serial("id").primaryKey(),

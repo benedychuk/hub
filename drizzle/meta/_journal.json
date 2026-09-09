@@ -43,6 +43,13 @@
       "when": 1788957597004,
       "tag": "0005_certain_garia",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788958529475,
+      "tag": "0006_blushing_captain_cross",
+      "breakpoints": true
     }
   ]
 }

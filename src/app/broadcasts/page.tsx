@@ -1,36 +1,52 @@
+import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
+import { ConfirmSubmit, MenuCloser } from "@/components/funnel-ui";
 import { navCounts, broadcastList } from "@/lib/queries";
-import { createBroadcast, sendBroadcastNow, identitiesCount } from "@/lib/actions";
+import { createBroadcast, duplicateBroadcast, cancelBroadcast, deleteBroadcastFromSubscribers, deleteBroadcast, previewBroadcast, runBroadcastsNow } from "@/lib/actions";
+import { deliveredLabel, clickedLabel, STATUS_UA } from "@/lib/broadcasts";
 import { dateTime } from "@/lib/format";
-import { hasDb } from "@/db";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
-export default async function Broadcasts() {
-  const [counts, list] = await Promise.all([navCounts(), broadcastList()]);
-  const hubCount = hasDb() ? await identitiesCount().catch(() => 0) : 0;
+export default async function Broadcasts({ searchParams }: { searchParams: Promise<{ q?: string; status?: string; err?: string }> }) {
+  const sp = await searchParams;
+  const [counts, list] = await Promise.all([navCounts(), broadcastList({ q: sp.q, status: sp.status })]);
+  const sending = list.some((b) => b.status === "sending" || b.status === "deleted" && !b.finishedAt);
   return (
     <Shell title="Розсилки" counts={counts}>
-      <div className="alert">Розсилки йдуть лише через Hub-бот тим, хто його запустив: зараз це {hubCount} людей. Учасниці в ZenEdu отримують розсилки, як і раніше, з ZenEdu.</div>
-      <div className="grid g12">
-        <div className="card tbl"><h3>Історія</h3><table><thead><tr><th>Назва</th><th>Аудиторія</th><th className="num">Надіслано</th><th className="num">Помилок</th><th>Стан</th><th></th></tr></thead><tbody>
-          {list.map((b) => <tr key={b.id}><td>{b.name}<div className="muted" style={{ fontSize: 12 }}>{b.text.slice(0, 70)}</div></td><td className="mono">{(b.audience as { kind?: string }).kind}</td><td className="num">{b.sentCount}</td><td className="num">{b.failedCount}{b.lastError && <div className="muted" style={{ fontSize: 11, whiteSpace: "normal", maxWidth: 220 }}>{b.lastError}</div>}</td><td><Pill tone={b.status === "sent" ? "good" : b.status === "scheduled" ? "moon" : b.status === "failed" ? "crit" : "warn"}>{b.status}{b.scheduledAt ? " · " + dateTime(b.scheduledAt) : ""}</Pill></td>
-            <td>{b.status !== "sent" && <form action={sendBroadcastNow}><input type="hidden" name="id" value={b.id} /><button className="btn sm" type="submit">Надіслати зараз</button></form>}</td></tr>)}
-          {!list.length && <tr><td colSpan={6} className="muted">Розсилок ще не було.</td></tr>}
-        </tbody></table></div>
-        <form action={createBroadcast} className="card form"><h3>Нова розсилка</h3>
-          <label className="field">Назва<input name="name" placeholder="Ефір у вівторок" /></label>
-          <label className="field">Аудиторія<select name="audience"><option value="hub_test">Тест: лише мені (ADMIN_TELEGRAM_ID)</option><option value="hub_all">Усі, хто запустив Hub-бот</option><option value="hub_active">Активні підписки, які запустили Hub-бот</option></select></label>
-          <label className="field">Текст (до 4096 знаків)<textarea name="text" rows={6} required placeholder="Дівчата, у вівторок о 19:00 ефір…" /></label>
-          <div className="form two"><label className="field">Кнопка: текст<input name="btnText" placeholder="Поставити питання" /></label><label className="field">Кнопка: посилання<input name="btnUrl" placeholder="https://t.me/…" /></label></div>
-          <div className="form two"><label className="field">Коли<select name="when"><option value="now">Зараз</option><option value="later">У дату й час (Київ)</option></select></label><label className="field">Дата й час<input name="at" type="datetime-local" /></label></div>
-          <div className="ck"><input type="checkbox" name="protect" /> Захист від пересилання і збереження</div>
-          <div className="ck"><input type="checkbox" name="preview" /> Показувати прев’ю посилань</div>
-          <div><button className="btn pri" type="submit">Надіслати / запланувати</button></div>
-          <p className="note">Заплановані розсилки відправляються щоденним cron о 04:00 або кнопкою «Надіслати зараз». Точний час доставки з'явиться разом із чергою на етапі 2.</p>
-        </form>
+      <MenuCloser />
+      {sp.err && <div className="alert bad">{sp.err}</div>}
+      <div className="toolbar">
+        <form className="search" method="get"><span className="muted">⌕</span><input name="q" defaultValue={sp.q ?? ""} placeholder="Пошук розсилки" />{sp.status && <input type="hidden" name="status" value={sp.status} />}</form>
+        <form method="get" className="row-actions">{sp.q && <input type="hidden" name="q" value={sp.q} />}<select name="status" defaultValue={sp.status ?? ""} className="btn"><option value="">Статус: усі</option>{Object.entries(STATUS_UA).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}</select><button className="btn" type="submit">Фільтр</button></form>
+        {sending && <form action={runBroadcastsNow}><button className="btn sm ghost" type="submit">⟳ Продовжити надсилання зараз</button></form>}
+        <span className="spacer" />
+        <form action={createBroadcast}><button className="btn pri" type="submit" name="name" value="">+ Нова розсилка</button></form>
       </div>
+      <div className="card tbl">
+        <table><thead><tr><th>Назва</th><th>Статус</th><th>Час надсилання</th><th className="num">Доставлено</th><th className="num">Клікнули</th><th></th></tr></thead><tbody>
+          {list.map((b) => { const [l, tone] = STATUS_UA[b.status] ?? [b.status, ""]; const editable = b.status === "draft" || b.status === "scheduled"; return (
+            <tr key={b.id}>
+              <td><div className="row-actions" style={{ flexWrap: "nowrap" }}><span className="steptype">➤</span><div><b style={{ fontWeight: 500 }}><Link href={`/broadcasts/${b.id}`}>{b.name}</Link></b>{b.lastError && <div className="muted" style={{ fontSize: 11.5 }}>{b.lastError}</div>}</div></div></td>
+              <td><Pill tone={tone}>{l}</Pill></td>
+              <td className="mono">{b.status === "draft" ? "" : dateTime(b.scheduledAt ?? b.startedAt)}</td>
+              <td className="num">{deliveredLabel(b)}</td>
+              <td className="num">{["sent", "sending", "deleted"].includes(b.status) ? clickedLabel(b) : ""}</td>
+              <td><details className="menu"><summary>⋮</summary><div className="dd">
+                <form action={previewBroadcast}><input type="hidden" name="id" value={b.id} /><input type="hidden" name="step" value={editable ? "content" : "recipients"} /><button type="submit">👁 Перегляд (надіслати собі)</button></form>
+                <form action={duplicateBroadcast}><input type="hidden" name="id" value={b.id} /><button type="submit">⧉ Дублювати</button></form>
+                {editable && <Link href={`/broadcasts/${b.id}?step=content`}>✎ Редагувати</Link>}
+                {b.status === "scheduled" && <form action={cancelBroadcast}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit message="Скасувати заплановану розсилку? Вона стане чернеткою.">⏹ Скасувати</ConfirmSubmit></form>}
+                {b.status === "sent" && <form action={deleteBroadcastFromSubscribers}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit className="danger" message={`Видалити повідомлення «${b.name}» у всіх ${b.sentCount} отримувачів? Можливо лише впродовж 48 годин після надсилання.`}>🗑 Видалити у підписників</ConfirmSubmit></form>}
+                {b.status !== "sending" && <><div className="sep" /><form action={deleteBroadcast}><input type="hidden" name="id" value={b.id} /><ConfirmSubmit className="danger" message={`Видалити розсилку «${b.name}» з Hub? Надіслані повідомлення в людей залишаться.`}>✕ Видалити з Hub</ConfirmSubmit></form></>}
+              </div></details></td>
+            </tr>); })}
+          {!list.length && <tr><td colSpan={6} className="muted">Розсилок ще немає. Натисніть «+ Нова розсилка».</td></tr>}
+        </tbody></table>
+      </div>
+      <p className="note">Розсилки йдуть через Hub-бот тим, хто його запустив і не заблокував. «Доставлено» = надіслано / у списку; «Клікнули» = частка отримувачів, що натиснули кнопку. Надсилання йде порціями зі швидкістю ~20 повідомлень на секунду; довгі списки дошле щохвилинний тік.</p>
     </Shell>
   );
 }

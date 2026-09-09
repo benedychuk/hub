@@ -3,6 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
+import { onBroadcastButton } from "./broadcasts";
 import { enroll, matchEntry, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
@@ -83,6 +84,12 @@ export function getBot() {
   bot.command("plans", (ctx) => showPlans(ctx));
   bot.callbackQuery("plans", async (ctx) => { await ctx.answerCallbackQuery(); await showPlans(ctx); });
 
+  bot.callbackQuery(/^bc(p?):(\d+):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
+    if (p[0]) { const reply = await onBroadcastButton(ctx.match[1] ? "p" : "r", Number(ctx.match[2]), Number(ctx.match[3]), p[0].id); if (reply) await ctx.reply(reply, { link_preview_options: { is_disabled: true } }); }
+  });
   bot.callbackQuery(/^fstart:(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
