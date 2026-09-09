@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
+import { Section, Row, EmptyState, KV } from "@/components/ui/layout";
 import { navCounts, syncRunList, settingsMap } from "@/lib/queries";
 import { dateTime } from "@/lib/format";
 import { hasDb } from "@/db";
@@ -39,24 +40,22 @@ export default async function Settings({ searchParams }: { searchParams: Promise
     <Shell title="Налаштування" counts={counts}>
       <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`/settings?tab=${k}`} className={tab === k ? "on" : ""}>{l}</Link>)}</div>
       <div className="grid g2">
-        <div className="card"><h3>Змінні оточення <span className="sub">Vercel → Settings → Environment Variables</span></h3>
-          {env.map(([k, ok, d]) => <div className="ent" key={k}><span className={`dot ${ok ? "" : "off"}`} /><div><b className="mono">{k}</b><small>{d}</small></div><Pill tone={ok ? "good" : "mute"}>{ok ? "є" : "немає"}</Pill></div>)}
-          <p className="note">Після зміни змінних потрібен новий деплой: Vercel → Deployments → Redeploy.</p>
-        </div>
-        <div className="card"><h3>Імпорт із ZenEdu</h3>
-          <dl className="kv"><dt>Останній повний імпорт</dt><dd className="mono">{st["sync.last_full_at"] ? dateTime(String(st["sync.last_full_at"])) : "ще не було"}</dd><dt>Фаза</dt><dd className="mono">{String(st["sync.phase"] ?? "start")}</dd><dt>Бот ZenEdu</dt><dd className="mono">{String(st["zenedu_bot_id"] ?? "—")}</dd></dl>
-          <SyncPanel ready={hasDb() && Boolean(process.env.ZENEDU_API_TOKEN)} />
-          <p className="note">Повний імпорт іде частинами по 20 сторінок через ліміт ZenEdu 60 запитів/хв: близько 5 173 підписників і 3 400 замовлень займають 6–8 хвилин. Сторінку можна не закривати.</p>
-        </div>
-        <div className="card"><h3>Вебхук ZenEdu</h3>
-          <p>У ZenEdu відкрийте Workspace → Settings → API &amp; Webhooks, додайте адресу і оберіть усі події:</p>
-          <p className="mono" style={{ wordBreak: "break-all" }}>{(process.env.APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : "https://<домен>"))}/api/webhooks/zenedu{process.env.ZENEDU_WEBHOOK_SECRET ? `?key=${process.env.ZENEDU_WEBHOOK_SECRET}` : ""}</p>
-          <p className="note">Тоді оплати, скасування і повідомлення з бота ZenEdu з'являтимуться в історії людини одразу, а не раз на добу.</p>
-        </div>
-        <div className="card tbl"><h3>Журнал імпорту</h3><table><thead><tr><th>Коли</th><th>Тип</th><th>Стан</th><th>Результат</th></tr></thead><tbody>
-          {runs.map((r) => <tr key={r.id}><td className="mono">{dateTime(r.startedAt)}</td><td className="mono">{r.kind}</td><td><Pill tone={r.status === "done" ? "good" : r.status === "error" ? "crit" : "warn"}>{r.status}</Pill></td><td className="mono" style={{ fontSize: 11.5 }}>{r.error ? r.error.slice(0, 120) : Object.entries(r.stats).map(([k, v]) => `${k}=${v}`).join(" ")}</td></tr>)}
-          {!runs.length && <tr><td colSpan={4} className="muted">Ще не запускався.</td></tr>}
-        </tbody></table></div>
+        <Section title="Змінні оточення" description="Vercel → Settings → Environment Variables. Після зміни потрібен новий деплой.">
+          {env.map(([k, ok, d]) => <Row key={k} tone={ok ? "on" : "off"} title={<span className="mono">{k}</span>} sub={d} right={<Pill tone={ok ? "good" : "mute"}>{ok ? "задано" : "немає"}</Pill>} />)}
+        </Section>
+        <Section title="Імпорт із ZenEdu" description="Повний імпорт іде частинами по 20 сторінок через ліміт ZenEdu 60 запитів/хв: близько 6–8 хвилин. Сторінку можна не закривати.">
+          <KV items={[{ k: "Останній повний імпорт", v: st["sync.last_full_at"] ? dateTime(String(st["sync.last_full_at"])) : "ще не було", mono: true }, { k: "Фаза", v: String(st["sync.phase"] ?? "start"), mono: true }, { k: "Бот ZenEdu", v: String(st["zenedu_bot_id"] ?? "—"), mono: true }]} />
+          <div style={{ marginTop: 12 }}><SyncPanel ready={hasDb() && Boolean(process.env.ZENEDU_API_TOKEN)} /></div>
+        </Section>
+        <Section title="Вебхук ZenEdu" description="У ZenEdu відкрийте Workspace → Settings → API & Webhooks, додайте адресу і оберіть усі події. Тоді оплати й скасування з’являтимуться одразу.">
+          <div className="copybox"><span style={{ userSelect: "all" }}>{(process.env.APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : "https://<домен>"))}/api/webhooks/zenedu{process.env.ZENEDU_WEBHOOK_SECRET ? `?key=${process.env.ZENEDU_WEBHOOK_SECRET}` : ""}</span></div>
+        </Section>
+        <Section title="Журнал імпорту" className="tbl">
+          <table><thead><tr><th>Коли</th><th>Тип</th><th>Стан</th><th>Результат</th></tr></thead><tbody>
+            {runs.map((r) => <tr key={r.id}><td className="mono">{dateTime(r.startedAt)}</td><td className="mono">{r.kind}</td><td><Pill tone={r.status === "done" ? "good" : r.status === "error" ? "crit" : "warn"}>{r.status}</Pill></td><td className="mono" style={{ fontSize: 11.5 }}>{r.error ? r.error.slice(0, 120) : Object.entries(r.stats).map(([k, v]) => `${k}=${v}`).join(" ")}</td></tr>)}
+            {!runs.length && <tr><td colSpan={4}><EmptyState title="Ще не запускався" /></td></tr>}
+          </tbody></table>
+        </Section>
       </div>
     </Shell>
   );

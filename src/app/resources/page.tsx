@@ -1,10 +1,11 @@
 import Link from "next/link";
+import { Plus, Settings, RefreshCw, ExternalLink, Pause, Play, Trash2, LayoutGrid, List, Users, Check, AlertTriangle, Megaphone, MessagesSquare, Bot, GraduationCap, Link2, Radio } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { ConfirmSubmit } from "@/components/funnel-ui";
-import { Kebab } from "@/components/kebab";
-import { navCounts, resourceList, settingsMap, botList } from "@/lib/queries";
+import { Toolbar, Section, Alert, EmptyState } from "@/components/ui/layout";
+import { Kebab, MenuAction, MenuLink, MenuSep } from "@/components/ui/controls";
 import { ConnectChatDialog, Modal } from "@/components/modal";
+import { navCounts, resourceList, settingsMap, botList } from "@/lib/queries";
 import { connectChat, saveResource, refreshChatInfo, toggleResource, deleteResource, runAccessTickNow, runReconcileNow } from "@/lib/actions";
 import { botRightsIn, channelStats, type ChannelConfig } from "@/lib/telegram-access";
 import { dateTime } from "@/lib/format";
@@ -12,7 +13,8 @@ import { dateTime } from "@/lib/format";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 const KINDS: Record<string, string> = { telegram_channel: "Канал", telegram_group: "Група", bot_feature: "Функція бота", external_url: "Посилання", course: "Курс" };
-type Cfg = ChannelConfig & { cover?: string; memberCount?: number; username?: string; syncedAt?: string; url?: string; description?: string; zenedu_grants?: boolean };
+const KIND_ICON: Record<string, React.ReactNode> = { telegram_channel: <Megaphone size={13} />, telegram_group: <MessagesSquare size={13} />, bot_feature: <Bot size={13} />, external_url: <Link2 size={13} />, course: <GraduationCap size={13} /> };
+type Cfg = ChannelConfig & { cover?: string; memberCount?: number; username?: string; syncedAt?: string };
 
 export default async function Resources({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string; view?: string; err?: string }> }) {
   const sp = await searchParams;
@@ -33,56 +35,48 @@ export default async function Resources({ searchParams }: { searchParams: Promis
   const link = (p: Record<string, string>) => { const u = new URLSearchParams({ ...(tab === "digital" ? { tab } : {}), ...(sp.q ? { q: sp.q } : {}), ...(sp.view ? { view: sp.view } : {}), ...p }); const s = u.toString(); return "/resources" + (s ? "?" + s : ""); };
   return (
     <Shell title={tab === "channels" ? "Канали і групи" : "Цифрові продукти"} counts={counts}>
-            {sp.err && <div className="alert bad">{sp.err}</div>}
+      {sp.err && <Alert tone="bad">{sp.err}</Alert>}
       <div className="tabs"><Link href="/resources" className={tab === "channels" ? "on" : ""}>Канали і групи · {res.filter((r) => isChat(r.kind)).length}</Link><Link href="/resources?tab=digital" className={tab === "digital" ? "on" : ""}>Цифрові продукти · {res.filter((r) => !isChat(r.kind)).length}</Link></div>
-      <div className="toolbar">
-        <form className="search" method="get"><span className="muted">⌕</span><input name="q" defaultValue={sp.q ?? ""} placeholder="Пошук" />{tab === "digital" && <input type="hidden" name="tab" value="digital" />}</form>
-        <div className="seg"><Link href={link({ view: "grid" })} className={view === "grid" ? "on" : ""} title="Сітка">▦</Link><Link href={link({ view: "list" })} className={view === "list" ? "on" : ""} title="Список">☰</Link></div>
-        <span className="spacer" />
-        {tab === "channels" ? (
-          <ConnectChatDialog chats={free.map((c) => ({ id: c.id, title: c.title, type: c.type }))} botUsername={botUser} action={connectChat} />
-        ) : (
-          <Modal title="Новий цифровий продукт" width={480} trigger={<button type="button" className="btn pri">+ Додати цифровий продукт</button>}>
-            <form action={saveResource} className="form">
-              <label className="field">Назва<input name="name" placeholder="Архів ефірів" required /></label>
-              <label className="field">Тип<select name="kind" defaultValue="external_url"><option value="external_url">Посилання (сайт, Notion, Drive)</option><option value="course">Курс</option><option value="bot_feature">Функція бота (наприклад «Щиро»)</option></select></label>
-              <label className="field">Код (латиниця, крапки)<input name="key" placeholder="archive.access" pattern="[a-z0-9_.]+" required /></label>
-              <div className="modal-f"><button className="btn pri" type="submit">Створити</button></div>
-            </form>
-          </Modal>
-        )}
-      </div>
-
-      {tab === "channels" && free.length > 0 && <div className="alert">Hub-бот уже адміністратор у {free.length === 1 ? "чаті" : "чатах"} {free.map((c) => `«${c.title}»`).join(", ")}, але {free.length === 1 ? "він ще не підключений" : "вони ще не підключені"}. Натисніть «+ Підключити канал або групу».</div>}
-      {!rows.length && <div className="card" style={{ textAlign: "center", padding: 40 }}><p className="muted">{q ? "Нічого не знайдено." : tab === "channels" ? "Ще немає підключених каналів чи груп. Натисніть «+ Підключити канал або групу»." : "Цифрових продуктів ще немає."}</p></div>}
+      <Toolbar actions={tab === "channels" ? <ConnectChatDialog chats={free.map((c) => ({ id: c.id, title: c.title, type: c.type }))} botUsername={botUser} action={connectChat} /> : (
+        <Modal title="Новий цифровий продукт" width={480} trigger={<button type="button" className="btn pri"><Plus size={15} /> Цифровий продукт</button>}>
+          <form action={saveResource} className="form">
+            <div className="fld"><label className="fld-l">Назва</label><input name="name" placeholder="Архів ефірів" required /></div>
+            <div className="fld"><label className="fld-l">Тип</label><select name="kind" defaultValue="external_url"><option value="external_url">Посилання (сайт, Notion, Drive)</option><option value="course">Курс</option><option value="bot_feature">Функція бота (наприклад «Щиро»)</option></select></div>
+            <div className="fld"><label className="fld-l">Код</label><input name="key" placeholder="archive.access" pattern="[a-z0-9_.]+" required /><div className="fld-h">латиниця, цифри, крапки; використовується в API</div></div>
+            <div className="modal-f"><button className="btn pri" type="submit">Створити</button></div>
+          </form>
+        </Modal>)}>
+        <form className="search" method="get"><input name="q" defaultValue={sp.q ?? ""} placeholder="Пошук" />{tab === "digital" && <input type="hidden" name="tab" value="digital" />}</form>
+        <div className="seg"><Link href={link({ view: "grid" })} className={view === "grid" ? "on" : ""} title="Сітка"><LayoutGrid size={15} /></Link><Link href={link({ view: "list" })} className={view === "list" ? "on" : ""} title="Список"><List size={15} /></Link></div>
+      </Toolbar>
+      {tab === "channels" && free.length > 0 && <Alert tone="info">Hub-бот уже адміністратор у {free.length === 1 ? "чаті" : "чатах"} {free.map((c) => `«${c.title}»`).join(", ")}, але {free.length === 1 ? "він ще не підключений" : "вони ще не підключені"}. Натисніть «Підключити канал або групу».</Alert>}
+      {!rows.length && <div className="card"><EmptyState icon={<Radio size={20} />} title={q ? "Нічого не знайдено" : tab === "channels" ? "Ще немає підключених каналів чи груп" : "Цифрових продуктів ще немає"} text={tab === "channels" ? "Додайте Hub-бот адміністратором у канал або групу й підключіть чат кнопкою вгорі." : "Посилання, курс або функція бота, до яких дає доступ тариф."} /></div>}
       <div className={view === "grid" ? "fgrid" : "grid flist"}>
         {rows.map((r) => { const c = (r.config ?? {}) as Cfg; const x = stats.find((z) => z.key === r.key); const chat = isChat(r.kind); const members = c.memberCount ?? x?.s?.joined ?? null; const rightsBad = chat && c.chatId && x?.rights && !x.rights.ok; return (
           <div key={r.id} className="fcard">
             <Link href={`/resources/${r.key}`} className={`cover ${chat ? "" : "zen"}`} style={c.cover ? { backgroundImage: `url(${c.cover})` } : undefined} aria-label={r.name} />
             <div className="body">
               <b><Link href={`/resources/${r.key}`}>{r.name}</Link></b>
-              <div className="meta"><span title={chat ? "Учасників у чаті" : "Людей із правом"}>👤 {members ?? "—"}</span>{chat && x?.s ? <span title="Людей із правом доступу">✓ {x.s.withRight} з правом</span> : null}{chat && x?.s?.withoutRight ? <span style={{ color: "var(--crit)" }} title="У чаті без права">⚠ {x.s.withoutRight} без права</span> : null}</div>
-              <div className="row-actions"><span className="muted" style={{ fontSize: 12 }}>{r.kind === "telegram_channel" ? "📣" : r.kind === "telegram_group" ? "👥" : r.kind === "bot_feature" ? "🤖" : r.kind === "course" ? "🎓" : "🔗"} {KINDS[r.kind] ?? r.kind}</span><span className="spacer" style={{ flex: 1 }} />
-                {!r.isActive ? <Pill tone="mute">Вимкнено</Pill> : !chat ? <Pill tone="good">Active</Pill> : !c.chatId ? <Pill tone="warn">Не підключено</Pill> : rightsBad ? <Pill tone="crit" >Бот без прав</Pill> : <Pill tone="good">Active</Pill>}</div>
+              <div className="meta"><span title={chat ? "Учасників у чаті" : "Людей із правом"}><Users size={12} /> {members ?? "—"}</span>{chat && x?.s ? <span title="Людей із правом доступу"><Check size={12} /> {x.s.withRight} з правом</span> : null}{chat && x?.s?.withoutRight ? <span style={{ color: "var(--crit)" }} title="У чаті без права"><AlertTriangle size={12} /> {x.s.withoutRight} без права</span> : null}</div>
+              <div className="row-actions"><span className="fld-h" style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>{KIND_ICON[r.kind]} {KINDS[r.kind] ?? r.kind}</span><span className="spacer" />
+                {!r.isActive ? <Pill tone="mute">Вимкнено</Pill> : !chat ? <Pill tone="good">Active</Pill> : !c.chatId ? <Pill tone="warn">Не підключено</Pill> : rightsBad ? <Pill tone="crit">Бот без прав</Pill> : <Pill tone="good">Active</Pill>}</div>
             </div>
             <Kebab>
-              <Link href={`/resources/${r.key}`}>⚙ Налаштування</Link>
-              {chat && c.chatId && <form action={refreshChatInfo}><input type="hidden" name="key" value={r.key} /><button type="submit">⟳ Оновити з Telegram</button></form>}
-              {chat && c.username && <a href={`https://t.me/${c.username}`} target="_blank" rel="noreferrer">↗ Відкрити в Telegram</a>}
-              <form action={toggleResource}><input type="hidden" name="key" value={r.key} /><button type="submit">{r.isActive ? "⏸ Вимкнути" : "▶ Увімкнути"}</button></form>
-              <div className="sep" />
-              <form action={deleteResource}><input type="hidden" name="key" value={r.key} /><ConfirmSubmit className="danger" message={`Видалити «${r.name}» з Hub? Людей із чату це не виключить, але право доступу до нього зникне з тарифів.`}>🗑 Видалити</ConfirmSubmit></form>
+              <MenuLink href={`/resources/${r.key}`} icon={<Settings />}>Налаштування</MenuLink>
+              {chat && c.chatId && <MenuAction action={refreshChatInfo} fields={{ key: r.key }} icon={<RefreshCw />}>Оновити з Telegram</MenuAction>}
+              {chat && c.username && <MenuLink href={`https://t.me/${c.username}`} icon={<ExternalLink />} external>Відкрити в Telegram</MenuLink>}
+              <MenuAction action={toggleResource} fields={{ key: r.key }} icon={r.isActive ? <Pause /> : <Play />}>{r.isActive ? "Вимкнути" : "Увімкнути"}</MenuAction>
+              <MenuSep />
+              <MenuAction action={deleteResource} fields={{ key: r.key }} icon={<Trash2 />} danger confirm={`Видалити «${r.name}» з Hub? Людей із чату це не виключить, але право доступу зникне з тарифів.`}>Видалити</MenuAction>
             </Kebab>
           </div>); })}
       </div>
-
-      {tab === "channels" && <div className="card" style={{ marginTop: 20 }}>
-        <h3>Автоматика доступів</h3>
-        <div className="grid g2" style={{ gap: 12 }}>
-          <div><b style={{ fontWeight: 600 }}>Щохвилини: видача й виключення.</b><p className="note" style={{ margin: "4px 0 8px" }}>Hub дивиться, у кого з’явилось право (тариф або ручна видача), і надсилає в боті одноразове посилання в канал. У кого право закінчилось, того виключає з можливістю повернутись.</p><form action={runAccessTickNow}><button className="btn sm" type="submit">Запустити зараз</button></form></div>
-          <div><b style={{ fontWeight: 600 }}>Щоночі о 04:00: звірка з Telegram.</b><p className="note" style={{ margin: "4px 0 8px" }}>Перевіряє, хто фактично в каналі, і виправляє розбіжності: наприклад, якщо людину додали вручну або вона вийшла сама.{rec?.at ? ` Остання звірка ${dateTime(rec.at)}: перевірено ${rec.checked}, виправлено ${rec.fixed}.` : ""}</p><form action={runReconcileNow}><button className="btn sm" type="submit">Звірити зараз</button></form></div>
+      {tab === "channels" && <Section title="Автоматика доступів" className="sec" description="Працює сама; кнопки лише запускають перевірку негайно.">
+        <div className="grid g2">
+          <div><b style={{ fontWeight: 600 }}>Щохвилини: видача й виключення</b><p className="fld-h" style={{ margin: "4px 0 8px" }}>Hub дивиться, у кого з’явилось право (тариф або ручна видача), і надсилає в боті одноразове посилання в канал. У кого право закінчилось, того виключає з можливістю повернутись.</p><form action={runAccessTickNow}><button className="btn sm" type="submit"><RefreshCw size={14} /> Запустити зараз</button></form></div>
+          <div><b style={{ fontWeight: 600 }}>Щоночі о 04:00: звірка з Telegram</b><p className="fld-h" style={{ margin: "4px 0 8px" }}>Перевіряє, хто фактично в каналі, і виправляє розбіжності.{rec?.at ? ` Остання звірка ${dateTime(rec.at)}: перевірено ${rec.checked}, виправлено ${rec.fixed}.` : ""}</p><form action={runReconcileNow}><button className="btn sm" type="submit"><RefreshCw size={14} /> Звірити зараз</button></form></div>
         </div>
-      </div>}
+      </Section>}
     </Shell>
   );
 }

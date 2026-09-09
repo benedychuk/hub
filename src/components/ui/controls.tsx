@@ -70,3 +70,8 @@ export function MenuSep() { return <RMenu.Separator className="sep" />; }
 export function Tip({ text, children }: { text: string; children: React.ReactNode }) {
   return <RTooltip.Provider delayDuration={200}><RTooltip.Root><RTooltip.Trigger asChild>{children}</RTooltip.Trigger><RTooltip.Portal><RTooltip.Content className="tip" sideOffset={6}>{text}<RTooltip.Arrow className="tip-a" /></RTooltip.Content></RTooltip.Portal></RTooltip.Root></RTooltip.Provider>;
 }
+
+/** Перемикач у таблиці, що одразу сабмітить форму. */
+export function AutoSubmitToggleClient({ checked, label }: { checked: boolean; label?: string }) {
+  return <RSwitch.Root className="sw-root" defaultChecked={checked} aria-label={label} onClick={(e) => { const f = (e.currentTarget as HTMLElement).closest("form"); setTimeout(() => f?.requestSubmit(), 0); }}><RSwitch.Thumb className="sw-thumb" /></RSwitch.Root>;
+}

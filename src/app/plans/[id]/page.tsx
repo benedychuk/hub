@@ -1,5 +1,7 @@
 import Link from "next/link";
 import Shell from "@/components/shell";
+import { PageHeader, Section, Field, FormRow } from "@/components/ui/layout";
+import { Checkbox, Switch } from "@/components/ui/controls";
 import { navCounts, planById, resourceList } from "@/lib/queries";
 import { savePlan } from "@/lib/actions";
 
@@ -11,20 +13,32 @@ export default async function PlanForm({ params }: { params: Promise<{ id: strin
   const [counts, pl, res] = await Promise.all([navCounts(), isNew ? Promise.resolve(null) : planById(Number(id)), resourceList()]);
   const e = pl?.entitlements ?? {};
   return (
-    <Shell title={isNew ? "Новий тариф" : `Тариф: ${pl?.name ?? ""}`} counts={counts}>
-      <form action={savePlan} className="card form" style={{ maxWidth: 720 }}>
+    <Shell title="Тарифи й оффери" counts={counts}>
+      <PageHeader back="/plans" backLabel="Тарифи" title={isNew ? "Новий тариф" : pl?.name ?? ""} />
+      <form action={savePlan} className="grid g21">
         {!isNew && <input type="hidden" name="id" value={pl?.id} />}
-        <div className="form two"><label className="field">Назва<input name="name" defaultValue={pl?.name ?? ""} required /></label><label className="field">Внутрішній код<input name="key" defaultValue={pl?.key ?? ""} placeholder="club_ai" /></label></div>
-        <div className="form two"><label className="field">Ціна<input name="price" type="number" step="0.01" defaultValue={pl?.price ?? "999"} required /></label><label className="field">Валюта<select name="currency" defaultValue={pl?.currency ?? "UAH"}><option>UAH</option><option>USD</option><option>EUR</option></select></label></div>
-        <div className="form two"><label className="field">Період<select name="period" defaultValue={pl?.period ?? "month"}><option value="month">Місяць</option><option value="quarter">3 місяці</option><option value="year">Рік</option></select></label><label className="field">Порядок показу<input name="sortOrder" type="number" defaultValue={pl?.sortOrder ?? 0} /></label></div>
-        <div className="form two"><label className="field">Пробний період, днів (0 = немає)<input name="trialDays" type="number" defaultValue={pl?.trialDays ?? 0} /></label><label className="field">Ціна пробного періоду<input name="trialPrice" type="number" step="0.01" defaultValue={pl?.trialPrice ?? ""} placeholder="99" /></label></div>
-        <div className="field">Права, які дає тариф</div>
-        {res.length ? res.map((r) => (<div className="ck" key={r.key}><input type="checkbox" name={`ent:${r.key}`} defaultChecked={e[r.key] !== undefined} /> {r.name} <code className="mono muted">{r.key}</code><input name={`quota:${r.key}`} defaultValue={e[r.key] ?? ""} placeholder="квота, напр. 40/день" style={{ marginLeft: "auto", width: 160, border: "1px solid var(--line-2)", borderRadius: 6, padding: "3px 8px" }} /></div>))
-          : <p className="note">Ресурсів ще немає, створіть їх у розділі <Link href="/resources">Доступи</Link>.</p>}
-        <div className="ck"><input type="checkbox" name="isActive" defaultChecked={pl?.isActive ?? true} /> Тариф активний (показується в боті)</div>
-        <div className="ck"><input type="checkbox" name="isFeatured" defaultChecked={pl?.isFeatured ?? false} /> Рекомендований</div>
-        <div className="row-actions"><button className="btn pri" type="submit">Зберегти</button><Link className="btn" href="/plans">Скасувати</Link></div>
-        <p className="note">Зміна ціни не торкається чинних підписок: у кожної своя ціна.</p>
+        <div className="form">
+          <Section title="Основне">
+            <FormRow><Field label="Назва"><input name="name" defaultValue={pl?.name ?? ""} required /></Field><Field label="Внутрішній код" hint="латиниця, для API і звітів"><input name="key" defaultValue={pl?.key ?? ""} placeholder="club_ai" /></Field></FormRow>
+            <FormRow cols={3}><Field label="Ціна"><input name="price" type="number" step="0.01" defaultValue={pl?.price ?? "999"} required /></Field><Field label="Валюта"><select name="currency" defaultValue={pl?.currency ?? "UAH"}><option>UAH</option><option>USD</option><option>EUR</option></select></Field><Field label="Період"><select name="period" defaultValue={pl?.period ?? "month"}><option value="month">Місяць</option><option value="quarter">3 місяці</option><option value="year">Рік</option></select></Field></FormRow>
+            <FormRow><Field label="Пробний період, днів" hint="0 = без пробного періоду"><input name="trialDays" type="number" defaultValue={pl?.trialDays ?? 0} /></Field><Field label="Ціна пробного періоду" hint="порожньо = безкоштовно"><input name="trialPrice" type="number" step="0.01" defaultValue={pl?.trialPrice ?? ""} placeholder="99" /></Field></FormRow>
+          </Section>
+          <Section title="Що дає тариф" description="Позначте продукти; для функцій бота можна задати квоту, наприклад 40/день.">
+            {res.length ? res.map((r) => <div key={r.key} className="row-actions" style={{ justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--line)" }}><Checkbox name={`ent:${r.key}`} defaultChecked={e[r.key] !== undefined} label={r.name} hint={r.key} /><input name={`quota:${r.key}`} defaultValue={e[r.key] ?? ""} placeholder="квота" className="input" style={{ width: 150 }} /></div>)
+              : <p className="fld-h">Продуктів ще немає: підключіть канал або створіть цифровий продукт у розділі <Link href="/resources">Канали і групи</Link>.</p>}
+          </Section>
+        </div>
+        <div className="form aside-sticky">
+          <Section title="Показ">
+            <Switch name="isActive" defaultChecked={pl?.isActive ?? true} label="Тариф активний" hint="показується в боті за /plans" />
+            <Switch name="isFeatured" defaultChecked={pl?.isFeatured ?? false} label="Рекомендований" hint="виділяється в списку" />
+            <Field label="Порядок показу"><input name="sortOrder" type="number" defaultValue={pl?.sortOrder ?? 0} /></Field>
+          </Section>
+          <Section>
+            <div className="form"><button className="btn pri" type="submit">Зберегти тариф</button><Link className="btn ghost" href="/plans">Скасувати</Link></div>
+            <p className="fld-h" style={{ marginTop: 10 }}>Зміна ціни не торкається чинних підписок: у кожної своя ціна.</p>
+          </Section>
+        </div>
       </form>
     </Shell>
   );

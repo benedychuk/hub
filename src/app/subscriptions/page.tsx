@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { CreditCard } from "lucide-react";
 import Shell from "@/components/shell";
-import { Kpi, Pill } from "@/components/ui";
+import { Pill } from "@/components/ui";
+import { Chips, Pager, Stat, EmptyState } from "@/components/ui/layout";
 import { navCounts, subscriptionList } from "@/lib/queries";
 import { date, fullName, money } from "@/lib/format";
 
@@ -14,19 +16,19 @@ export default async function Subs({ searchParams }: { searchParams: Promise<{ s
   return (
     <Shell title="Підписки" counts={counts}>
       <div className="grid g4" style={{ marginBottom: 16 }}>
-        <Kpi hot title="Active" value={(st.active ?? 0) + (st.past_due ?? 0)} note="за останнім платежем у межах періоду" />
-        <Kpi title="Trial" value={st.trialing ?? 0} note="пробні 2 тижні" />
-        <Kpi title="Past due" value={st.past_due ?? 0} note="у ZenEdu: 3 спроби через 2 дні" />
-        <Kpi title="Expired / cancelled" value={(st.expired ?? 0) + (st.cancelled ?? 0)} note="за весь час" />
+        <Stat label="Active" value={(st.active ?? 0) + (st.past_due ?? 0)} hint="останній платіж у межах періоду" tone="good" />
+        <Stat label="Trial" value={st.trialing ?? 0} hint="пробні 2 тижні" />
+        <Stat label="Past due" value={st.past_due ?? 0} hint="ZenEdu робить 3 спроби через 2 дні" tone={st.past_due ? "warn" : undefined} />
+        <Stat label="Expired / cancelled" value={(st.expired ?? 0) + (st.cancelled ?? 0)} hint="за весь час" />
       </div>
-      <div className="chips">{CHIPS.map(([k, l]) => <Link key={k} className={`chip ${status === k ? "on" : ""}`} href={`?status=${k}`}>{l}</Link>)}<span className="muted" style={{ marginLeft: "auto" }}>{d.total}</span></div>
+      <Chips items={CHIPS.map(([k, l]) => ({ href: `?status=${k}`, label: l, on: status === k }))} right={`${d.total} підписок`} />
       <div className="card tbl"><table><thead><tr><th>Людина</th><th>Оффер</th><th className="num">Ціна</th><th>Період</th><th>Статус</th><th>Наступне списання</th><th className="num">Оплат</th><th>Джерело</th></tr></thead><tbody>
-        {d.rows.map(({ s, p, offerName }) => <tr key={s.id}><td><Link href={`/people/${p.id}`}>{fullName(p)}</Link></td><td className="muted">{offerName ?? "—"}</td><td className="num">{money(s.price, s.currency)}</td><td className="mono">{s.periodDays} дн</td><td><Pill status={s.status} /></td><td className="mono">{["active", "trialing", "past_due"].includes(s.status) ? date(s.currentPeriodEnd) : "—"}</td><td className="num">{s.paymentsCount}</td><td><Pill tone={s.source === "hub" ? "acc" : ""}>{s.source === "hub" ? "Hub" : "ZenEdu"}</Pill></td></tr>)}
-        {!d.rows.length && <tr><td colSpan={8} className="muted">Порожньо.</td></tr>}
+        {d.rows.map(({ s, p, offerName }) => <tr key={s.id}><td><Link href={`/people/${p.id}`} className="lnk-ink">{fullName(p)}</Link></td><td className="muted">{offerName ?? "—"}</td><td className="num">{money(s.price, s.currency)}</td><td className="mono">{s.periodDays} дн</td><td><Pill status={s.status} /></td><td className="mono">{["active", "trialing", "past_due"].includes(s.status) ? date(s.currentPeriodEnd) : "—"}</td><td className="num">{s.paymentsCount}</td><td><Pill tone={s.source === "hub" ? "acc" : ""}>{s.source === "hub" ? "Hub" : "ZenEdu"}</Pill></td></tr>)}
+        {!d.rows.length && <tr><td colSpan={8}><EmptyState icon={<CreditCard size={20} />} title="Підписок із таким статусом немає" /></td></tr>}
       </tbody></table>
-        <div className="pager">{d.page > 1 && <Link className="btn sm" href={`?status=${status}&page=${d.page - 1}`}>← Назад</Link>}<span className="muted">сторінка {d.page} з {Math.max(1, Math.ceil(d.total / d.per))}</span>{d.page * d.per < d.total && <Link className="btn sm" href={`?status=${status}&page=${d.page + 1}`}>Далі →</Link>}</div>
+        <Pager page={d.page} total={d.total} per={d.per} href={(p) => `?status=${status}&page=${p}`} />
       </div>
-      <p className="note">Статуси виводяться з платежів ZenEdu: останній платіж плюс період оффера. Скасування приходять вебхуком ZenEdu, якщо його налаштовано.</p>
+      <p className="fld-h" style={{ marginTop: 12 }}>Статуси виводяться з платежів ZenEdu: останній платіж плюс період оффера. Скасування приходять вебхуком ZenEdu, якщо його налаштовано.</p>
     </Shell>
   );
 }

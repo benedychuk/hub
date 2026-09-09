@@ -76,3 +76,30 @@ export function FilterGroup({ title, active = 0, open, children }: { title: stri
     </details>
   );
 }
+
+/** Фільтр-чипси зі станом «увімкнено». */
+export function Chips({ items, right }: { items: { href: string; label: React.ReactNode; on?: boolean }[]; right?: React.ReactNode }) {
+  return <div className="chips">{items.map((c, i) => <Link key={i} href={c.href} className={`chip ${c.on ? "on" : ""}`}>{c.label}</Link>)}{right && <span className="chips-r">{right}</span>}</div>;
+}
+/** Пагінація. */
+export function Pager({ page, total, per, href }: { page: number; total: number; per: number; href: (p: number) => string }) {
+  const pages = Math.max(1, Math.ceil(total / per));
+  if (pages <= 1) return null;
+  return <div className="pager">{page > 1 ? <Link className="btn sm" href={href(page - 1)}>Назад</Link> : <span />}<span className="muted">Сторінка {page} з {pages}</span>{page < pages ? <Link className="btn sm" href={href(page + 1)}>Далі</Link> : <span />}</div>;
+}
+/** Тулбар списку: пошук, фільтри, головна дія праворуч. */
+export function Toolbar({ children, actions }: { children?: React.ReactNode; actions?: React.ReactNode }) {
+  return <div className="toolbar">{children}<span className="spacer" />{actions}</div>;
+}
+/** Список «підпис — значення». */
+export function KV({ items }: { items: { k: React.ReactNode; v: React.ReactNode; mono?: boolean }[] }) {
+  return <dl className="kv">{items.map((it, i) => <div key={i} className="kv-r"><dt>{it.k}</dt><dd className={it.mono ? "mono" : ""}>{it.v}</dd></div>)}</dl>;
+}
+/** Стрічка подій. */
+export function Timeline({ items }: { items: { id: React.Key; when: React.ReactNode; what: React.ReactNode }[] }) {
+  return <ul className="tl">{items.map((it) => <li key={it.id}><span>{it.when}</span><span>{it.what}</span></li>)}</ul>;
+}
+/** Рядок списку сутностей: індикатор, назва, підпис, дії справа. */
+export function Row({ tone = "on", title, sub, right, icon }: { tone?: "on" | "off" | "warn"; title: React.ReactNode; sub?: React.ReactNode; right?: React.ReactNode; icon?: React.ReactNode }) {
+  return <div className="ent">{icon ? <span className="ent-i">{icon}</span> : <span className={`dot ${tone === "on" ? "" : tone}`} />}<div className="ent-b"><b>{title}</b>{sub && <small>{sub}</small>}</div>{right && <span className="row-actions">{right}</span>}</div>;
+}

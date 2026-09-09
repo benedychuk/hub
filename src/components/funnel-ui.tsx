@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { StepButton } from "@/lib/funnels";
 import { RichText } from "./rich-text";
+import { ArrowUp, ArrowDown, X, Plus, Upload, Trash2 } from "lucide-react";
 
 /** Кнопка сабміту з підтвердженням (видалення тощо). */
 export function ConfirmSubmit({ message, className, children, formAction, name, value }: { message: string; className?: string; children: React.ReactNode; formAction?: (fd: FormData) => void | Promise<void>; name?: string; value?: string }) {
@@ -37,8 +38,8 @@ export function CoverInput({ current }: { current: string | null }) {
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => pick(e.target.files?.[0])} />
       {preview ? <div className="cover-prev" style={{ backgroundImage: `url(${preview})` }} /> : <div className="cover-prev empty" onClick={() => fileRef.current?.click()}>Натисніть, щоб завантажити обкладинку<br /><small>PNG, JPG або WEBP · до 20 МБ · рекомендовано 1200×675</small></div>}
       <div className="row-actions" style={{ marginTop: 8 }}>
-        <button type="button" className="btn sm" onClick={() => fileRef.current?.click()}>{preview ? "Замінити" : "Завантажити"}</button>
-        {preview && <button type="button" className="btn sm danger ghost" onClick={() => { setPreview(null); setData(""); setMode("delete"); }}>Видалити</button>}
+        <button type="button" className="btn sm" onClick={() => fileRef.current?.click()}><Upload size={14} /> {preview ? "Замінити" : "Завантажити"}</button>
+        {preview && <button type="button" className="btn sm danger ghost" onClick={() => { setPreview(null); setData(""); setMode("delete"); }}><Trash2 size={14} /> Видалити</button>}
         {err && <span className="muted" style={{ color: "var(--crit)" }}>{err}</span>}
       </div>
     </div>
@@ -64,15 +65,15 @@ export function AttachmentsPicker({ media, initial }: { media: Media[]; initial:
     <div>
       <input type="hidden" name="attachmentsJson" value={JSON.stringify(ids)} />
       {chosen.map((m, i) => <div key={m.id} className="att"><span className={`pill ${m.kind === "video_note" ? "acc" : "moon"}`}>{KIND[m.kind] ?? m.kind}</span><span style={{ flex: 1 }}>{mediaLabel(m)}</span>
-        <button type="button" className="btn sm ghost" disabled={i === 0} onClick={() => setIds((a) => { const b = [...a]; [b[i - 1], b[i]] = [b[i], b[i - 1]]; return b; })}>↑</button>
-        <button type="button" className="btn sm ghost" disabled={i === chosen.length - 1} onClick={() => setIds((a) => { const b = [...a]; [b[i + 1], b[i]] = [b[i], b[i + 1]]; return b; })}>↓</button>
-        <button type="button" className="btn sm danger ghost" onClick={() => setIds((a) => a.filter((x) => x !== m.id))}>✕</button></div>)}
+        <button type="button" className="btn sm ghost" disabled={i === 0} aria-label="Вище" onClick={() => setIds((a) => { const b = [...a]; [b[i - 1], b[i]] = [b[i], b[i - 1]]; return b; })}><ArrowUp size={14} /></button>
+        <button type="button" className="btn sm ghost" disabled={i === chosen.length - 1} aria-label="Нижче" onClick={() => setIds((a) => { const b = [...a]; [b[i + 1], b[i]] = [b[i], b[i + 1]]; return b; })}><ArrowDown size={14} /></button>
+        <button type="button" className="btn sm danger ghost" aria-label="Прибрати" onClick={() => setIds((a) => a.filter((x) => x !== m.id))}><X size={14} /></button></div>)}
       <div className="row-actions" style={{ marginTop: 6 }}>
-        <select value={pick} onChange={(e) => setPick(e.target.value)} className="btn sm" style={{ maxWidth: 360 }}><option value="">Файл із бібліотеки…</option>{free.map((m) => <option key={m.id} value={m.id}>{mediaLabel(m)}</option>)}</select>
-        <button type="button" className="btn sm" disabled={!pick} onClick={() => { setIds((a) => [...a, Number(pick)]); setPick(""); }}>+ Додати</button>
+        <select value={pick} onChange={(e) => setPick(e.target.value)} className="input" style={{ maxWidth: 360 }}><option value="">Файл із бібліотеки…</option>{free.map((m) => <option key={m.id} value={m.id}>{mediaLabel(m)}</option>)}</select>
+        <button type="button" className="btn sm" disabled={!pick} onClick={() => { setIds((a) => [...a, Number(pick)]); setPick(""); }}><Plus size={14} /> Додати</button>
         {!media.length && <span className="muted">Бібліотека порожня: перешліть медіа в Hub-бот.</span>}
       </div>
-      <p className="note">Кружечки й стікери завжди йдуть окремими повідомленнями. Одне фото/відео з текстом до 1024 знаків надсилається з підписом і кнопками; кілька фото/відео йдуть альбомом, а текст окремо.</p>
+      <p className="fld-h">Кружечки й стікери завжди йдуть окремими повідомленнями. Одне фото/відео з текстом до 1024 знаків надсилається з підписом і кнопками; кілька фото/відео йдуть альбомом, а текст окремо.</p>
     </div>
   );
 }
@@ -106,17 +107,17 @@ export function ButtonsEditor({ initial, steps, funnels, offers, stepType }: { i
           {b.kind === "funnel" && <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value })}><option value="">Оберіть воронку</option>{funnels.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>}
           {b.kind === "offer" && <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value })}><option value="">Оберіть оффер</option>{offers.filter((o) => o.url).map((o) => <option key={o.id} value={o.url!}>{o.name}</option>)}</select>}
           {(b.kind === "next" || b.kind === "tag" || b.kind === "option") && <input value={b.tag ?? ""} onChange={(e) => upd(i, { tag: e.target.value })} placeholder="тег за клік (порожньо = автотег)" />}
-          {stepType === "quiz" && b.kind === "option" ? <label className="ck" title="Правильна відповідь"><input type="checkbox" checked={Boolean(b.correct)} onChange={(e) => upd(i, { correct: e.target.checked })} /> ✓</label> : <span />}
+          {stepType === "quiz" && b.kind === "option" ? <label className="ck" title="Правильна відповідь"><input type="checkbox" checked={Boolean(b.correct)} onChange={(e) => upd(i, { correct: e.target.checked })} /> правильна</label> : <span />}
           <span className="row-actions">
-            <button type="button" className="btn sm ghost" disabled={i === 0} onClick={() => setRows((r) => { const a = [...r]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; return a; })}>↑</button>
-            <button type="button" className="btn sm ghost" disabled={i === rows.length - 1} onClick={() => setRows((r) => { const a = [...r]; [a[i + 1], a[i]] = [a[i], a[i + 1]]; return a; })}>↓</button>
-            <button type="button" className="btn sm danger ghost" onClick={() => setRows((r) => r.filter((_, j) => j !== i))}>✕</button>
+            <button type="button" className="btn sm ghost" disabled={i === 0} aria-label="Вище" onClick={() => setRows((r) => { const a = [...r]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; return a; })}><ArrowUp size={14} /></button>
+            <button type="button" className="btn sm ghost" disabled={i === rows.length - 1} aria-label="Нижче" onClick={() => setRows((r) => { const a = [...r]; [a[i + 1], a[i]] = [a[i], a[i + 1]]; return a; })}><ArrowDown size={14} /></button>
+            <button type="button" className="btn sm danger ghost" aria-label="Прибрати" onClick={() => setRows((r) => r.filter((_, j) => j !== i))}><X size={14} /></button>
           </span>
         </div>
       ))}
       <div className="row-actions" style={{ marginTop: 6 }}>
-        <button type="button" className="btn sm" disabled={rows.length >= 10} onClick={() => setRows((r) => [...r, { text: "", kind: optionOnly ? "option" : "url", correct: false }])}>+ Додати {optionOnly ? "варіант" : "кнопку"}</button>
-        <span className="muted">до 10 кнопок, кожна окремим рядком; тег за клік і url/дія зберігаються в картці людини</span>
+        <button type="button" className="btn sm" disabled={rows.length >= 10} onClick={() => setRows((r) => [...r, { text: "", kind: optionOnly ? "option" : "url", correct: false }])}><Plus size={14} /> Додати {optionOnly ? "варіант" : "кнопку"}</button>
+        <span className="fld-h">до 10 кнопок, кожна окремим рядком</span>
       </div>
     </div>
   );
@@ -127,15 +128,15 @@ export function SendTimeFields({ initial }: { initial: { mode: string; value?: n
   const [mode, setMode] = useState(initial.mode || "immediately");
   return (
     <div className="form">
-      <label className="field">Час надсилання
+      <label className="fld"><span className="fld-l">Час надсилання</span>
         <select name="sendMode" value={mode} onChange={(e) => setMode(e.target.value)}>
           <option value="no">Ні: лише за кнопкою, командою або вручну</option>
           <option value="immediately">Одразу після попереднього кроку</option>
           <option value="after">Через певний час після попереднього кроку</option>
           <option value="exact">У конкретний день о вказаній годині</option>
         </select></label>
-      {mode === "after" && <div className="row-actions"><span className="muted">через</span><input name="sendValue" type="number" min={0} defaultValue={initial.value ?? 1} className="btn sm" style={{ width: 80 }} /><select name="sendUnit" defaultValue={initial.unit ?? "hours"} className="btn sm"><option value="minutes">хвилин</option><option value="hours">годин</option><option value="days">днів</option></select></div>}
-      {mode === "exact" && <div className="row-actions"><span className="muted">день</span><input name="sendDay" type="number" min={0} defaultValue={initial.day ?? 1} className="btn sm" style={{ width: 70 }} /><span className="muted">після попереднього кроку (0 = того ж дня), о</span><input name="sendTime" type="time" defaultValue={initial.time ?? "12:00"} className="btn sm" /><span className="muted">за Києвом</span></div>}
+      {mode === "after" && <div className="row-actions"><span className="muted">через</span><input name="sendValue" type="number" min={0} defaultValue={initial.value ?? 1} className="input" style={{ width: 90 }} /><select name="sendUnit" defaultValue={initial.unit ?? "hours"} className="input" style={{ width: 120 }}><option value="minutes">хвилин</option><option value="hours">годин</option><option value="days">днів</option></select></div>}
+      {mode === "exact" && <div className="row-actions"><span className="muted">день</span><input name="sendDay" type="number" min={0} defaultValue={initial.day ?? 1} className="input" style={{ width: 80 }} /><span className="muted">після попереднього кроку (0 = того ж дня), о</span><input name="sendTime" type="time" defaultValue={initial.time ?? "12:00"} className="input" style={{ width: 120 }} /><span className="muted">за Києвом</span></div>}
     </div>
   );
 }
@@ -144,9 +145,9 @@ export function AutoDeleteFields({ initial }: { initial: { mode: string; value?:
   const [mode, setMode] = useState(initial.mode || "never");
   return (
     <div className="form">
-      <label className="field">Автовидалення повідомлення
+      <label className="fld"><span className="fld-l">Автовидалення повідомлення</span>
         <select name="autodeleteMode" value={mode} onChange={(e) => setMode(e.target.value)}><option value="never">Ніколи</option><option value="in">Через певний час (до 48 годин)</option></select></label>
-      {mode === "in" && <div className="row-actions"><span className="muted">через</span><input name="autodeleteValue" type="number" min={1} defaultValue={initial.value ?? 24} className="btn sm" style={{ width: 80 }} /><select name="autodeleteUnit" defaultValue={initial.unit ?? "hours"} className="btn sm"><option value="seconds">секунд</option><option value="minutes">хвилин</option><option value="hours">годин</option></select><span className="muted">Telegram дозволяє видаляти повідомлення бота лише впродовж 48 годин</span></div>}
+      {mode === "in" && <div className="row-actions"><span className="muted">через</span><input name="autodeleteValue" type="number" min={1} defaultValue={initial.value ?? 24} className="input" style={{ width: 90 }} /><select name="autodeleteUnit" defaultValue={initial.unit ?? "hours"} className="input" style={{ width: 120 }}><option value="seconds">секунд</option><option value="minutes">хвилин</option><option value="hours">годин</option></select><span className="muted">Telegram дозволяє видаляти повідомлення бота лише впродовж 48 годин</span></div>}
     </div>
   );
 }

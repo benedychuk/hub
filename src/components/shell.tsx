@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Search } from "lucide-react";
 import { Suspense } from "react";
 import NavLinks from "./nav-links";
 import { hasDb } from "@/db";
@@ -18,8 +19,8 @@ export default async function Shell({ title, children, counts }: { title: string
       <div className="main">
         <div className="top">
           <h1>{title}</h1>
-          <form className="search" action="/people"><span className="muted">⌕</span><input name="q" placeholder="Ім'я, username, telegram id, телефон…" aria-label="Пошук людини" /></form>
-          <span className={`badge ${ready ? "ok" : ""}`}>{ready ? "дані з ZenEdu · лише читання" : "налаштування не завершено"}</span>
+          <form className="search" action="/people"><Search size={15} className="muted" /><input name="q" placeholder="Знайти людину: ім’я, @username, telegram id, телефон" aria-label="Пошук людини" /></form>
+          {!ready && <Link href="/settings" className="badge">Налаштування не завершено</Link>}
         </div>
         <div className="page">{children}</div>
       </div>
