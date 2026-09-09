@@ -1,5 +1,5 @@
 "use server";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
@@ -231,4 +231,25 @@ export async function toggleBot(fd: FormData) {
   const key = str(fd, "key"); const on = fd.get("on") === "1";
   await db().update(botsT).set({ isActive: on }).where(eq(botsT.key, key));
   revalidatePath("/bots");
+}
+
+
+// ---------- канали ----------
+import { accessTick, reconcile as reconcileChannels, processGrants } from "./telegram-access";
+const { memberships: membershipsT } = schema;
+
+export async function saveChannelResource(fd: FormData) {
+  const key = str(fd, "key"); if (!key) return;
+  const [cur] = await db().select().from(resources).where(eq(resources.key, key));
+  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), graceDays: Number(fd.get("graceDays") || 0), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined };
+  await db().update(resources).set({ name: str(fd, "name") || cur?.name || key, config }).where(eq(resources.key, key));
+  revalidatePath("/resources");
+}
+export async function runAccessTickNow() { await accessTick(); revalidatePath("/resources"); }
+export async function runReconcileNow() { await reconcileChannels(); revalidatePath("/resources"); }
+export async function resendInvite(fd: FormData) {
+  const personId = Number(fd.get("personId")); const key = str(fd, "resourceKey");
+  await db().update(membershipsT).set({ status: "none", inviteLink: null, updatedAt: new Date() }).where(and(eq(membershipsT.personId, personId), eq(membershipsT.resourceKey, key)));
+  await processGrants(5);
+  revalidatePath(`/people/${personId}`);
 }

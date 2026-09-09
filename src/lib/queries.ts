@@ -86,7 +86,8 @@ export async function person(id: number) {
     const ev = await d.select().from(events).where(eq(events.personId, id)).orderBy(desc(events.createdAt)).limit(50);
     const idn = await d.select().from(identities).where(eq(identities.personId, id));
     const ents = await d.select().from(schema.entitlements).where(eq(schema.entitlements.personId, id)).orderBy(desc(schema.entitlements.createdAt));
-    return { p, subs, orders: ords, events: ev, identities: idn, entitlements: ents };
+    const mem = await d.select().from(schema.memberships).where(eq(schema.memberships.personId, id));
+    return { p, subs, orders: ords, events: ev, identities: idn, entitlements: ents, memberships: mem };
   }, null);
 }
 

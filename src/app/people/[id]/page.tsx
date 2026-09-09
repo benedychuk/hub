@@ -4,7 +4,7 @@ import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { navCounts, person, resourceList, hubFunnels } from "@/lib/queries";
 import { date, dateTime, fullName, money } from "@/lib/format";
-import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson, enrollToFunnel } from "@/lib/actions";
+import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson, enrollToFunnel, resendInvite } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,7 @@ export default async function Person({ params }: { params: Promise<{ id: string 
   const { id } = await params;
   const [counts, d, res, fun] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels()]);
   if (!d) notFound();
-  const { p, subs, orders, events, identities, entitlements } = d;
+  const { p, subs, orders, events, identities, entitlements, memberships } = d;
   const hub = identities.find((i) => i.botKey === "hub");
   const initials = fullName(p).split(" ").map((x) => x[0]).join("").slice(0, 2);
   return (
@@ -44,6 +44,11 @@ export default async function Person({ params }: { params: Promise<{ id: string 
             <select name="resourceKey" className="btn sm">{res.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</select>
             <input name="days" type="number" defaultValue={30} className="btn sm" style={{ width: 80 }} /> <span className="muted">днів</span>
             <button className="btn sm pri" type="submit">Видати доступ</button></form>) : <p className="note">Ресурси ще не створені: <Link href="/resources">Доступи</Link>.</p>}
+        </div>
+        <div className="card"><h3>Канали і групи</h3>
+          {memberships.length ? memberships.map((m) => <div key={m.id} className="ent"><span className={`dot ${m.status === "joined" ? "" : m.status === "invited" ? "warn" : "off"}`} /><div><b>{res.find((r) => r.key === m.resourceKey)?.name ?? m.resourceKey}</b><small>{m.status === "joined" ? `у каналі з ${date(m.joinedAt)}` : m.status === "invited" ? `посилання надіслано ${dateTime(m.invitedAt)}, діє до ${dateTime(m.inviteExpiresAt)}` : m.status === "kicked" ? `виключено ${date(m.kickedAt)}` : m.status === "left" ? `вийшла ${date(m.leftAt)}` : m.status}{m.note ? ` · ${m.note}` : ""}</small></div>
+            <form action={resendInvite}><input type="hidden" name="personId" value={p.id} /><input type="hidden" name="resourceKey" value={m.resourceKey} /><button className="btn sm" type="submit">Надіслати посилання ще раз</button></form></div>)
+            : <p className="muted">Ще не запрошувалась. Видайте право на канал нижче: посилання прийде протягом хвилини.</p>}
         </div>
         <div className="card"><h3>Платежі <span className="sub">{orders.length}</span></h3>
           <div className="tbl"><table><thead><tr><th>Дата</th><th>Оффер</th><th>Тип</th><th className="num">Сума</th><th>Статус</th></tr></thead><tbody>

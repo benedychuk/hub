@@ -3,6 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
 import { enroll, matchEntry, markClick } from "./funnels";
+import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
 const { persons, identities, subscriptions, plans, events, bots } = schema;
 
@@ -95,8 +96,17 @@ export function getBot() {
     await ctx.reply("Дякую! Повідомлення отримано, команда відповість у робочі години.");
   });
 
+  bot.on("chat_member", async (ctx) => {
+    const u = ctx.chatMember;
+    await onChatMember(u.chat.id, u.new_chat_member.user, u.new_chat_member.status, u.invite_link?.name);
+  });
+  bot.on("chat_join_request", async (ctx) => {
+    await onJoinRequest(ctx.chatJoinRequest.chat.id, ctx.chatJoinRequest.from);
+  });
+
   bot.on("my_chat_member", async (ctx) => {
     const st = ctx.myChatMember.new_chat_member.status;
+    if (ctx.myChatMember.chat.type !== "private") { await onMyChatMember(ctx.myChatMember.chat as { id: number; title?: string; type: string }, st); return; }
     const from = ctx.from; if (!from) return;
     const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, from.id));
     if (!p[0]) return;

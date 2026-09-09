@@ -154,6 +154,22 @@ export const entitlements = pgTable("entitlements", {
 }, (t) => [index("ent_person_idx").on(t.personId), index("ent_res_idx").on(t.resourceKey)]);
 
 // Події (оплата, повідомлення, вебхуки, дії адміна).
+export const memberships = pgTable("memberships", {
+  id: serial("id").primaryKey(),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  resourceKey: text("resource_key").notNull(),
+  status: text("status").notNull().default("none"),
+  inviteLink: text("invite_link"),
+  inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
+  invitedAt: timestamp("invited_at", { withTimezone: true }),
+  joinedAt: timestamp("joined_at", { withTimezone: true }),
+  leftAt: timestamp("left_at", { withTimezone: true }),
+  kickedAt: timestamp("kicked_at", { withTimezone: true }),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+  note: text("note"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("memberships_person_res_uidx").on(t.personId, t.resourceKey), index("memberships_status_idx").on(t.status)]);
+
 export const events = pgTable("events", {
   id: serial("id").primaryKey(),
   personId: integer("person_id").references(() => persons.id, { onDelete: "set null" }),
