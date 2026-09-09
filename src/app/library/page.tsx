@@ -1,6 +1,6 @@
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { navCounts, mediaList, adminTexts } from "@/lib/queries";
+import { navCounts, mediaList, adminTexts, recentSenders } from "@/lib/queries";
 import { deleteMedia, renameMedia } from "@/lib/actions";
 import { dateTime } from "@/lib/format";
 
@@ -8,10 +8,14 @@ export const dynamic = "force-dynamic";
 const LABEL: Record<string, string> = { video_note: "кружечок", photo: "фото", video: "відео", animation: "GIF", voice: "голосове", audio: "аудіо", document: "файл", sticker: "стікер" };
 
 export default async function Library() {
-  const [counts, med, texts] = await Promise.all([navCounts(), mediaList(), adminTexts()]);
+  const [counts, med, texts, senders] = await Promise.all([navCounts(), mediaList(), adminTexts(), recentSenders()]);
+  const adminId = String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "");
+  const adminWrote = senders.some((x) => String(x.tg) === adminId);
   return (
     <Shell title="Бібліотека" counts={counts}>
       <div className="alert">Сюди потрапляє все, що ви надсилаєте або пересилаєте в Hub-бот з акаунта адміністратора: медіа з номером для кроків воронок і розсилок, тексти для копіювання. Кнопки під пересланими повідомленнями Telegram не передає, їх треба відтворити в редакторі кроку.</div>
+      {!adminWrote && senders.length > 0 && <div className="alert bad">У змінній ADMIN_TELEGRAM_ID зараз «{adminId || "порожньо"}», але з цього акаунта в бот ніхто не писав. Останні відправники: {senders.map((x) => <span key={x.tg} className="mono" style={{ marginRight: 10 }}>{x.first_name ?? ""}{x.username ? " @" + x.username : ""} · id <b>{x.tg}</b> · {x.n} повідомл.{x.with_media ? ` · ${x.with_media} з медіа` : ""}</span>)}. Впишіть свій id у Vercel → Environment Variables → ADMIN_TELEGRAM_ID, зробіть Redeploy і перешліть медіа ще раз.</div>}
+      {adminWrote && !med.length && <div className="alert">Ваш акаунт впізнано, але медіа ще не збережено. Перешліть файли ще раз: бот має відповісти «Збережено в бібліотеку медіа».</div>}
       <div className="grid g12">
         <div className="card tbl"><h3>Медіа <span className="sub">{med.length}</span></h3>
           <table><thead><tr><th>#</th><th>Тип</th><th>Назва</th><th>Розмір</th><th>Додано</th><th></th></tr></thead><tbody>

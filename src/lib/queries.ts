@@ -184,3 +184,15 @@ export async function adminTexts() {
     return rows.map((r) => ({ id: r.id, at: r.createdAt, text: String((r.payload as { text?: string })?.text ?? ""), media: (r.payload as { media?: { kind: string } })?.media?.kind ?? null })).filter((r) => r.text);
   }, []);
 }
+
+/** Хто писав у Hub-бот останнім часом і чи були там медіа: для діагностики ADMIN_TELEGRAM_ID. */
+export async function recentSenders() {
+  return safe(async () => {
+    const rows = await db().execute(sql`
+      select p.telegram_user_id as tg, p.first_name, p.username, max(e.created_at) as last_at, count(*)::int as n,
+             count(*) filter (where e.payload->'media' is not null and e.payload->'media' <> 'null'::jsonb)::int as with_media
+      from events e join persons p on p.id = e.person_id
+      where e.type = 'bot.message' group by 1,2,3 order by last_at desc limit 8`);
+    return rows.rows as { tg: number; first_name: string | null; username: string | null; last_at: string; n: number; with_media: number }[];
+  }, []);
+}
