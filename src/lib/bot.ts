@@ -5,6 +5,8 @@ import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
 import { onBroadcastButton } from "./broadcasts";
 import { payLink, cancelAtEnd, resumeSub, paymentsAllowedFor } from "./payments";
+import { grantByLink, priceLabel, accessLabel } from "./offers";
+import { coverFile, escapeHtml } from "./funnels";
 import { enroll, matchEntry, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
@@ -49,6 +51,12 @@ export function getBot() {
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
     const payload = ctx.match?.toString() || "";
     await db().insert(events).values({ personId, type: "bot.start", source: "hub", payload: { payload } });
+    if (/^o_\d+$/.test(payload)) { await sendOfferMessage(ctx.chat.id, personId, Number(payload.slice(2))); return; } // оффер у боті: оформлення + кнопка оплати
+    if (payload.startsWith("g_")) { // посилання доступу до оффера без оплати
+      const r = await grantByLink(payload.slice(2), personId);
+      await ctx.reply(r.ok ? `Доступ до «${r.plan.name}» відкрито${r.until ? ` до ${r.until.toLocaleDateString("uk-UA")}` : ""}. Матеріали з'являться в цьому боті за хвилину.` : r.reason);
+      await processDue(5); return;
+    }
     if (payload) { const f = await matchEntry("start", payload); if (f) { if (await sendIntro(f.id, personId)) return; await enroll(f.id, personId, "start:" + payload); await processDue(5); return; } }
     if (await enrollDirectAccess(personId)) { await processDue(5); return; }
     const sub = await db().select().from(subscriptions).where(eq(subscriptions.personId, personId)).orderBy(desc(subscriptions.updatedAt)).limit(1);
@@ -62,29 +70,38 @@ export function getBot() {
   });
 
   type Ctx = { from?: { id: number; first_name?: string; last_name?: string; username?: string }; chat?: { id: number }; reply: (t: string, o?: object) => Promise<unknown> };
+  const periodWord = (days: number) => days >= 360 ? "рік" : days >= 90 ? `${Math.round(days / 30)} міс` : days >= 28 ? "міс" : days >= 7 ? `${Math.round(days / 7)} тиж` : `${days} дн`;
   const showSubs = async (ctx: Ctx) => {
     if (!ctx.from || !ctx.chat) return;
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
-    const subs = await db().select().from(subscriptions).where(eq(subscriptions.personId, personId)).orderBy(desc(subscriptions.updatedAt));
+    const subs = await db().select({ s: subscriptions, pl: plans }).from(subscriptions).leftJoin(plans, eq(plans.id, subscriptions.planId)).where(eq(subscriptions.personId, personId)).orderBy(desc(subscriptions.updatedAt));
     if (!subs.length) { await ctx.reply("Підписок поки немає. Натисніть «Тарифи», щоб обрати."); return; }
-    const lines = subs.map((s) => `• ${money(s.price, s.currency)} / ${s.periodDays >= 360 ? "рік" : s.periodDays >= 90 ? "3 міс" : s.periodDays <= 14 ? "2 тижні" : "міс"} — ${STATUS_UA[s.status] ?? s.status}` +
-      (s.currentPeriodEnd && ["active", "trialing", "past_due"].includes(s.status) ? `\n  наступне списання: ${s.currentPeriodEnd.toLocaleDateString("uk-UA")}` : "") +
-      `\n  оплат: ${s.paymentsCount} · джерело: ${s.source === "zenedu" ? "ZenEdu" : "Hub"}`);
-    const hub = subs.find((s) => s.source === "hub");
     const kb = new InlineKeyboard();
-    if (hub && ["active", "trialing", "past_due"].includes(hub.status)) {
-      if (hub.cancelAtPeriodEnd) kb.text("Відновити продовження", "sub:resume").row(); else kb.text("Вимкнути продовження", "sub:cancel").row();
-      const [pl] = hub.planId ? await db().select({ key: plans.key }).from(plans).where(eq(plans.id, hub.planId)) : [];
-      if (pl) kb.url("Змінити картку", payLink(personId, pl.key, "card")).row();
-    } else if (hub && ["expired", "cancelled", "paused"].includes(hub.status)) kb.text("Відновити підписку", "sub:resume").row();
+    const lines = subs.map(({ s, pl }) => {
+      const name = pl?.name ?? (s.source === "zenedu" ? "Підписка клубу" : "Підписка Hub");
+      const live = ["active", "trialing", "past_due"].includes(s.status);
+      const until = s.currentPeriodEnd ? s.currentPeriodEnd.toLocaleDateString("uk-UA") : null;
+      let line: string;
+      if (s.kind === "grant") line = `• ${name} — доступ ${until ? `до ${until}` : "безстроково"}${live ? "" : ` (${STATUS_UA[s.status] ?? s.status})`}`;
+      else if (s.kind === "one_time") line = `• ${name} — ${money(s.price, s.currency)} разово — ${STATUS_UA[s.status] ?? s.status}` + (until ? `\n  доступ до ${until}` : "");
+      else line = `• ${name} — ${money(s.price, s.currency)} / ${periodWord(s.periodDays)} — ${STATUS_UA[s.status] ?? s.status}` + (until && live ? `\n  наступне списання: ${until}` : "") + `\n  оплат: ${s.paymentsCount} · джерело: ${s.source === "zenedu" ? "ZenEdu" : "Hub"}`;
+      if (s.source === "hub" && s.kind === "subscription") {
+        if (live) {
+          if (s.cancelAtPeriodEnd) kb.text(`Відновити продовження: ${name}`, `sub:resume:${s.id}`).row(); else kb.text(`Вимкнути продовження: ${name}`, `sub:cancel:${s.id}`).row();
+          if (pl) kb.url(`Змінити картку: ${name}`, payLink(personId, pl.key, "card")).row();
+        } else if (["expired", "cancelled", "paused"].includes(s.status)) kb.text(`Відновити підписку: ${name}`, `sub:resume:${s.id}`).row();
+      }
+      return line + (s.cancelAtPeriodEnd && live ? "\n  продовження вимкнено: доступ до кінця оплаченого періоду" : "");
+    });
     kb.text("Тарифи", "plans");
-    await ctx.reply("Ваші підписки:\n\n" + lines.join("\n\n") + (hub?.cancelAtPeriodEnd ? "\n\nПродовження вимкнено: доступ до кінця оплаченого періоду." : ""), { reply_markup: kb });
+    await ctx.reply("Ваші підписки:\n\n" + lines.join("\n\n"), { reply_markup: kb });
   };
-  bot.callbackQuery(/^sub:(cancel|resume)$/, async (ctx) => {
+  bot.callbackQuery(/^sub:(cancel|resume)(?::(\d+))?$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from || !ctx.chat) return;
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
-    const [hub] = await db().select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub")));
+    const id = Number(ctx.match[2] ?? 0);
+    const [hub] = await db().select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub"), id ? eq(subscriptions.id, id) : eq(subscriptions.kind, "subscription"))).orderBy(desc(subscriptions.updatedAt)).limit(1);
     if (!hub) { await ctx.reply("Підписки Hub ще немає. Оберіть тариф: /plans"); return; }
     if (ctx.match[1] === "cancel") await cancelAtEnd(hub.id, "bot"); else await resumeSub(hub.id, "bot");
   });
@@ -94,14 +111,13 @@ export function getBot() {
   const showPlans = async (ctx: Ctx) => {
     if (!ctx.from || !ctx.chat) return;
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
-    const list = await db().select().from(plans).where(eq(plans.isActive, true)).orderBy(plans.sortOrder, plans.id);
+    const list = await db().select().from(plans).where(and(eq(plans.isActive, true), eq(plans.showInBot, true))).orderBy(plans.sortOrder, plans.id);
     if (!list.length) { await ctx.reply("Тарифи ще не налаштовані."); return; }
-    const per: Record<string, string> = { month: "міс", quarter: "3 міс", year: "рік" };
-    const text = list.map((p) => `${p.isFeatured ? "⭐ " : ""}${p.name} — ${money(p.price, p.currency)} / ${per[p.period] ?? p.period}` + (p.trialDays ? `\n  пробний: ${p.trialDays} дн${p.trialPrice ? ` за ${money(p.trialPrice, p.currency)}` : ""}` : "")).join("\n\n");
+    const text = list.map((p) => `${p.isFeatured ? "⭐ " : ""}${p.name} — ${priceLabel(p)}${p.paymentType === "one_time" ? ` разово · доступ ${accessLabel(p)}` : ""}` + (p.paymentType !== "one_time" && p.trialDays ? `\n  пробний: ${p.trialDays} дн${p.trialPrice ? ` за ${money(p.trialPrice, p.currency)}` : ""}` : "")).join("\n\n");
     const allowed = await paymentsAllowedFor(personId);
     if (!allowed) { await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата в цьому боті з'явиться після переїзду з ZenEdu."); return; }
     const kb = new InlineKeyboard();
-    for (const p of list) kb.url(`Оплатити: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
+    for (const p of list) kb.url(`${p.design?.buttonText || "Оплатити"}: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
     await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці WayForPay. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });
   };
   bot.command("plans", (ctx) => showPlans(ctx as unknown as Ctx));
@@ -177,6 +193,23 @@ export function getBot() {
   return bot;
 }
 
+/** Повідомлення оффера в боті (ZenEdu «Bot payment»): зображення, заголовок, опис, ціна й персональна кнопка оплати. */
+export async function sendOfferMessage(chatId: number, personId: number, planId: number) {
+  const api = getBot().api;
+  const [pl] = await db().select().from(plans).where(eq(plans.id, planId));
+  if (!pl || !pl.isActive) { await api.sendMessage(chatId, "Цей оффер зараз недоступний."); return false; }
+  const d = pl.design ?? {};
+  const title = d.titleMode === "custom" && d.title ? d.title : pl.name;
+  const allowed = await paymentsAllowedFor(personId);
+  const text = `<b>${escapeHtml(title)}</b>` + (d.description ? "\n\n" + d.description : "") + `\n\n${escapeHtml(priceLabel(pl))}${pl.paymentType === "one_time" ? ` · доступ ${escapeHtml(accessLabel(pl))}` : ""}` + (allowed ? "" : "\n\nОплата в цьому боті з'явиться після переїзду з ZenEdu.");
+  const kb = allowed ? new InlineKeyboard().url(d.buttonText || "Оплатити", payLink(personId, pl.key, "first")) : undefined;
+  const photo = coverFile(d.image);
+  if (photo && text.length <= 1024) await api.sendPhoto(chatId, photo, { caption: text, parse_mode: "HTML", reply_markup: kb });
+  else { if (photo) await api.sendPhoto(chatId, photo); await api.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: kb, link_preview_options: { is_disabled: true } }); }
+  await db().insert(events).values({ personId, type: "offer.shown", source: "hub", payload: { planId } });
+  return true;
+}
+
 export function botWebhook() {
   return webhookCallback(getBot(), "std/http", { secretToken: webhookSecret() });
 }
@@ -200,12 +233,12 @@ export async function webhookInfo() {
   try { return await getBot().api.getWebhookInfo(); } catch (e) { return { error: String(e) }; }
 }
 
-export async function sendToPerson(personId: number, text: string, opts: { buttons?: { text: string; url: string }[]; protect?: boolean; disablePreview?: boolean } = {}) {
+export async function sendToPerson(personId: number, text: string, opts: { buttons?: { text: string; url: string }[]; protect?: boolean; disablePreview?: boolean; html?: boolean } = {}) {
   const idn = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
   if (!idn[0]?.chatId || idn[0].blockedAt) return false;
   const kb = opts.buttons?.length ? new InlineKeyboard() : undefined;
   opts.buttons?.forEach((b) => kb!.url(b.text, b.url).row());
-  await getBot().api.sendMessage(idn[0].chatId, text, { reply_markup: kb, protect_content: opts.protect, link_preview_options: { is_disabled: opts.disablePreview ?? true } });
+  await getBot().api.sendMessage(idn[0].chatId, text, { reply_markup: kb, protect_content: opts.protect, parse_mode: opts.html ? "HTML" : undefined, link_preview_options: { is_disabled: opts.disablePreview ?? true } });
   return true;
 }
 

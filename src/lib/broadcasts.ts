@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import { GrammyError, InlineKeyboard, InputMediaBuilder } from "grammy";
 import { createHmac } from "crypto";
 import { db, schema } from "@/db";
+import { payLink } from "./payments";
 import type { BroadcastAudience, BroadcastButton } from "@/db/schema";
 import { getBot, BOT_KEY, appUrl, botToken } from "./bot";
 import { adminTelegramId } from "./auth";
@@ -100,8 +101,8 @@ export function keyboardFor(b: Broadcast, ref: { kind: "r" | "p"; id: number }) 
     type Btn = Parameters<InlineKeyboard["add"]>[0];
     let row: Btn;
     if (btn.type === "link" || btn.type === "payment") {
-      const url = btn.url && /^https?:\/\//i.test(btn.url) ? btn.url : "";
-      row = btn.directLink && url ? { text: btn.text, url } : url ? { text: btn.text, url: `${appUrl()}/r/${linkToken(ref.kind, ref.id, i)}` } : { text: btn.text, callback_data: cb };
+      const url = btn.url && (/^https?:\/\//i.test(btn.url) || btn.url.startsWith("hub:")) ? btn.url : ""; // hub:<key> — оффер Hub, персональне посилання підставляється при кліку
+      row = btn.directLink && url && !url.startsWith("hub:") ? { text: btn.text, url } : url ? { text: btn.text, url: `${appUrl()}/r/${linkToken(ref.kind, ref.id, i)}` } : { text: btn.text, callback_data: cb };
     } else if (btn.type === "miniapp" && btn.url) row = { text: btn.text, web_app: { url: btn.url } };
     else row = { text: btn.text, callback_data: cb };
     kb.add(style ? { ...row, style } : row).row();
@@ -258,7 +259,9 @@ export async function resolveLink(token: string) {
   const t = parseLinkToken(token); if (!t) return null;
   if (t.kind === "p") { const [b] = await db().select().from(broadcasts).where(eq(broadcasts.id, t.id)); return b?.buttons?.[t.btn]?.url ?? null; }
   const res = await recordClick(t.id, t.btn);
-  return res?.button?.url ?? null;
+  const url = res?.button?.url ?? null;
+  if (url?.startsWith("hub:") && res) return payLink(res.r.personId, url.slice(4), "first"); // оффер Hub: персональне посилання на оплату
+  return url;
 }
 
 /** Кнопка-дія (callback bc:<recipientId>:<idx> або bcp:<broadcastId>:<idx> для перегляду). Повертає текст відповіді або null. */

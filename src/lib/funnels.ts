@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, sql } from "drizzl
 import { InlineKeyboard, InputFile, InputMediaBuilder } from "grammy";
 import { db, schema } from "@/db";
 import { getBot, BOT_KEY } from "./bot";
+import { payLink } from "./payments";
 
 const { funnels, funnelSteps, funnelEnrollments, funnelDeliveries, funnelCommands, identities, events, persons, media } = schema;
 
@@ -17,7 +18,7 @@ export const STEP_TYPES: { key: StepType; label: string; hint: string }[] = [
 
 export const STEP_ICON: Record<string, string> = { message: "✉", lesson: "🎓", assignment: "📝", survey: "📊", quiz: "✅", question: "❓" };
 
-export type SendTime = { mode: "no" | "immediately" | "after" | "exact"; value?: number; unit?: "minutes" | "hours" | "days"; day?: number; time?: string };
+export type SendTime = { mode: "no" | "immediately" | "after" | "exact" | "after_action"; value?: number; unit?: "minutes" | "hours" | "days"; day?: number; time?: string };
 export type AutoDelete = { mode: "never" | "in"; value?: number; unit?: "seconds" | "minutes" | "hours" };
 export type StepButton = { text: string; kind: "url" | "step" | "next" | "funnel" | "offer" | "tag" | "option"; target?: string; tag?: string; correct?: boolean };
 export type StepConfig = {
@@ -55,7 +56,7 @@ export function applyQuietHours(t: Date, quiet: boolean) {
 /** Коли надсилати крок, якщо попередній надіслано в base. null = не надсилати автоматично («No»). */
 export function scheduleFor(c: StepConfig, base: Date, quiet = false): Date | null {
   const st = c.sendTime ?? { mode: "immediately" };
-  if (st.mode === "no") return null;
+  if (st.mode === "no" || st.mode === "after_action") return null;
   if (st.mode === "immediately") return base;
   if (st.mode === "after") return applyQuietHours(new Date(base.getTime() + (st.value ?? 0) * UNIT_MS[st.unit ?? "hours"]), quiet || Boolean(c.quietHours));
   // exact: день N після base о HH:MM за Києвом (день 0 = того самого дня, якщо час ще попереду)
@@ -70,6 +71,7 @@ export function sendTimeLabel(c: StepConfig) {
   const st = c.sendTime ?? { mode: "immediately" };
   const u: Record<string, string> = { minutes: "хв", hours: "год", days: "дн" };
   if (st.mode === "no") return "Ні";
+  if (st.mode === "after_action") return "Після дії";
   if (st.mode === "immediately") return "Одразу";
   if (st.mode === "after") return `Через ${st.value ?? 0} ${u[st.unit ?? "hours"]}`;
   return `День ${st.day ?? 1} о ${st.time ?? "12:00"}`;
@@ -93,7 +95,7 @@ async function activeSteps(funnelId: number) {
 
 /** Перший крок після позиції pos, який надсилається автоматично (send time ≠ «Ні»). */
 function nextAuto(steps: typeof funnelSteps.$inferSelect[], afterIdx: number) {
-  for (let i = afterIdx + 1; i < steps.length; i++) if (((steps[i].config ?? {}) as StepConfig).sendTime?.mode !== "no") return { step: steps[i], idx: i };
+  for (let i = afterIdx + 1; i < steps.length; i++) { const m = ((steps[i].config ?? {}) as StepConfig).sendTime?.mode; if (m !== "no" && m !== "after_action") return { step: steps[i], idx: i }; }
   return null;
 }
 
@@ -109,11 +111,40 @@ export async function enroll(funnelId: number, personId: number, reason = "manua
   const first = nextAuto(steps, -1);
   const now = new Date();
   const nextAt = first ? scheduleFor((first.step.config ?? {}) as StepConfig, now, fs.quietHours) : null;
-  const [e] = await d.insert(funnelEnrollments).values({ funnelId, personId, nextPosition: first?.step.position ?? 0, nextAt, status: first ? "active" : "done", lastStepAt: now, finishedAt: first ? null : now }).returning();
+  const product = f.kind === "product"; // продукт: доступ триває, поки є право, навіть без автоматичних кроків
+  const [e] = await d.insert(funnelEnrollments).values({ funnelId, personId, nextPosition: first?.step.position ?? 0, nextAt, status: first || product ? "active" : "done", lastStepAt: now, finishedAt: first || product ? null : now }).returning();
   await d.insert(events).values({ personId, type: "funnel.enrolled", source: "hub", payload: { funnelId, name: f.name, reason } });
   await d.update(funnels).set({ subscribersCount: sql`(select count(distinct person_id)::int from funnel_enrollments where funnel_id = ${funnelId})` }).where(eq(funnels.id, funnelId));
   await applyMenu(personId);
   return e;
+}
+
+/** Доступ до продукту повернувся (нова оплата, посилання доступу): відновлює зупинене проходження або створює нове. */
+export async function reactivateOrEnroll(funnelId: number, personId: number, reason = "offer") {
+  const d = db();
+  const [f] = await d.select().from(funnels).where(eq(funnels.id, funnelId)); if (!f || !f.isActive) return null;
+  const [existing] = await d.select().from(funnelEnrollments).where(and(eq(funnelEnrollments.funnelId, funnelId), eq(funnelEnrollments.personId, personId))).orderBy(desc(funnelEnrollments.startedAt)).limit(1);
+  if (existing?.status === "active") return existing;
+  if (!existing) return enroll(funnelId, personId, reason);
+  const [delivered] = await d.select({ c: sql<number>`count(*)::int` }).from(funnelDeliveries).where(eq(funnelDeliveries.enrollmentId, existing.id));
+  const steps = await activeSteps(funnelId); const now = new Date();
+  // нічого не надсилали (доступ скінчився раніше за перший крок) — починаємо спочатку; інакше лише повертаємо доступ до меню й кнопок
+  const first = delivered.c === 0 ? nextAuto(steps, -1) : null;
+  const [e] = await d.update(funnelEnrollments).set({ status: "active", finishedAt: null, stopReason: null, nextPosition: first ? first.step.position : existing.nextPosition, nextAt: first ? scheduleFor((first.step.config ?? {}) as StepConfig, now, ((f.settings ?? {}) as FunnelSettings).quietHours) : existing.nextAt }).where(eq(funnelEnrollments.id, existing.id)).returning();
+  await d.insert(events).values({ personId, type: "funnel.enrolled", source: "hub", payload: { funnelId, name: f.name, reason, resumed: true } });
+  await applyMenu(personId);
+  return e;
+}
+/** Видаляє з бота всі надіслані кроки проходження (оффер: «прибрати контент після закінчення доступу»). */
+export async function deleteDelivered(enrollmentId: number) {
+  const d = db();
+  const rows = await d.select({ dl: funnelDeliveries, chatId: identities.chatId }).from(funnelDeliveries).innerJoin(identities, and(eq(identities.personId, funnelDeliveries.personId), eq(identities.botKey, BOT_KEY))).where(and(eq(funnelDeliveries.enrollmentId, enrollmentId), isNull(funnelDeliveries.deletedAt)));
+  let n = 0;
+  for (const { dl, chatId } of rows) {
+    for (const mid of [dl.telegramMessageId, ...(dl.extraMessageIds ?? [])]) { if (mid && chatId) { await getBot().api.deleteMessage(chatId, mid).catch(() => null); n++; } }
+    await d.update(funnelDeliveries).set({ deletedAt: new Date() }).where(eq(funnelDeliveries.id, dl.id));
+  }
+  return n;
 }
 
 export async function stopEnrollment(id: number, reason: string) {
@@ -127,11 +158,12 @@ export async function stopAllForPerson(personId: number, reason: string) {
   return rows.length;
 }
 
-function keyboardFor(step: typeof funnelSteps.$inferSelect, c: StepConfig) {
+function keyboardFor(step: typeof funnelSteps.$inferSelect, c: StepConfig, personId: number) {
   if (!c.buttons?.length) return undefined;
   const kb = new InlineKeyboard();
   c.buttons.forEach((b, i) => {
-    if ((b.kind === "url" || b.kind === "offer") && b.target) kb.url(b.text, b.target).row();
+    if (b.kind === "offer" && b.target?.startsWith("hub:")) kb.url(b.text, payLink(personId, b.target.slice(4), "first")).row(); // оффер Hub: персональне посилання на оплату
+    else if ((b.kind === "url" || b.kind === "offer") && b.target) kb.url(b.text, b.target).row();
     else kb.text(b.text, `fs:${step.id}:${i}`).row();
   });
   return kb;
@@ -143,7 +175,7 @@ export async function sendStep(personId: number, step: typeof funnelSteps.$infer
   const [idn] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
   if (!idn?.chatId || idn.blockedAt) return null;
   const api = getBot().api; const chat = idn.chatId;
-  const kb = keyboardFor(step, c);
+  const kb = keyboardFor(step, c, personId);
   const protect = Boolean(c.protect || funnelProtect);
   const [f] = await db().select({ settings: funnels.settings }).from(funnels).where(eq(funnels.id, step.funnelId));
   const lessonTitles = Boolean(((f?.settings ?? {}) as FunnelSettings).lessonTitles);
@@ -266,8 +298,8 @@ export async function sendStepNow(funnelId: number, stepId: number, personId: nu
 /** Вхід за ключовим словом або payload /start (f_<id> або власний параметр). */
 export async function matchEntry(kind: "start" | "keyword", value: string) {
   const v = value.trim().toLowerCase(); if (!v) return null;
-  if (kind === "start" && /^f_\d+$/.test(v)) { const [f] = await db().select().from(funnels).where(and(eq(funnels.id, Number(v.slice(2))), eq(funnels.isActive, true))); return f ?? null; }
-  const all = await db().select().from(funnels).where(and(eq(funnels.isActive, true), eq(funnels.source, "hub")));
+  if (kind === "start" && /^f_\d+$/.test(v)) { const [f] = await db().select().from(funnels).where(and(eq(funnels.id, Number(v.slice(2))), eq(funnels.isActive, true), eq(funnels.kind, "funnel"))); return f ?? null; }
+  const all = await db().select().from(funnels).where(and(eq(funnels.isActive, true), eq(funnels.source, "hub"), eq(funnels.kind, "funnel")));
   for (const f of all) {
     const s = (f.settings ?? {}) as FunnelSettings;
     if (kind === "start" && s.entryKind === "start" && (s.entryValue ?? "").toLowerCase() === v) return f;
@@ -278,10 +310,18 @@ export async function matchEntry(kind: "start" | "keyword", value: string) {
 
 /** Воронки з доступом «після прямої підписки на бота»: людина потрапляє в них на /start без параметра. */
 export async function enrollDirectAccess(personId: number) {
-  const all = await db().select().from(funnels).where(and(eq(funnels.isActive, true), eq(funnels.source, "hub")));
+  const all = await db().select().from(funnels).where(and(eq(funnels.isActive, true), eq(funnels.source, "hub"), eq(funnels.kind, "funnel")));
   let n = 0;
   for (const f of all) if (((f.settings ?? {}) as FunnelSettings).accessDirect) { if (await enroll(f.id, personId, "direct")) n++; }
   return n;
+}
+
+/** Крок «після дії»: коли людина відповіла або натиснула кнопку, надсилаємо наступний крок, якщо в нього режим «Після дії». */
+async function triggerAfterAction(funnelId: number, stepId: number, personId: number) {
+  const steps = await activeSteps(funnelId);
+  const idx = steps.findIndex((s) => s.id === stepId);
+  const next = idx >= 0 ? steps[idx + 1] : undefined;
+  if (next && ((next.config ?? {}) as StepConfig).sendTime?.mode === "after_action") await sendStepNow(funnelId, next.id, personId);
 }
 
 /** Клік по кнопці кроку. */
@@ -302,9 +342,11 @@ export async function onButtonClick(stepId: number, btnIdx: number, personId: nu
     await d.insert(events).values({ personId, type: "funnel.answer", source: "funnel", payload: { stepId, stepType: step.type, answer: b.text, correct: b.correct ?? null } });
     if (c.saveTo) await d.update(persons).set({ customFields: sql`coalesce(${persons.customFields}, '{}'::jsonb) || ${JSON.stringify({ [c.saveTo]: b.text })}::jsonb` }).where(eq(persons.id, personId));
     await d.update(funnelEnrollments).set({ awaitingStepId: null }).where(and(eq(funnelEnrollments.funnelId, step.funnelId), eq(funnelEnrollments.personId, personId)));
+    await triggerAfterAction(step.funnelId, step.id, personId);
     if (step.type === "quiz") return b.correct ? (c.correctText || "✅ Правильно!") : (c.wrongText || "❌ Не зовсім. Спробуй ще раз або рухаймося далі.");
     return null;
   }
+  if (b.kind === "tag") await triggerAfterAction(step.funnelId, step.id, personId);
   if (b.kind === "next") { const n = steps[idx + 1]; if (n) await sendStepNow(step.funnelId, n.id, personId); }
   else if (b.kind === "step" && b.target) await sendStepNow(step.funnelId, Number(b.target), personId);
   else if (b.kind === "funnel" && b.target) { const [enr] = await d.select().from(funnelEnrollments).where(and(eq(funnelEnrollments.funnelId, step.funnelId), eq(funnelEnrollments.personId, personId), eq(funnelEnrollments.status, "active"))); if (enr) await stopEnrollment(enr.id, "button"); await enroll(Number(b.target), personId, "button"); await processDue(5); }
@@ -323,6 +365,7 @@ export async function onFreeText(personId: number, text: string): Promise<boolea
   await d.insert(events).values({ personId, type: step.type === "assignment" ? "funnel.assignment" : "funnel.answer", source: "funnel", payload: { stepId: step.id, stepType: step.type, answer: text } });
   if (c.saveTo) await d.update(persons).set({ customFields: sql`coalesce(${persons.customFields}, '{}'::jsonb) || ${JSON.stringify({ [c.saveTo]: text })}::jsonb` }).where(eq(persons.id, personId));
   await d.update(funnelEnrollments).set({ awaitingStepId: null }).where(eq(funnelEnrollments.id, enr.id));
+  await triggerAfterAction(step.funnelId, step.id, personId);
   return true;
 }
 
@@ -342,7 +385,7 @@ export async function onCommand(personId: number, command: string): Promise<stri
 }
 
 /** Декодує обкладинку з data URL у буфер для sendPhoto. */
-function coverFile(cover: string | null | undefined) {
+export function coverFile(cover: string | null | undefined) {
   const m = cover?.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
   if (!m) return null;
   return new InputFile(Buffer.from(m[2], "base64"), m[1] === "image/png" ? "cover.png" : m[1] === "image/webp" ? "cover.webp" : "cover.jpg");

@@ -1,3 +1,5 @@
+import { and, eq, isNull } from "drizzle-orm";
+import { db, schema } from "@/db";
 import { beginPayment, parsePayToken } from "@/lib/payments";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +12,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ plan: st
   const personId = parsePayToken(url.searchParams.get("u") ?? undefined, plan, kind);
   if (!personId) return Response.redirect(`${url.origin}/pay/${encodeURIComponent(plan)}?err=${encodeURIComponent("Посилання недійсне")}`, 302);
   try {
+    const email = (url.searchParams.get("email") ?? "").trim().toLowerCase();
+    if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) await db().update(schema.persons).set({ email, updatedAt: new Date() }).where(and(eq(schema.persons.id, personId), isNull(schema.persons.email))); // збір контактів: email з форми оплати
     const { form } = await beginPayment(personId, plan, kind);
     const inputs = Object.entries(form.fields).flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((x) => `<input type="hidden" name="${esc(k)}" value="${esc(String(x))}">`)).join("");
     const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8"><title>Перехід до оплати</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;display:grid;place-items:center;min-height:100vh;margin:0;color:#282b2b}p{color:#8a9399}</style></head><body><div><p>Перенаправляємо на захищену сторінку оплати WayForPay…</p><form id="f" method="POST" action="${form.action}" accept-charset="utf-8">${inputs}<noscript><button type="submit">Перейти до оплати</button></noscript></form></div><script>document.getElementById("f").submit()</script></body></html>`;

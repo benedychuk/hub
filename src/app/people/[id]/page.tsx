@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { X, Plus, Send, KeyRound, MessageSquare, History } from "lucide-react";
+import { X, Plus, Send, KeyRound, MessageSquare, History, Gift, Tag } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { PageHeader, Section, Field, FormRow, Row, Timeline, EmptyState, KV } from "@/components/ui/layout";
-import { navCounts, person, resourceList, hubFunnels, personPayments } from "@/lib/queries";
+import { navCounts, person, resourceList, hubFunnels, personPayments, productPicker } from "@/lib/queries";
 import { Kebab, MenuAction, MenuLink } from "@/components/ui/controls";
-import { subscriptionAction, refundPayment } from "@/lib/actions";
+import { subscriptionAction, refundPayment, grantOfferToPerson } from "@/lib/actions";
+import { Modal } from "@/components/modal";
 import { payLink } from "@/lib/payments";
 import { Alert } from "@/components/ui/layout";
 import { CreditCard, Pause, Play, XCircle, RefreshCw, Undo2 } from "lucide-react";
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Person({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ ok?: string; err?: string }> }) {
   const { id } = await params; const sp = await searchParams;
-  const [counts, d, res, fun, pay] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels(), personPayments(Number(id))]);
+  const [counts, d, res, fun, pay, prods] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels(), personPayments(Number(id)), productPicker()]);
   if (!d) notFound();
   const { p, subs, orders, events, identities, entitlements, memberships } = d;
   const hub = identities.find((i) => i.botKey === "hub");
@@ -46,16 +47,26 @@ export default async function Person({ params, searchParams }: { params: Promise
         </div>
       </Section>
       <div className="grid g2" style={{ marginTop: 16 }}>
-        <Section title="Підписки" actions={pay.sub ? <Kebab label="Керувати">
-            {["active", "trialing"].includes(pay.sub.status) && !pay.sub.cancelAtPeriodEnd && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "cancel" }} icon={<XCircle />} confirm="Вимкнути продовження? Доступ лишиться до кінця оплаченого періоду.">Вимкнути продовження</MenuAction>}
-            {(pay.sub.cancelAtPeriodEnd || ["paused", "cancelled", "expired"].includes(pay.sub.status)) && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "resume" }} icon={<Play />}>Відновити</MenuAction>}
-            {["active", "trialing", "past_due"].includes(pay.sub.status) && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "pause" }} icon={<Pause />} confirm="Поставити на паузу? Доступ закриється одразу, списань не буде до відновлення.">Пауза</MenuAction>}
-            {pay.sub.paymentMethodId && <MenuAction action={subscriptionAction} fields={{ id: pay.sub.id, personId: p.id, act: "charge" }} icon={<RefreshCw />} confirm={`Списати ${money(pay.sub.price, pay.sub.currency)} зараз?`}>Списати зараз</MenuAction>}
-            {pay.plan && <MenuLink href={payLink(p.id, pay.plan.key, "card")} icon={<CreditCard />} external>Посилання на зміну картки</MenuLink>}
-          </Kebab> : undefined}>
-          {subs.length ? subs.map((s) => <Row key={s.id} tone={["active", "trialing", "past_due"].includes(s.status) ? "on" : "off"} title={<>{money(s.price, s.currency)} / {period(s.periodDays)} <Pill status={s.status} />{s.source === "hub" && s.cancelAtPeriodEnd && <Pill tone="warn">до кінця періоду</Pill>}</>} sub={`${s.source === "zenedu" ? "списує ZenEdu" : "списує Hub"} · до ${date(s.currentPeriodEnd)} · оплат ${s.paymentsCount} · з ${date(s.startedAt)}${s.source === "hub" && s.nextChargeAt ? ` · наступне списання ${dateTime(s.nextChargeAt)}` : ""}${s.source === "hub" && s.retryCount ? ` · невдалих спроб ${s.retryCount}` : ""}`} />)
+        <Section title="Підписки" actions={pay.offers.length ? <Modal title="Дати доступ без оплати" width={460} trigger={<button type="button" className="btn sm"><Gift size={15} /> Дати доступ</button>}>
+            <form action={grantOfferToPerson} className="form"><input type="hidden" name="personId" value={p.id} />
+              <Field label="Оффер"><select name="planId">{pay.offers.map((o) => <option key={o.id} value={o.id}>{o.name}{o.paymentType === "one_time" ? " · разово" : " · підписка"}</option>)}</select></Field>
+              <Field label="Доступ до" hint="порожньо = за правилами оффера"><input name="until" type="date" /></Field>
+              <p className="fld-h" style={{ margin: 0 }}>Продукти оффера з’являться в Hub-боті людини; канали підключаться, лише якщо для них увімкнено автоматику доступу.</p>
+              <div className="modal-f"><button className="btn pri" type="submit">Відкрити доступ</button></div>
+            </form></Modal> : undefined}>
+          {subs.length ? subs.map((s) => { const plan = pay.hubSubs.find((x) => x.s.id === s.id)?.plan ?? null; const live = ["active", "trialing", "past_due"].includes(s.status); return <Row key={s.id} tone={live ? "on" : "off"}
+            title={<>{plan ? `${plan.name} · ` : ""}{s.kind === "grant" ? "доступ без оплати" : s.kind === "one_time" ? `${money(s.price, s.currency)} разово` : <>{money(s.price, s.currency)} / {period(s.periodDays)}</>} <Pill status={s.status} />{s.source === "hub" && s.cancelAtPeriodEnd && <Pill tone="warn">до кінця періоду</Pill>}</>}
+            sub={`${s.source === "zenedu" ? "списує ZenEdu" : s.kind === "subscription" ? "списує Hub" : "Hub"} · ${s.currentPeriodEnd ? `до ${date(s.currentPeriodEnd)}` : "безстроково"} · оплат ${s.paymentsCount} · з ${date(s.startedAt)}${s.source === "hub" && s.nextChargeAt ? ` · наступне списання ${dateTime(s.nextChargeAt)}` : ""}${s.source === "hub" && s.retryCount ? ` · невдалих спроб ${s.retryCount}` : ""}`}
+            right={s.source === "hub" ? <Kebab>
+              {s.kind === "subscription" && ["active", "trialing"].includes(s.status) && !s.cancelAtPeriodEnd && <MenuAction action={subscriptionAction} fields={{ id: s.id, personId: p.id, act: "cancel" }} icon={<XCircle />} confirm="Вимкнути продовження? Доступ лишиться до кінця оплаченого періоду.">Вимкнути продовження</MenuAction>}
+              {s.kind === "subscription" && (s.cancelAtPeriodEnd || ["paused", "cancelled", "expired"].includes(s.status)) && <MenuAction action={subscriptionAction} fields={{ id: s.id, personId: p.id, act: "resume" }} icon={<Play />}>Відновити</MenuAction>}
+              {live && <MenuAction action={subscriptionAction} fields={{ id: s.id, personId: p.id, act: "pause" }} icon={<Pause />} confirm="Поставити на паузу? Доступ закриється одразу, списань не буде до відновлення.">Пауза</MenuAction>}
+              {s.kind === "subscription" && s.paymentMethodId && <MenuAction action={subscriptionAction} fields={{ id: s.id, personId: p.id, act: "charge" }} icon={<RefreshCw />} confirm={`Списати ${money(s.price, s.currency)} зараз?`}>Списати зараз</MenuAction>}
+              {plan && s.kind === "subscription" && <MenuLink href={payLink(p.id, plan.key, "card")} icon={<CreditCard />} external>Посилання на зміну картки</MenuLink>}
+              {plan && <MenuLink href={`/offers/${plan.id}`} icon={<Tag />}>Відкрити оффер</MenuLink>}
+            </Kebab> : undefined} />; })
             : <EmptyState title="Підписок немає" />}
-          {pay.cards.length > 0 && <div style={{ marginTop: 10 }}>{pay.cards.map((c) => <Row key={c.id} icon={<CreditCard size={14} />} tone={c.isActive && !c.failedAt ? "on" : "off"} title={`${c.cardPan ?? "картка"} ${c.cardType ?? ""}`} sub={`${c.bank ?? ""}${c.failedAt ? " · останнє списання не пройшло" : ""} · додано ${date(c.createdAt)}`} right={pay.sub?.paymentMethodId === c.id ? <Pill tone="good">основна</Pill> : undefined} />)}</div>}
+          {pay.cards.length > 0 && <div style={{ marginTop: 10 }}>{pay.cards.map((c) => <Row key={c.id} icon={<CreditCard size={14} />} tone={c.isActive && !c.failedAt ? "on" : "off"} title={`${c.cardPan ?? "картка"} ${c.cardType ?? ""}`} sub={`${c.bank ?? ""}${c.failedAt ? " · останнє списання не пройшло" : ""} · додано ${date(c.createdAt)}`} right={pay.primaryCard === c.id ? <Pill tone="good">основна</Pill> : undefined} />)}</div>}
           {pay.attempts.length > 0 && <div className="tbl" style={{ marginTop: 10 }}><table><thead><tr><th>Коли</th><th>Тип</th><th className="num">Сума</th><th>Стан</th><th></th></tr></thead><tbody>{pay.attempts.slice(0, 8).map((a) => <tr key={a.id}><td className="mono">{dateTime(a.createdAt)}</td><td>{({ first: "перша оплата", renewal: "автосписання", manual: "поновлення", card: "зміна картки", migrate: "переїзд" } as Record<string, string>)[a.kind] ?? a.kind}{a.mode === "test" ? " · тест" : ""}</td><td className="num">{money(a.amount, a.currency)}</td><td><Pill tone={a.status === "approved" ? "good" : a.status === "pending" ? "warn" : a.status === "refunded" ? "moon" : "crit"}>{a.status}</Pill>{a.reason && a.status !== "approved" ? <div className="fld-h">{a.reason}</div> : null}</td><td>{a.status === "approved" && ["first", "renewal", "manual"].includes(a.kind) && <form action={refundPayment}><input type="hidden" name="id" value={a.id} /><input type="hidden" name="back" value={`/people/${p.id}`} /><button className="btn sm ghost" type="submit"><Undo2 size={13} /> Повернути</button></form>}</td></tr>)}</tbody></table></div>}
         </Section>
         <Section title="Права доступу" description="Ручні права поверх підписки: діють до вказаної дати.">
@@ -63,7 +74,7 @@ export default async function Person({ params, searchParams }: { params: Promise
             right={<form action={revokeEntitlement}><input type="hidden" name="personId" value={p.id} /><input type="hidden" name="id" value={e.id} /><button className="btn sm danger ghost" type="submit">Забрати</button></form>} />)}
           {!entitlements.filter((e) => !e.revokedAt).length && <p className="fld-h">Ручних прав немає.</p>}
           {res.length ? (<form action={grantEntitlement} style={{ marginTop: 12 }}><input type="hidden" name="personId" value={p.id} />
-            <FormRow cols={3}><Field label="Продукт"><select name="resourceKey">{res.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</select></Field><Field label="На скільки днів"><input name="days" type="number" defaultValue={30} /></Field><div className="fld"><span className="fld-l">&nbsp;</span><button className="btn" type="submit"><KeyRound size={15} /> Видати доступ</button></div></FormRow></form>) : <p className="fld-h">Продукти ще не створені: <Link href="/resources">Канали і групи</Link>.</p>}
+            <FormRow cols={3}><Field label="Ресурс"><select name="resourceKey">{prods.length > 0 && <optgroup label="Цифрові продукти">{prods.map((x) => <option key={"p" + x.id} value={`product:${x.id}`}>{x.name}</option>)}</optgroup>}<optgroup label="Канали, групи, функції">{res.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</optgroup></select></Field><Field label="На скільки днів"><input name="days" type="number" defaultValue={30} /></Field><div className="fld"><span className="fld-l">&nbsp;</span><button className="btn" type="submit"><KeyRound size={15} /> Видати доступ</button></div></FormRow></form>) : <p className="fld-h">Ресурсів ще немає: <Link href="/resources">Канали і групи</Link> або <Link href="/products">Цифрові продукти</Link>.</p>}
         </Section>
         <Section title="Канали і групи">
           {memberships.length ? memberships.map((m) => <Row key={m.id} tone={m.status === "joined" ? "on" : m.status === "invited" ? "warn" : "off"} title={res.find((r) => r.key === m.resourceKey)?.name ?? m.resourceKey}

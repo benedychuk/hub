@@ -16,9 +16,10 @@ export async function navCounts() {
     const d = db();
     const [p] = await d.select({ c: count() }).from(persons);
     const [s] = await d.select({ c: count() }).from(subscriptions).where(inArray(subscriptions.status, ACTIVE));
-    const [f] = await d.select({ c: count() }).from(funnels).where(eq(funnels.isActive, true));
+    const [f] = await d.select({ c: count() }).from(funnels).where(and(eq(funnels.isActive, true), eq(funnels.kind, "funnel")));
+    const [pr] = await d.select({ c: count() }).from(funnels).where(eq(funnels.kind, "product"));
     const [c] = await d.select({ c: count() }).from(events).where(and(eq(events.type, "bot.message"), gte(events.createdAt, new Date(Date.now() - 7 * 86400000))));
-    return { people: p.c, subs: s.c, funnels: f.c, chats: c.c };
+    return { people: p.c, subs: s.c, funnels: f.c, products: pr.c, chats: c.c };
   }, {} as Record<string, number>);
 }
 
@@ -123,20 +124,21 @@ export async function planById(id: number) { return safe(async () => (await db()
 export async function offerList() {
   return safe(async () => {
     const d = db();
-    const rows = await d.select({ o: offers, active: sql<number>`(select count(*)::int from subscriptions s where s.offer_id = ${offers.id} and s.status in ('active','trialing','past_due'))`, sales: sql<number>`(select count(*)::int from orders x where x.offer_id = ${offers.id} and x.status = 'paid')` })
-      .from(offers).orderBy(desc(sql`(select count(*) from subscriptions s where s.offer_id = ${offers.id} and s.status in ('active','trialing','past_due'))`), desc(offers.createdAt));
+    const rows = await d.select({ o: offers, active: sql<number>`(select count(*)::int from subscriptions s where s.offer_id = offers.id and s.status in ('active','trialing','past_due'))`, sales: sql<number>`(select count(*)::int from orders x where x.offer_id = offers.id and x.status = 'paid')` })
+      .from(offers).orderBy(desc(sql`(select count(*) from subscriptions s where s.offer_id = offers.id and s.status in ('active','trialing','past_due'))`), desc(offers.createdAt));
     return rows;
   }, []);
 }
-export async function funnelFolders() {
-  return safe(() => db().select({ id: schema.funnelFolders.id, name: schema.funnelFolders.name, n: sql<number>`(select count(*)::int from funnels f where f.folder_id = ${schema.funnelFolders.id})` }).from(schema.funnelFolders).orderBy(schema.funnelFolders.sortOrder, schema.funnelFolders.name), []);
+export async function funnelFolders(kind: "funnel" | "product" = "funnel") {
+  return safe(() => db().select({ id: schema.funnelFolders.id, name: schema.funnelFolders.name, n: sql<number>`(select count(*)::int from funnels f where f.folder_id = funnel_folders.id)` }).from(schema.funnelFolders).where(eq(schema.funnelFolders.kind, kind)).orderBy(schema.funnelFolders.sortOrder, schema.funnelFolders.name), []);
 }
-export async function funnelList() {
+export async function funnelList(kind: "funnel" | "product" = "funnel") {
   return safe(() => db().select({
     id: funnels.id, source: funnels.source, folderId: funnels.folderId, name: funnels.name, cover: funnels.cover, status: funnels.status, isActive: funnels.isActive,
     subscribersCount: funnels.subscribersCount, stepsCount: funnels.stepsCount, createdAt: funnels.createdAt, updatedAt: funnels.updatedAt, settings: funnels.settings,
-    activeNow: sql<number>`(select count(*)::int from funnel_enrollments e where e.funnel_id = ${funnels.id} and e.status = 'active')`,
-  }).from(funnels).orderBy(desc(funnels.updatedAt)), []);
+    activeNow: sql<number>`(select count(*)::int from funnel_enrollments e where e.funnel_id = funnels.id and e.status = 'active')`,
+    offersCount: sql<number>`(select count(*)::int from plans p where p.products @> to_jsonb(array[funnels.id]))`,
+  }).from(funnels).where(eq(funnels.kind, kind)).orderBy(desc(funnels.updatedAt)), []);
 }
 export async function funnelDetail(id: number) {
   return safe(async () => {
@@ -155,7 +157,10 @@ export async function funnelDetail(id: number) {
     ]);
     const by = (st: string) => totals.find((t) => t.status === st)?.c ?? 0;
     const started = totals.reduce((a, t) => a + t.c, 0);
-    return { f, steps, modules, commands, stats, enr, waiting, summary: { started, active: by("active"), stopped: by("stopped"), finished: by("done") } };
+    // продукт: оффери, які його містять, і всі оффери для вибору
+    const offersWith = f.kind === "product" ? await d.select({ pl: plans, active: sql<number>`(select count(*)::int from subscriptions s where s.plan_id = plans.id and s.source = 'hub' and s.status in ('active','trialing','past_due'))`, payments: sql<number>`(select count(*)::int from payment_attempts a where a.plan_id = plans.id and a.status = 'approved' and a.kind in ('first','manual','renewal'))`, grants: sql<number>`(select count(*)::int from subscriptions s where s.plan_id = plans.id and s.source = 'hub' and s.kind = 'grant')`, revenue: sql<string>`(select coalesce(sum(amount),0) from payment_attempts a where a.plan_id = plans.id and a.status = 'approved' and a.kind in ('first','manual','renewal'))` }).from(plans).where(sql`${plans.products} @> to_jsonb(array[${id}::int])`).orderBy(plans.sortOrder, plans.id) : [];
+    const allOffers = f.kind === "product" ? await d.select({ id: plans.id, name: plans.name, isActive: plans.isActive }).from(plans).orderBy(plans.sortOrder, plans.name) : [];
+    return { f, steps, modules, commands, stats, enr, waiting, summary: { started, active: by("active"), stopped: by("stopped"), finished: by("done") }, offersWith, allOffers };
   }, null);
 }
 export async function stepDetail(funnelId: number, stepId: number) {
@@ -167,12 +172,15 @@ export async function stepDetail(funnelId: number, stepId: number) {
       d.select().from(schema.funnelSteps).where(eq(schema.funnelSteps.funnelId, funnelId)).orderBy(asc(schema.funnelSteps.position), asc(schema.funnelSteps.id)),
       d.select().from(schema.funnelModules).where(eq(schema.funnelModules.funnelId, funnelId)).orderBy(asc(schema.funnelModules.position)),
       d.select().from(schema.media).orderBy(desc(schema.media.createdAt)).limit(300),
-      d.select({ id: funnels.id, name: funnels.name }).from(funnels).where(eq(funnels.source, "hub")).orderBy(funnels.name),
+      d.select({ id: funnels.id, name: funnels.name }).from(funnels).where(and(eq(funnels.source, "hub"), eq(funnels.kind, "funnel"))).orderBy(funnels.name),
       d.select({ id: schema.offers.id, name: schema.offers.name, url: schema.offers.link }).from(schema.offers).where(eq(schema.offers.isActive, true)).orderBy(schema.offers.name),
     ]);
     const step = steps.find((s) => s.id === stepId);
     if (!step) return null;
-    return { f, step, steps, modules, media: med, allFunnels, offers };
+    // кнопка «оффер»: оффери Hub (персональне посилання на оплату) і оффери ZenEdu (статичне посилання)
+    const hub = await d.select({ id: plans.id, name: plans.name, key: plans.key }).from(plans).where(eq(plans.isActive, true)).orderBy(plans.sortOrder, plans.name);
+    const offerOptions = [...hub.map((o) => ({ id: -o.id, name: `Hub · ${o.name}`, url: `hub:${o.key}` })), ...offers.map((o) => ({ id: o.id, name: `ZenEdu · ${o.name}`, url: o.url }))];
+    return { f, step, steps, modules, media: med, allFunnels, offers: offerOptions };
   }, null);
 }
 export async function funnelPublic(id: number) {
@@ -182,7 +190,44 @@ export async function funnelPublic(id: number) {
     return f ? { f, botUsername: b?.username ?? null } : null;
   }, null);
 }
-export async function hubFunnels() { return safe(() => db().select().from(funnels).where(and(eq(funnels.source, "hub"), eq(funnels.isActive, true))).orderBy(funnels.name), []); }
+export async function hubFunnels() { return safe(() => db().select().from(funnels).where(and(eq(funnels.source, "hub"), eq(funnels.isActive, true), eq(funnels.kind, "funnel"))).orderBy(funnels.name), []); }
+export async function productPicker() { return safe(() => db().select({ id: funnels.id, name: funnels.name, isActive: funnels.isActive, cover: funnels.cover }).from(funnels).where(eq(funnels.kind, "product")).orderBy(funnels.name), []); }
+
+// ---------- оффери Hub ----------
+const offerStats = {
+  active: sql<number>`(select count(*)::int from subscriptions s where s.plan_id = plans.id and s.source = 'hub' and s.status in ('active','trialing','past_due'))`,
+  payments: sql<number>`(select count(*)::int from payment_attempts a where a.plan_id = plans.id and a.status = 'approved' and a.kind in ('first','manual','renewal'))`,
+  grants: sql<number>`(select count(*)::int from subscriptions s where s.plan_id = plans.id and s.source = 'hub' and s.kind = 'grant')`,
+  revenue: sql<string>`(select coalesce(sum(amount),0) from payment_attempts a where a.plan_id = plans.id and a.status = 'approved' and a.kind in ('first','manual','renewal'))`,
+  spots: sql<number>`(select count(*)::int from subscriptions s left join access_links l on l.id = s.access_link_id where s.plan_id = plans.id and s.source = 'hub' and (s.kind <> 'grant' or coalesce(l.mark_as_payment, false)))`,
+};
+export async function hubOfferList() {
+  return safe(async () => {
+    const d = db();
+    const rows = await d.select({ pl: plans, ...offerStats }).from(plans).orderBy(plans.sortOrder, plans.id);
+    const prods = await d.select({ id: funnels.id, name: funnels.name }).from(funnels).where(eq(funnels.kind, "product"));
+    const res = await d.select({ key: resources.key, name: resources.name }).from(resources);
+    return rows.map((r) => ({ ...r, productNames: (r.pl.products ?? []).map((id) => prods.find((p) => p.id === id)?.name ?? `#${id}`), resourceNames: Object.keys(r.pl.entitlements ?? {}).map((k) => res.find((x) => x.key === k)?.name ?? k) }));
+  }, []);
+}
+export async function offerDetail(id: number) {
+  return safe(async () => {
+    const d = db();
+    const [row] = await d.select({ pl: plans, ...offerStats }).from(plans).where(eq(plans.id, id));
+    if (!row) return null;
+    const [links, prods, res, others, recent] = await Promise.all([
+      d.select().from(schema.accessLinks).where(eq(schema.accessLinks.planId, id)).orderBy(desc(schema.accessLinks.createdAt)),
+      d.select({ id: funnels.id, name: funnels.name, isActive: funnels.isActive, cover: funnels.cover, stepsCount: funnels.stepsCount }).from(funnels).where(eq(funnels.kind, "product")).orderBy(funnels.name),
+      d.select().from(resources).orderBy(resources.id),
+      d.select({ id: plans.id, name: plans.name }).from(plans).where(and(eq(plans.isActive, true), sql`plans.id <> ${id}`)).orderBy(plans.sortOrder, plans.name),
+      d.select({ s: subscriptions, p: persons }).from(subscriptions).innerJoin(persons, eq(persons.id, subscriptions.personId)).where(and(eq(subscriptions.planId, id), eq(subscriptions.source, "hub"))).orderBy(desc(subscriptions.updatedAt)).limit(30),
+    ]);
+    return { ...row, links, products: prods, resources: res, others, recent };
+  }, null);
+}
+export async function offerPublic(key: string) {
+  return safe(async () => { const [pl] = await db().select().from(plans).where(eq(plans.key, key)); return pl ?? null; }, null);
+}
 export async function resourceList() { return safe(() => db().select().from(resources).orderBy(resources.id), []); }
 export async function broadcastList(f: { q?: string; status?: string } = {}) {
   return safe(() => {
@@ -208,7 +253,8 @@ export async function broadcastDetail(id: number) {
       d.select({ key: resources.key, name: resources.name }).from(resources).orderBy(resources.id),
       d.select({ status: schema.broadcastRecipients.status, c: count() }).from(schema.broadcastRecipients).where(eq(schema.broadcastRecipients.broadcastId, id)).groupBy(schema.broadcastRecipients.status),
     ]);
-    return { b, recipients, clicks, media: med, tags, funnels: funs, plans: plansL, offers: offersL, resources: res, byStatus };
+    const hubOffers = await d.select({ id: plans.id, name: plans.name, key: plans.key }).from(plans).where(eq(plans.isActive, true)).orderBy(plans.sortOrder, plans.name);
+    return { b, recipients, clicks, media: med, tags, funnels: funs, plans: plansL, offers: offersL, hubOffers, resources: res, byStatus };
   }, null);
 }
 export async function automationList() { return safe(() => db().select().from(automations).orderBy(automations.id), []); }
@@ -288,10 +334,11 @@ export async function migrationList() {
 export async function personPayments(personId: number) {
   return safe(async () => {
     const d = db();
-    const [sub] = await d.select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub")));
+    const hubSubs = await d.select({ s: subscriptions, plan: plans }).from(subscriptions).leftJoin(plans, eq(plans.id, subscriptions.planId)).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub"))).orderBy(desc(subscriptions.updatedAt));
     const cards = await d.select().from(schema.paymentMethods).where(eq(schema.paymentMethods.personId, personId)).orderBy(desc(schema.paymentMethods.createdAt));
     const attempts = await d.select().from(schema.paymentAttempts).where(eq(schema.paymentAttempts.personId, personId)).orderBy(desc(schema.paymentAttempts.createdAt)).limit(20);
-    const [plan] = sub?.planId ? await d.select().from(plans).where(eq(plans.id, sub.planId)) : [];
-    return { sub: (sub ?? null) as typeof sub | null, cards, attempts, plan: (plan ?? null) as typeof plan | null };
-  }, { sub: null as typeof subscriptions.$inferSelect | null, cards: [] as (typeof schema.paymentMethods.$inferSelect)[], attempts: [] as (typeof schema.paymentAttempts.$inferSelect)[], plan: null as typeof plans.$inferSelect | null });
+    const offersL = await d.select({ id: plans.id, name: plans.name, paymentType: plans.paymentType }).from(plans).where(eq(plans.isActive, true)).orderBy(plans.sortOrder, plans.name);
+    const primaryCard = hubSubs.find((x) => x.s.paymentMethodId)?.s.paymentMethodId ?? null;
+    return { hubSubs, cards, attempts, offers: offersL, primaryCard };
+  }, { hubSubs: [] as { s: typeof subscriptions.$inferSelect; plan: typeof plans.$inferSelect | null }[], cards: [] as (typeof schema.paymentMethods.$inferSelect)[], attempts: [] as (typeof schema.paymentAttempts.$inferSelect)[], offers: [] as { id: number; name: string; paymentType: string }[], primaryCard: null as number | null });
 }

@@ -36,7 +36,7 @@ export default async function Resources({ searchParams }: { searchParams: Promis
   return (
     <Shell title={tab === "channels" ? "Канали і групи" : "Цифрові продукти"} counts={counts}>
       {sp.err && <Alert tone="bad">{sp.err}</Alert>}
-      <div className="tabs"><Link href="/resources" className={tab === "channels" ? "on" : ""}>Канали і групи · {res.filter((r) => isChat(r.kind)).length}</Link><Link href="/resources?tab=digital" className={tab === "digital" ? "on" : ""}>Цифрові продукти · {res.filter((r) => !isChat(r.kind)).length}</Link></div>
+      <div className="tabs"><Link href="/resources" className={tab === "channels" ? "on" : ""}>Канали і групи · {res.filter((r) => isChat(r.kind)).length}</Link><Link href="/resources?tab=digital" className={tab === "digital" ? "on" : ""}>Функції бота й посилання · {res.filter((r) => !isChat(r.kind)).length}</Link></div>
       <Toolbar actions={tab === "channels" ? <ConnectChatDialog chats={free.map((c) => ({ id: c.id, title: c.title, type: c.type }))} botUsername={botUser} action={connectChat} /> : (
         <Modal title="Новий цифровий продукт" width={480} trigger={<button type="button" className="btn pri"><Plus size={15} /> Цифровий продукт</button>}>
           <form action={saveResource} className="form">

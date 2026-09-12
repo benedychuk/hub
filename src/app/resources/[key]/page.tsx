@@ -68,7 +68,7 @@ export default async function ResourcePage({ params, searchParams }: { params: P
           </form>
         )}
         <div className="form aside-sticky">
-          <Section title="У тарифах">{inPlans.length ? inPlans.map((p) => <Row key={p.id} title={<Link href={`/plans/${p.id}`}>{p.name}</Link>} sub={`${p.price} ${p.currency} / ${p.period}`} />) : <EmptyState title="Поки не входить у жоден тариф" text="Додайте у Тарифах, щоб доступ видавався автоматично." action={<Link href="/plans" className="btn sm">Тарифи</Link>} />}</Section>
+          <Section title="В офферах">{inPlans.length ? inPlans.map((p) => <Row key={p.id} title={<Link href={`/offers/${p.id}`}>{p.name}</Link>} sub={`${p.price} ${p.currency} / ${p.period}`} />) : <EmptyState title="Поки не входить у жоден тариф" text="Додайте у Тарифах, щоб доступ видавався автоматично." action={<Link href="/plans" className="btn sm">Тарифи</Link>} />}</Section>
           {chat && <Section title="Як це працює"><p className="fld-h" style={{ margin: 0 }}>Людина з правом отримує в Hub-боті одноразове посилання, що діє {c.inviteTtlHours ?? 24} год. Коли право закінчується{c.graceDays ? ` і минає ${c.graceDays} дн. grace` : ""}, щохвилинний тік виключає її з чату з можливістю повернутись і надсилає текст при виключенні.</p></Section>}
           {r.kind === "bot_feature" && <Section title="Як це працює"><p className="fld-h" style={{ margin: 0 }}>Зовнішній бот питає в Hub через API, чи має людина право «{r.key}». Ключ для бота створюється в розділі «Боти й меню».</p></Section>}
         </div>

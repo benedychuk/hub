@@ -6,12 +6,12 @@ import { accessTick } from "./telegram-access";
 import { creds, charge as wfpCharge, refund as wfpRefund, purchaseForm, verifyResponse, type Creds, type WfpResponse } from "./wayforpay";
 import { money } from "./format";
 import { adminTelegramId } from "./auth";
+import { periodDaysOf, accessEndFor, offerAvailability, syncProductAccess, expireOneTime } from "./offers";
 
 const { persons, plans, subscriptions, orders, events, settings, paymentMethods, paymentAttempts, identities } = schema;
 export type Attempt = typeof paymentAttempts.$inferSelect;
 export type Sub = typeof subscriptions.$inferSelect;
 const KYIV = "Europe/Kyiv";
-const PERIOD_DAYS: Record<string, number> = { month: 30, quarter: 90, year: 365 };
 const RETRY_DAYS = [1, 3, 5];
 
 // ---------- налаштування ----------
@@ -43,6 +43,11 @@ export function chargeTime(d: Date) {
   k.setHours(10, 0, 0, 0); return new Date(k.getTime() - offset);
 }
 const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86400_000);
+/** Остання Hub-підписка людини за конкретним оффером (у людини може бути кілька офферів). */
+async function hubSubFor(personId: number, planId: number | null | undefined) {
+  const rows = await db().select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub"), planId ? eq(subscriptions.planId, planId) : sql`true`)).orderBy(desc(subscriptions.updatedAt)).limit(1);
+  return rows[0];
+}
 
 // ---------- початок оплати ----------
 /** Поки оплати не увімкнені власником, ними може користуватись лише адміністратор (ADMIN_TELEGRAM_ID) для тестів. */
@@ -57,10 +62,12 @@ export async function beginPayment(personId: number, planKey: string, kind: "fir
   const [pl] = await d.select().from(plans).where(eq(plans.key, planKey)); if (!pl || !pl.isActive) throw new Error("Тариф недоступний");
   const [p] = await d.select().from(persons).where(eq(persons.id, personId)); if (!p) throw new Error("Людину не знайдено");
   const s = await paymentSettings(); const c = creds(s.mode);
-  const [hubSub] = await d.select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "hub")));
+  const av = await offerAvailability(pl); if (!av.ok) throw new Error(av.reason);
+  const hubSub = await hubSubFor(personId, pl.id);
   const [zenSub] = await d.select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu")));
-  // сума: перший платіж = ціна тарифу (або пробна); прив'язка й переїзд = перевірочна сума з поверненням
-  const trial = pl.trialDays > 0 && !hubSub;
+  // сума: перший платіж = ціна оффера (або пробна); прив'язка й переїзд = перевірочна сума з поверненням
+  const oneTime = pl.paymentType === "one_time";
+  const trial = !oneTime && pl.trialDays > 0 && !hubSub;
   const amount = kind === "first" ? (trial ? Number(pl.trialPrice ?? 0) : Number(pl.price)) : s.verifyAmount;
   const attemptKind = kind === "first" ? "first" : kind === "migrate" ? "migrate" : "card";
   if (kind === "first" && amount <= 0) throw new Error("Безкоштовний пробний період без картки поки не підтримується");
@@ -120,20 +127,25 @@ async function onApproved(a: Attempt, r: WfpResponse, c: Creds) {
   const [p] = await d.select().from(persons).where(eq(persons.id, a.personId));
   const pm = await saveCard(a.personId, r);
   const now = new Date();
-  const [hubSub] = await d.select().from(subscriptions).where(and(eq(subscriptions.personId, a.personId), eq(subscriptions.source, "hub")));
-  const periodDays = PERIOD_DAYS[pl?.period ?? "month"] ?? 30;
+  const hubSub = await hubSubFor(a.personId, a.planId);
+  const periodDays = pl ? periodDaysOf(pl) : 30;
 
   if (a.kind === "first" || a.kind === "manual") {
-    // новий тариф або ручне поновлення після невдалих списань
-    const trial = Boolean(pl && pl.trialDays > 0 && !hubSub && a.kind === "first");
-    const base = hubSub?.currentPeriodEnd && hubSub.currentPeriodEnd > now && a.kind === "manual" ? hubSub.currentPeriodEnd : now;
-    const end = addDays(base, trial ? pl!.trialDays : periodDays);
-    const row = { planId: pl?.id ?? hubSub?.planId ?? null, status: trial ? "trialing" : "active", price: pl ? String(pl.price) : hubSub?.price ?? a.amount, currency: a.currency, periodDays, currentPeriodEnd: end, nextChargeAt: chargeTime(end), nextRetryAt: null, retryCount: 0, cancelAtPeriodEnd: false, pausedAt: null, cancelledAt: null, paymentMethodId: pm?.id ?? hubSub?.paymentMethodId ?? null, lastPaymentAt: now, paymentsCount: (hubSub?.paymentsCount ?? 0) + 1, startedAt: hubSub?.startedAt ?? now, updatedAt: now };
+    // новий оффер, повторна разова покупка або ручне поновлення після невдалих списань
+    const oneTime = pl?.paymentType === "one_time";
+    const trial = Boolean(pl && !oneTime && pl.trialDays > 0 && !hubSub && a.kind === "first");
+    const extend = hubSub?.currentPeriodEnd && hubSub.currentPeriodEnd > now && (a.kind === "manual" || oneTime);
+    const base = extend ? hubSub!.currentPeriodEnd! : now;
+    const end = oneTime ? (pl ? accessEndFor(pl, base) : null) : addDays(base, trial ? pl!.trialDays : periodDays);
+    const row = { planId: pl?.id ?? hubSub?.planId ?? null, kind: oneTime ? "one_time" : "subscription", accessLinkId: null, status: trial ? "trialing" : "active", price: pl ? String(pl.price) : hubSub?.price ?? a.amount, currency: a.currency, periodDays: oneTime ? (pl?.accessDays ?? 0) : periodDays, currentPeriodEnd: end, nextChargeAt: oneTime || !end ? null : chargeTime(end), nextRetryAt: null, retryCount: 0, cancelAtPeriodEnd: false, pausedAt: null, cancelledAt: null, paymentMethodId: pm?.id ?? hubSub?.paymentMethodId ?? null, lastPaymentAt: now, paymentsCount: (hubSub?.paymentsCount ?? 0) + 1, startedAt: hubSub?.startedAt ?? now, updatedAt: now };
     const [s] = hubSub ? await d.update(subscriptions).set(row).where(eq(subscriptions.id, hubSub.id)).returning() : await d.insert(subscriptions).values({ personId: a.personId, source: "hub", ...row }).returning();
-    await recordOrder(a, s, pl?.name ?? "Підписка Hub", hubSub ? "subscription_renew" : "subscription_start");
+    await recordOrder(a, s, pl?.name ?? "Підписка Hub", oneTime ? "one_time" : hubSub && hubSub.paymentsCount > 0 ? "subscription_renew" : "subscription_start");
     await d.update(paymentAttempts).set({ subscriptionId: s.id }).where(eq(paymentAttempts.id, a.id));
     await d.insert(events).values({ personId: a.personId, type: "payment.approved", source: "wayforpay", payload: { attemptId: a.id, kind: a.kind, amount: a.amount, plan: pl?.key, until: end } });
-    await notify(a.personId, `Оплату отримано: ${money(a.amount, a.currency)}. Доступ до «${pl?.name ?? "клубу"}» діє до ${end.toLocaleDateString("uk-UA")}. Посилання на канал прийде за хвилину.`);
+    const what = pl?.products?.length && !Object.keys(pl.entitlements ?? {}).length ? "Матеріали з'являться в цьому боті за хвилину." : "Посилання на канал прийде за хвилину.";
+    await notify(a.personId, `Оплату отримано: ${money(a.amount, a.currency)}. Доступ до «${pl?.name ?? "клубу"}» ${end ? `діє до ${end.toLocaleDateString("uk-UA")}` : "безстроковий"}${pl?.accessMode === "none" && oneTime ? "" : `. ${what}`}`);
+    const pp = pl?.settings?.postPurchaseText?.trim();
+    if (pp) { try { await sendToPerson(a.personId, pp, { html: true }); } catch { /* бот не запущений */ } }
   } else if (a.kind === "renewal") {
     if (hubSub) await extendAfterCharge(hubSub, a, pl?.name ?? "Підписка Hub", pm?.id ?? null);
   } else if (a.kind === "card" || a.kind === "migrate") {
@@ -156,6 +168,7 @@ async function onApproved(a: Attempt, r: WfpResponse, c: Creds) {
     }
   }
   void p;
+  await syncProductAccess(a.personId).catch(() => null);
   await accessTick().catch(() => null);
 }
 
@@ -181,10 +194,10 @@ async function onRenewalFailed(a: Attempt, reason: string) {
   const d = db(); const now = new Date();
   const [s] = a.subscriptionId ? await d.select().from(subscriptions).where(eq(subscriptions.id, a.subscriptionId)) : [];
   if (!s) return;
-  const [pl] = s.planId ? await d.select({ key: plans.key, name: plans.name }).from(plans).where(eq(plans.id, s.planId)) : [];
+  const [pl] = s.planId ? await d.select().from(plans).where(eq(plans.id, s.planId)) : [];
   const retry = s.retryCount + 1;
   const link = payLink(s.personId, pl?.key ?? "", "card");
-  if (retry >= RETRY_DAYS.length) {
+  if (retry >= RETRY_DAYS.length || pl?.settings?.retries === false) { // оффер може вимкнути повтори: доступ закривається одразу
     await d.update(subscriptions).set({ status: "expired", retryCount: retry, nextRetryAt: null, nextChargeAt: null, updatedAt: now }).where(eq(subscriptions.id, s.id));
     if (s.paymentMethodId) await d.update(paymentMethods).set({ failedAt: now }).where(eq(paymentMethods.id, s.paymentMethodId));
     await d.insert(events).values({ personId: s.personId, type: "subscription.expired", source: "hub", payload: { subscriptionId: s.id, reason } });
@@ -231,6 +244,7 @@ export async function chargeSubscription(subId: number) {
 /** Тік: списує підписки, у яких настав час, і завершує скасовані. */
 export async function chargeDue(limit = 20) {
   const d = db(); const now = new Date();
+  await expireOneTime().catch(() => null); // разові оффери й доступи за посиланням
   // скасовані наприкінці періоду
   await d.update(subscriptions).set({ status: "cancelled", cancelledAt: now, nextChargeAt: null, updatedAt: now }).where(and(eq(subscriptions.source, "hub"), eq(subscriptions.cancelAtPeriodEnd, true), inArray(subscriptions.status, ["active", "trialing", "past_due"]), lte(subscriptions.currentPeriodEnd, now)));
   const due = await d.select().from(subscriptions).where(and(eq(subscriptions.source, "hub"), inArray(subscriptions.status, ["active", "trialing", "past_due"]), eq(subscriptions.cancelAtPeriodEnd, false), isNull(subscriptions.pausedAt), sql`${subscriptions.paymentMethodId} is not null`,
@@ -245,15 +259,29 @@ export async function chargeDue(limit = 20) {
 export async function dailyPayments() {
   const d = db(); const st = await paymentSettings(); const now = new Date();
   let reminded = 0, invited = 0;
-  const soon = await d.select({ s: subscriptions, pm: paymentMethods }).from(subscriptions).leftJoin(paymentMethods, eq(paymentMethods.id, subscriptions.paymentMethodId))
-    .where(and(eq(subscriptions.source, "hub"), inArray(subscriptions.status, ["active", "trialing"]), eq(subscriptions.cancelAtPeriodEnd, false), isNull(subscriptions.pausedAt), lte(subscriptions.nextChargeAt, addDays(now, st.reminderDays))));
-  for (const { s, pm } of soon) {
+  const soon = await d.select({ s: subscriptions, pm: paymentMethods, pl: plans }).from(subscriptions).leftJoin(paymentMethods, eq(paymentMethods.id, subscriptions.paymentMethodId)).leftJoin(plans, eq(plans.id, subscriptions.planId))
+    .where(and(eq(subscriptions.source, "hub"), eq(subscriptions.kind, "subscription"), inArray(subscriptions.status, ["active", "trialing"]), eq(subscriptions.cancelAtPeriodEnd, false), isNull(subscriptions.pausedAt), lte(subscriptions.nextChargeAt, addDays(now, st.reminderDays))));
+  for (const { s, pm, pl } of soon) {
+    if (pl?.settings?.reminder === false) continue; // оффер вимкнув нагадування
     if (!s.nextChargeAt || (s.remindedFor && s.remindedFor.getTime() === s.nextChargeAt.getTime())) continue;
     await notify(s.personId, `Нагадуємо: ${s.nextChargeAt.toLocaleDateString("uk-UA")} спишемо ${money(s.price, s.currency)} за підписку${pm?.cardPan ? ` з картки ${pm.cardPan}` : ""}. Керувати підпискою: /subscriptions`);
     await d.update(subscriptions).set({ remindedFor: s.nextChargeAt }).where(eq(subscriptions.id, s.id)); reminded++;
   }
+  // нагадування про закінчення доступу (разові оффери й доступи за посиланням), якщо оффер це передбачає
+  const ending = await d.select({ s: subscriptions, pl: plans }).from(subscriptions).innerJoin(plans, eq(plans.id, subscriptions.planId))
+    .where(and(eq(subscriptions.source, "hub"), inArray(subscriptions.kind, ["one_time", "grant"]), eq(subscriptions.status, "active"), sql`${subscriptions.currentPeriodEnd} is not null`, lte(subscriptions.currentPeriodEnd, addDays(now, 60))));
+  for (const { s, pl } of ending) {
+    const os = pl.settings ?? {}; const end = s.currentPeriodEnd!;
+    if (!os.expiryReminder || end > addDays(now, os.expiryDays ?? 3)) continue;
+    if (s.remindedFor && s.remindedFor.getTime() === end.getTime()) continue;
+    const left = Math.max(0, Math.ceil((end.getTime() - now.getTime()) / 86400_000));
+    const text = (os.expiryText?.trim() || "Доступ до «{{offer_name}}» закінчується через {{days}} дн.").replace(/\{\{\s*days\s*\}\}/g, String(left)).replace(/\{\{\s*offer_name\s*\}\}/g, pl.name);
+    const [ren] = os.renewalOfferId ? await d.select().from(plans).where(and(eq(plans.id, os.renewalOfferId), eq(plans.isActive, true))) : [];
+    try { await sendToPerson(s.personId, text, { html: true, buttons: ren ? [{ text: ren.design?.buttonText || `Продовжити: ${ren.name}`, url: payLink(s.personId, ren.key, "first") }] : undefined }); } catch { /* бот не запущений */ }
+    await d.update(subscriptions).set({ remindedFor: end }).where(eq(subscriptions.id, s.id)); reminded++;
+  }
   // переїзд: лише якщо власник явно увімкнув автоматичні запрошення в Налаштування → Оплати
-  const [defaultPlan] = st.migrationAuto ? await d.select().from(plans).where(eq(plans.isActive, true)).orderBy(desc(plans.isFeatured), plans.sortOrder).limit(1) : [];
+  const [defaultPlan] = st.migrationAuto ? await d.select().from(plans).where(and(eq(plans.isActive, true), eq(plans.paymentType, "subscription"))).orderBy(desc(plans.isFeatured), plans.sortOrder).limit(1) : [];
   if (defaultPlan) {
     const rows = await d.execute(sql`select z.id, z.person_id, z.current_period_end, z.price, z.currency from subscriptions z
       join identities i on i.person_id = z.person_id and i.bot_key = 'hub' and i.blocked_at is null

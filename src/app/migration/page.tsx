@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Migration({ searchParams }: { searchParams: Promise<{ ok?: string; err?: string; f?: string }> }) {
   const sp = await searchParams;
-  const [counts, m, list, plansL, st] = await Promise.all([navCounts(), migration(), migrationList(), hasDb() ? planKeys().catch(() => []) : [], hasDb() ? paymentSettings() : { migrationDays: 5 }]);
+  const [counts, m, list, plansL, st] = await Promise.all([navCounts(), migration(), migrationList(), hasDb() ? planKeys(true).catch(() => []) : [], hasDb() ? paymentSettings() : { migrationDays: 5 }]);
   const zenActive = (m?.bySource ?? []).filter((x) => x.source === "zenedu" && ["active", "trialing", "past_due"].includes(x.status)).reduce((a, x) => a + x.c, 0);
   const hubActive = (m?.bySource ?? []).filter((x) => x.source === "hub" && ["active", "trialing", "past_due"].includes(x.status)).reduce((a, x) => a + x.c, 0);
   const max = Math.max(1, ...(m?.cal ?? []).map((c) => c.c));
@@ -48,7 +48,7 @@ export default async function Migration({ searchParams }: { searchParams: Promis
           </tr>)}
           {!rows.length && <tr><td colSpan={7}><EmptyState icon={<Users size={20} />} title="Нікого в цьому списку" /></td></tr>}
         </tbody></table></div>
-        {!plan && <p className="fld-h" style={{ marginTop: 10 }}>Щоб запрошувати, потрібен хоча б один активний тариф у розділі «Тарифи й оффери».</p>}
+        {!plan && <p className="fld-h" style={{ marginTop: 10 }}>Щоб запрошувати, потрібен хоча б один активний оффер-підписка в розділі «Оффери».</p>}
       </Section>
       <div className="grid g2" style={{ marginTop: 16 }}>
         <Section title="Календар списань ZenEdu" description="Кінець періоду активних підписок: коли кожна людина потрапить у вікно переїзду.">

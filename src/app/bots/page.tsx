@@ -45,7 +45,7 @@ export default async function Bots({ searchParams }: { searchParams: Promise<{ n
           <Section title="Команди Hub-бота">
             <Row title="/start" sub="вітання; впізнає учасницю за telegram id, запускає воронки з прямим доступом" />
             <Row title="/subscriptions" sub="мої підписки: ціна, статус, наступне списання" />
-            <Row title="/plans" sub="тарифи з розділу «Тарифи й оффери»" />
+            <Row title="/plans" sub="оффери Hub з розділу «Оффери» (позначені «показувати в боті»)" />
             <Row tone="warn" title="Будь-яке повідомлення" sub="потрапляє в «Чати»; відповідь з панелі" />
           </Section>
           <Section title="Бот ZenEdu" description="Лишається як є; Hub-бот працює паралельно на своєму токені.">

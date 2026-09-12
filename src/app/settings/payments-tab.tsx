@@ -33,7 +33,7 @@ export default async function PaymentsTab({ link }: { link?: string }) {
         </form>
         <form action={makeTestPayLink}>
           <Section title="Перевірити оплату" description="Створює посилання на оплату для вашого акаунта (ADMIN_TELEGRAM_ID), як його бачить учасниця.">
-            <FormRow><Field label="Тариф"><select name="planKey">{plansL.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}</select></Field><Field label="Сценарій"><select name="kind" defaultValue="first"><option value="first">Перша оплата тарифу</option><option value="card">Зміна картки (перевірочна сума)</option><option value="migrate">Переїзд із ZenEdu</option></select></Field></FormRow>
+            <FormRow><Field label="Оффер"><select name="planKey">{plansL.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}</select></Field><Field label="Сценарій"><select name="kind" defaultValue="first"><option value="first">Перша оплата тарифу</option><option value="card">Зміна картки (перевірочна сума)</option><option value="migrate">Переїзд із ZenEdu</option></select></Field></FormRow>
             <div className="row-actions" style={{ marginTop: 14 }}><button className="btn" type="submit" disabled={!plansL.length}><Link2 size={15} /> Створити посилання</button>{!plansL.length && <span className="fld-h">спершу створіть активний тариф</span>}</div>
             {link && <div style={{ marginTop: 12 }}><CopyBox text={link} /></div>}
           </Section>

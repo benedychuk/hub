@@ -5,38 +5,112 @@ import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
 import { installWebhook, sendToPerson, getBot, botToken } from "./bot";
+import { grantOffer, newLinkToken } from "./offers";
 
-const { plans, persons, events, broadcasts, entitlements, resources, subscriptions, identities } = schema;
+const { plans, persons, events, broadcasts, entitlements, resources, subscriptions, identities, accessLinks } = schema;
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
-export async function savePlan(fd: FormData) {
-  const id = Number(fd.get("id") || 0);
-  const ents: Record<string, string> = {};
-  for (const [k, v] of fd.entries()) {
-    if (k.startsWith("ent:") && v) { const key = k.slice(4); ents[key] = str(fd, "quota:" + key); }
+const on = (fd: FormData, k: string) => fd.get(k) === "on";
+const dt = (fd: FormData, k: string) => { const v = str(fd, k); const d = v ? new Date(v) : null; return d && !isNaN(d.getTime()) ? d : null; };
+
+/** Оффер Hub: вкладки «Основне», «Дизайн», «Налаштування» зберігаються окремо (part), решта полів не чіпається. */
+export async function saveOffer(fd: FormData) {
+  const id = Number(fd.get("id") || 0); const part = str(fd, "part") || "general";
+  const [cur] = id ? await db().select().from(plans).where(eq(plans.id, id)) : [];
+  let row: Partial<typeof plans.$inferInsert> = { updatedAt: new Date() };
+  if (part === "general") {
+    const ents: Record<string, string> = {};
+    for (const [k, v] of fd.entries()) if (k.startsWith("ent:") && v) { const key = k.slice(4); ents[key] = str(fd, "quota:" + key); }
+    const products = fd.getAll("products").map(Number).filter((n) => n > 0);
+    const paymentType = str(fd, "paymentType") === "one_time" ? "one_time" : "subscription";
+    const accessMode = ["forever", "days", "until", "none"].includes(str(fd, "accessMode")) ? str(fd, "accessMode") : "forever";
+    row = { ...row,
+      name: str(fd, "name") || "Без назви", key: cur?.key ?? (str(fd, "key") || `${slugKey(str(fd, "name"))}_${Date.now().toString(36)}`),
+      paymentType, price: str(fd, "price") || "0", currency: str(fd, "currency") || "UAH",
+      period: ["day", "week", "month", "quarter", "year"].includes(str(fd, "period")) ? str(fd, "period") : "month", intervalCount: Math.max(1, Number(fd.get("intervalCount") || 1)),
+      trialDays: on(fd, "trial") ? Math.max(0, Number(fd.get("trialDays") || 0)) : 0, trialPrice: on(fd, "trial") ? (str(fd, "trialPrice") || null) : null,
+      entitlements: ents, products, accessMode, accessDays: accessMode === "days" ? Math.max(0, Number(fd.get("accessDays") || 0)) : null, accessUntil: accessMode === "until" ? dt(fd, "accessUntil") : null,
+      isActive: str(fd, "status") !== "stopped", showInBot: on(fd, "showInBot"), isFeatured: on(fd, "isFeatured"), sortOrder: Number(fd.get("sortOrder") || 0),
+    };
+  } else if (part === "design") {
+    const old = cur?.design ?? {};
+    let image = old.image ?? undefined;
+    const mode = str(fd, "coverMode"); const data = str(fd, "coverData");
+    if (mode === "delete") image = undefined; else if (data.startsWith("data:image/")) { if (data.length > 4_000_000) throw new Error("Зображення завелике після стискання"); image = data; }
+    row = { ...row, design: { titleMode: str(fd, "titleMode") === "custom" ? "custom" : "offer", title: str(fd, "title").slice(0, 120) || undefined, description: str(fd, "description").slice(0, 4000) || undefined, buttonText: str(fd, "buttonText").slice(0, 64) || undefined, image } };
+  } else if (part === "settings") {
+    const old = cur?.settings ?? {};
+    row = { ...row,
+      salesEndAt: dt(fd, "salesEndAt"), spotsLimit: Number(fd.get("spotsLimit") || 0) || null,
+      settings: { ...old, removeContentOnEnd: on(fd, "removeContentOnEnd"), postPurchaseText: str(fd, "postPurchaseText").slice(0, 4000) || undefined, retries: on(fd, "retries"), reminder: on(fd, "reminder"),
+        expiryReminder: on(fd, "expiryReminder"), expiryDays: Math.max(1, Number(fd.get("expiryDays") || 3)), expiryText: str(fd, "expiryText").slice(0, 1000) || undefined, renewalOfferId: Number(fd.get("renewalOfferId") || 0) || undefined, collectEmail: on(fd, "collectEmail") },
+    };
   }
-  const row = {
-    key: str(fd, "key") || str(fd, "name").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || `plan_${Date.now()}`,
-    name: str(fd, "name") || "Без назви", price: str(fd, "price") || "0", currency: str(fd, "currency") || "UAH", period: str(fd, "period") || "month",
-    trialDays: Number(fd.get("trialDays") || 0), trialPrice: str(fd, "trialPrice") || null, entitlements: ents,
-    isActive: fd.get("isActive") === "on", isFeatured: fd.get("isFeatured") === "on", sortOrder: Number(fd.get("sortOrder") || 0), updatedAt: new Date(),
-  };
+  let oid = id;
   if (id) await db().update(plans).set(row).where(eq(plans.id, id));
-  else await db().insert(plans).values(row);
-  revalidatePath("/plans"); redirect("/plans");
+  else { const [n] = await db().insert(plans).values(row as typeof plans.$inferInsert).returning({ id: plans.id }); oid = n.id; }
+  revalidatePath("/offers"); revalidatePath(`/offers/${oid}`); revalidatePath("/products");
+  redirect(`/offers/${oid}?tab=${part}&saved=1`);
 }
-export async function deletePlan(fd: FormData) {
+export async function setOfferStatus(fd: FormData) {
+  const id = Number(fd.get("id")); const active = str(fd, "status") === "active";
+  await db().update(plans).set({ isActive: active, updatedAt: new Date() }).where(eq(plans.id, id));
+  revalidatePath("/offers"); revalidatePath(`/offers/${id}`);
+}
+export async function deleteOffer(fd: FormData) {
   const id = Number(fd.get("id"));
   await db().update(subscriptions).set({ planId: null }).where(eq(subscriptions.planId, id));
   await db().delete(plans).where(eq(plans.id, id));
-  revalidatePath("/plans"); redirect("/plans");
+  revalidatePath("/offers"); revalidatePath("/products"); redirect("/offers");
 }
-export async function duplicatePlan(fd: FormData) {
+export async function duplicateOffer(fd: FormData) {
   const id = Number(fd.get("id"));
   const [p] = await db().select().from(plans).where(eq(plans.id, id));
-  if (p) await db().insert(plans).values({ ...p, id: undefined, key: p.key + "_copy_" + Date.now().toString(36), name: p.name + " (копія)", isFeatured: false, createdAt: undefined, updatedAt: undefined });
-  revalidatePath("/plans"); redirect("/plans");
+  if (!p) return;
+  const [n] = await db().insert(plans).values({ ...p, id: undefined, key: p.key + "_copy_" + Date.now().toString(36), name: p.name + " (копія)", isFeatured: false, isActive: false, createdAt: undefined, updatedAt: undefined }).returning({ id: plans.id });
+  revalidatePath("/offers"); redirect(`/offers/${n.id}`);
+}
+/** Продукт ⇄ оффер із вкладки «Оффери» продукту. */
+export async function addProductToOffer(fd: FormData) {
+  const productId = Number(fd.get("productId")); const offerId = Number(fd.get("offerId"));
+  if (productId && offerId) await db().execute(sql`update plans set products = products || to_jsonb(${productId}::int), updated_at = now() where id = ${offerId} and not products @> to_jsonb(array[${productId}::int])`);
+  revalidatePath(`/products/${productId}`); revalidatePath("/offers"); redirect(`/products/${productId}?tab=offers`);
+}
+export async function removeProductFromOffer(fd: FormData) {
+  const productId = Number(fd.get("productId")); const offerId = Number(fd.get("offerId"));
+  if (productId && offerId) await db().execute(sql`update plans set products = (select coalesce(jsonb_agg(x), '[]'::jsonb) from jsonb_array_elements(products) x where x <> to_jsonb(${productId}::int)), updated_at = now() where id = ${offerId}`);
+  revalidatePath(`/products/${productId}`); revalidatePath("/offers");
+}
+export async function createOfferForProduct(fd: FormData) {
+  const productId = Number(fd.get("productId"));
+  const [f] = await db().select({ name: funnels.name }).from(funnels).where(eq(funnels.id, productId)); if (!f) return;
+  const paymentType = str(fd, "paymentType") === "one_time" ? "one_time" : "subscription";
+  const [n] = await db().insert(plans).values({ key: `${slugKey(f.name)}_${Date.now().toString(36)}`, name: str(fd, "name") || f.name, price: str(fd, "price") || "0", currency: str(fd, "currency") || "UAH", paymentType, products: [productId], isActive: false, showInBot: true }).returning({ id: plans.id });
+  revalidatePath(`/products/${productId}`); revalidatePath("/offers"); redirect(`/offers/${n.id}`);
+}
+// --- посилання доступу (без оплати) ---
+export async function createAccessLink(fd: FormData) {
+  const planId = Number(fd.get("planId"));
+  await db().insert(accessLinks).values({ planId, token: newLinkToken(), name: str(fd, "name").slice(0, 80) || null, maxUses: Number(fd.get("maxUses") || 0) || null, expiresAt: dt(fd, "expiresAt"), markAsPayment: on(fd, "markAsPayment") });
+  revalidatePath(`/offers/${planId}`); redirect(`/offers/${planId}?tab=links`);
+}
+export async function toggleAccessLink(fd: FormData) {
+  const id = Number(fd.get("id")); const planId = Number(fd.get("planId"));
+  await db().update(accessLinks).set({ isActive: sql`not ${accessLinks.isActive}` }).where(eq(accessLinks.id, id));
+  revalidatePath(`/offers/${planId}`);
+}
+export async function deleteAccessLink(fd: FormData) {
+  const id = Number(fd.get("id")); const planId = Number(fd.get("planId"));
+  await db().delete(accessLinks).where(eq(accessLinks.id, id));
+  revalidatePath(`/offers/${planId}`);
+}
+/** Дати людині доступ за оффером без оплати (з картки людини). */
+export async function grantOfferToPerson(fd: FormData) {
+  const personId = Number(fd.get("personId")); const planId = Number(fd.get("planId"));
+  const until = dt(fd, "until");
+  const r = await grantOffer(personId, planId, "admin", until ? { until } : {});
+  revalidatePath(`/people/${personId}`); redirect(`/people/${personId}?ok=${encodeURIComponent(`Доступ до «${r.plan.name}» відкрито${r.until ? ` до ${r.until.toLocaleDateString("uk-UA")}` : ""}`)}`);
 }
 
 export async function addTag(fd: FormData) {
@@ -209,35 +283,53 @@ import { enroll as enrollPerson, processDue, sendStep, sendIntro, STEP_TYPES, ty
 const { funnels, funnelSteps, funnelEnrollments, funnelFolders, funnelModules, funnelCommands } = schema;
 
 const num = (fd: FormData, k: string) => Number(fd.get(k) || 0) || 0;
-const on = (fd: FormData, k: string) => fd.get(k) === "on";
 
+/** Шлях розділу для воронки або цифрового продукту (спільний редактор кроків). */
+async function fb(id: number) { const [f] = await db().select({ kind: funnels.kind }).from(funnels).where(eq(funnels.id, id)); return f?.kind === "product" ? "/products" : "/funnels"; }
 async function refreshFunnelCounts(funnelId: number) {
   await db().update(funnels).set({ stepsCount: sql`(select count(*)::int from funnel_steps where funnel_id = ${funnelId})`, updatedAt: new Date() }).where(eq(funnels.id, funnelId));
 }
 
 // --- папки ---
 export async function createFolder(fd: FormData) {
+  const kind = str(fd, "kind") === "product" ? "product" : "funnel";
   const name = str(fd, "name"); if (!name) return;
-  const [f] = await db().insert(funnelFolders).values({ name }).returning({ id: funnelFolders.id });
-  revalidatePath("/funnels"); redirect(`/funnels?folder=${f.id}`);
+  const [f] = await db().insert(funnelFolders).values({ name, kind }).returning({ id: funnelFolders.id });
+  revalidatePath("/funnels"); revalidatePath("/products"); redirect(`${kind === "product" ? "/products" : "/funnels"}?folder=${f.id}`);
 }
 export async function renameFolder(fd: FormData) {
   const id = num(fd, "id"); const name = str(fd, "name");
   if (id && name) await db().update(funnelFolders).set({ name }).where(eq(funnelFolders.id, id));
-  revalidatePath("/funnels");
+  revalidatePath("/funnels"); revalidatePath("/products");
 }
 export async function deleteFolder(fd: FormData) {
   const id = num(fd, "id");
   if (id) await db().delete(funnelFolders).where(eq(funnelFolders.id, id)); // воронки залишаються, folder_id → null
-  revalidatePath("/funnels"); redirect("/funnels");
+  revalidatePath("/funnels"); revalidatePath("/products"); redirect("/funnels");
 }
 
 // --- воронки ---
+/** Цифровий продукт (ZenEdu Digital product): той самий редактор кроків, доступ дається офферами. Разом можна створити оффер або додати продукт до наявного. */
+export async function createProduct(fd: FormData) {
+  const d = db();
+  const settings: FunnelSettings = { entryKind: "manual", entryValue: "", accessDirect: false, accessAfterFinish: true, contentProtection: false, restart: false, lessonTitles: true, template: false, quietHours: true };
+  const name = str(fd, "name") || "Новий продукт";
+  const [f] = await d.insert(funnels).values({ source: "hub", kind: "product", name, folderId: num(fd, "folderId") || null, buttonText: "Отримати доступ", status: "draft", isActive: false, settings }).returning({ id: funnels.id });
+  const offerMode = str(fd, "offerMode"); // new | existing | none
+  if (offerMode === "new") {
+    const paymentType = str(fd, "paymentType") === "one_time" ? "one_time" : "subscription";
+    await d.insert(plans).values({ key: `${slugKey(name)}_${Date.now().toString(36)}`, name, price: str(fd, "price") || "0", currency: str(fd, "currency") || "UAH", paymentType, period: "month", intervalCount: 1, products: [f.id], accessMode: "forever", isActive: true, showInBot: true });
+  } else if (offerMode === "existing" && num(fd, "offerId")) {
+    await d.execute(sql`update plans set products = products || to_jsonb(${f.id}::int), updated_at = now() where id = ${num(fd, "offerId")} and not products @> to_jsonb(array[${f.id}::int])`);
+  }
+  revalidatePath("/products"); revalidatePath("/offers"); redirect(`/products/${f.id}`);
+}
+const slugKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 24) || "offer";
 export async function createFunnel(fd: FormData) {
   const folderId = num(fd, "folderId") || null;
   const settings: FunnelSettings = { entryKind: "start", entryValue: "", accessDirect: false, accessAfterFinish: true, contentProtection: false, restart: false, lessonTitles: false, template: false, quietHours: true };
   const [f] = await db().insert(funnels).values({ source: "hub", name: str(fd, "name") || "Нова воронка", folderId, buttonText: "Отримати доступ", status: "draft", isActive: false, settings }).returning({ id: funnels.id });
-  revalidatePath("/funnels"); redirect(`/funnels/${f.id}`);
+  revalidatePath("/funnels"); revalidatePath("/products"); redirect(`${await fb(f.id)}/${f.id}`);
 }
 export async function saveFunnelSettings(fd: FormData) {
   const id = num(fd, "id");
@@ -259,18 +351,18 @@ export async function saveFunnelSettings(fd: FormData) {
     name: str(fd, "name") || "Без назви", description: str(fd, "description") || null, buttonText: str(fd, "buttonText") || "Отримати доступ",
     cover, entry: settings.entryKind, settings, updatedAt: new Date(),
   }).where(eq(funnels.id, id));
-  revalidatePath(`/funnels/${id}`); revalidatePath("/funnels"); revalidatePath(`/f/${id}`);
-  redirect(`/funnels/${id}?tab=settings&saved=1`);
+  revalidatePath(`${await fb(id)}/${id}`); revalidatePath("/funnels"); revalidatePath("/products"); revalidatePath(`/f/${id}`);
+  redirect(`${await fb(id)}/${id}?tab=settings&saved=1`);
 }
 export async function setFunnelStatus(fd: FormData) {
   const id = num(fd, "id"); const active = str(fd, "status") === "active";
   await db().update(funnels).set({ status: active ? "active" : "stopped", isActive: active, updatedAt: new Date() }).where(eq(funnels.id, id));
-  revalidatePath("/funnels"); revalidatePath(`/funnels/${id}`);
+  revalidatePath("/funnels"); revalidatePath("/products"); revalidatePath(`${await fb(id)}/${id}`);
 }
 export async function moveFunnel(fd: FormData) {
   const id = num(fd, "id"); const folderId = num(fd, "folderId") || null;
   await db().update(funnels).set({ folderId, updatedAt: new Date() }).where(eq(funnels.id, id));
-  revalidatePath("/funnels");
+  revalidatePath("/funnels"); revalidatePath("/products");
 }
 export async function duplicateFunnel(fd: FormData) {
   const id = num(fd, "id"); const d = db();
@@ -291,11 +383,13 @@ export async function duplicateFunnel(fd: FormData) {
   }
   const cmds = await d.select().from(funnelCommands).where(eq(funnelCommands.funnelId, id));
   for (const c of cmds) await d.insert(funnelCommands).values({ funnelId: nf.id, command: c.command, description: c.description, position: c.position, action: c.action.type === "step" && c.action.stepId ? { ...c.action, stepId: stepMap.get(c.action.stepId) } : c.action });
-  revalidatePath("/funnels"); redirect(`/funnels/${nf.id}`);
+  revalidatePath("/funnels"); revalidatePath("/products"); redirect(`${await fb(nf.id)}/${nf.id}`);
 }
 export async function deleteFunnel(fd: FormData) {
-  await db().delete(funnels).where(eq(funnels.id, num(fd, "id")));
-  revalidatePath("/funnels"); redirect("/funnels");
+  const id = num(fd, "id"); const base = await fb(id);
+  if (base === "/products") await db().execute(sql`update plans set products = (select coalesce(jsonb_agg(x), '[]'::jsonb) from jsonb_array_elements(products) x where x <> to_jsonb(${id}::int)) where products @> to_jsonb(array[${id}::int])`);
+  await db().delete(funnels).where(eq(funnels.id, id));
+  revalidatePath("/funnels"); revalidatePath("/products"); revalidatePath("/offers"); redirect(base);
 }
 
 // --- модулі ---
@@ -303,17 +397,17 @@ export async function addModule(fd: FormData) {
   const funnelId = num(fd, "funnelId"); const name = str(fd, "name") || "Новий модуль";
   const last = await db().select({ p: funnelModules.position }).from(funnelModules).where(eq(funnelModules.funnelId, funnelId)).orderBy(desc(funnelModules.position)).limit(1);
   await db().insert(funnelModules).values({ funnelId, name, position: (last[0]?.p ?? 0) + 10 });
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function renameModule(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId"); const name = str(fd, "name");
   if (name) await db().update(funnelModules).set({ name }).where(eq(funnelModules.id, id));
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function deleteModule(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId");
   await db().delete(funnelModules).where(eq(funnelModules.id, id)); // кроки залишаються без модуля
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function moveModule(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId"); const dir = str(fd, "dir");
@@ -324,7 +418,7 @@ export async function moveModule(fd: FormData) {
     await db().update(funnelModules).set({ position: pi }).where(eq(funnelModules.id, mods[i].id));
     await db().update(funnelModules).set({ position: mods[i].position }).where(eq(funnelModules.id, mods[j].id));
   }
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 
 // --- кроки ---
@@ -339,7 +433,7 @@ export async function addStep(fd: FormData) {
   const label = STEP_TYPES.find((t) => t.key === type)?.label ?? "Крок";
   const [s] = await db().insert(funnelSteps).values({ funnelId, moduleId, position: (all.at(-1)?.p ?? 0) + 10, type, title: `${label} ${all.length + 1}`, body: "", isActive: true, config: DEFAULT_CONFIG(type, all.length === 0) as Record<string, unknown> }).returning({ id: funnelSteps.id });
   await refreshFunnelCounts(funnelId);
-  revalidatePath(`/funnels/${funnelId}`); redirect(`/funnels/${funnelId}/steps/${s.id}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`); redirect(`${await fb(funnelId)}/${funnelId}/steps/${s.id}`);
 }
 export async function saveStep(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId");
@@ -363,11 +457,11 @@ export async function saveStep(fd: FormData) {
   const body = str(fd, "body").slice(0, 4096);
   await db().update(funnelSteps).set({ title: str(fd, "title") || null, body, moduleId: num(fd, "moduleId") || null, isActive: str(fd, "status") !== "stopped", config: config as Record<string, unknown> }).where(eq(funnelSteps.id, id));
   await refreshFunnelCounts(funnelId);
-  revalidatePath(`/funnels/${funnelId}`); revalidatePath(`/funnels/${funnelId}/steps/${id}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`); revalidatePath(`${await fb(funnelId)}/${funnelId}/steps/${id}`);
   const next = str(fd, "after"); // preview | close
-  if (next === "preview") { await sendStepToAdmin(id); redirect(`/funnels/${funnelId}/steps/${id}?sent=1`); }
-  if (next === "close") redirect(`/funnels/${funnelId}`);
-  redirect(`/funnels/${funnelId}/steps/${id}?saved=1`);
+  if (next === "preview") { await sendStepToAdmin(id); redirect(`${await fb(funnelId)}/${funnelId}/steps/${id}?sent=1`); }
+  if (next === "close") redirect(`${await fb(funnelId)}/${funnelId}`);
+  redirect(`${await fb(funnelId)}/${funnelId}/steps/${id}?saved=1`);
 }
 async function sendStepToAdmin(stepId: number) {
   const tg = adminTelegramId();
@@ -378,12 +472,12 @@ async function sendStepToAdmin(stepId: number) {
 export async function previewStep(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId");
   await sendStepToAdmin(id);
-  redirect(`/funnels/${funnelId}/steps/${id}?sent=1`);
+  redirect(`${await fb(funnelId)}/${funnelId}/steps/${id}?sent=1`);
 }
 export async function toggleStep(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId");
   await db().update(funnelSteps).set({ isActive: sql`not ${funnelSteps.isActive}` }).where(eq(funnelSteps.id, id));
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function duplicateStep(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId"); const d = db();
@@ -394,14 +488,14 @@ export async function duplicateStep(fd: FormData) {
   if (nextPos != null && nextPos - s.position <= 1) for (const x of after.slice(idx + 1)) await d.update(funnelSteps).set({ position: x.p + 10 }).where(eq(funnelSteps.id, x.id));
   await d.insert(funnelSteps).values({ funnelId, moduleId: s.moduleId, position, type: s.type, title: `${s.title ?? "Крок"} (копія)`, body: s.body, isActive: s.isActive, config: s.config });
   await refreshFunnelCounts(funnelId);
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function deleteStep(fd: FormData) {
   const funnelId = num(fd, "funnelId");
   await db().delete(funnelSteps).where(eq(funnelSteps.id, num(fd, "id")));
   await refreshFunnelCounts(funnelId);
-  revalidatePath(`/funnels/${funnelId}`);
-  if (str(fd, "back") === "1") redirect(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
+  if (str(fd, "back") === "1") redirect(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function moveStep(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId"); const dir = str(fd, "dir");
@@ -412,7 +506,7 @@ export async function moveStep(fd: FormData) {
     await db().update(funnelSteps).set({ position: pj }).where(eq(funnelSteps.id, steps[i].id));
     await db().update(funnelSteps).set({ position: steps[i].position }).where(eq(funnelSteps.id, steps[j].id));
   }
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 
 // --- меню (команди) ---
@@ -423,12 +517,12 @@ export async function saveCommand(fd: FormData) {
   const row = { funnelId, command, description: str(fd, "description").slice(0, 256) || null, action };
   if (id) await db().update(funnelCommands).set(row).where(eq(funnelCommands.id, id));
   else { const last = await db().select({ p: funnelCommands.position }).from(funnelCommands).where(eq(funnelCommands.funnelId, funnelId)).orderBy(desc(funnelCommands.position)).limit(1); await db().insert(funnelCommands).values({ ...row, position: (last[0]?.p ?? 0) + 10 }); }
-  revalidatePath(`/funnels/${funnelId}`); redirect(`/funnels/${funnelId}?tab=menu`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`); redirect(`${await fb(funnelId)}/${funnelId}?tab=menu`);
 }
 export async function deleteCommand(fd: FormData) {
   const funnelId = num(fd, "funnelId");
   await db().delete(funnelCommands).where(eq(funnelCommands.id, num(fd, "id")));
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 
 // --- проходження ---
@@ -436,7 +530,7 @@ export async function enrollToFunnel(fd: FormData) {
   const funnelId = num(fd, "funnelId"); const personId = num(fd, "personId");
   await enrollPerson(funnelId, personId, "manual");
   await processDue(20);
-  revalidatePath(`/funnels/${funnelId}`); revalidatePath(`/people/${personId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`); revalidatePath(`/people/${personId}`);
 }
 export async function testFunnelOnMe(fd: FormData) {
   const funnelId = num(fd, "funnelId"); const mode = str(fd, "mode"); // intro | steps
@@ -452,21 +546,21 @@ export async function testFunnelOnMe(fd: FormData) {
     if (!shown) { await enrollPerson(funnelId, p[0].id, "test"); await processDue(20); }
     if (!fs.restart) await db().update(funnels).set({ settings: fs }).where(eq(funnels.id, funnelId));
   }
-  revalidatePath(`/funnels/${funnelId}`); redirect(`/funnels/${funnelId}?tested=${p[0] ? 1 : 0}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`); redirect(`${await fb(funnelId)}/${funnelId}?tested=${p[0] ? 1 : 0}`);
 }
 export async function stopFunnelEnrollment(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId");
   await db().update(funnelEnrollments).set({ status: "stopped", stopReason: "manual", finishedAt: new Date(), awaitingStepId: null }).where(eq(funnelEnrollments.id, id));
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function stopEnrollmentsBulk(fd: FormData) {
   const funnelId = num(fd, "funnelId"); const ids = String(fd.get("ids") ?? "").split(",").map(Number).filter(Boolean);
   if (ids.length) await db().update(funnelEnrollments).set({ status: "stopped", stopReason: "manual", finishedAt: new Date(), awaitingStepId: null }).where(and(eq(funnelEnrollments.funnelId, funnelId), inArray(funnelEnrollments.id, ids)));
-  revalidatePath(`/funnels/${funnelId}`);
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function runTickNow() {
   await processDue(100);
-  revalidatePath("/funnels");
+  revalidatePath("/funnels"); revalidatePath("/products");
 }
 
 // ---------- бібліотека ----------
@@ -622,4 +716,4 @@ export async function markZenCancelled(fd: FormData) {
   await db().update(subsT).set({ zenCancelledAt: fd.get("undo") ? null : new Date(), updatedAt: new Date() }).where(eq(subsT.id, id));
   revalidatePath("/migration"); redirect("/migration");
 }
-export async function planKeys() { return db().select({ key: plansT.key, name: plansT.name }).from(plansT).where(eq(plansT.isActive, true)).orderBy(plansT.sortOrder); }
+export async function planKeys(subscriptionOnly = false) { return db().select({ key: plansT.key, name: plansT.name }).from(plansT).where(subscriptionOnly ? and(eq(plansT.isActive, true), eq(plansT.paymentType, "subscription")) : eq(plansT.isActive, true)).orderBy(plansT.sortOrder); }

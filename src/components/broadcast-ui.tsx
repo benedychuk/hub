@@ -18,7 +18,7 @@ const ACTIONS: { k: Action["type"]; label: string }[] = [
 ];
 
 /** Кнопки розсилки: колір, тип (посилання / дія / оплата / Mini App), теги за клік, список дій. */
-export function BroadcastButtonsEditor({ initial, funnels, offers }: { initial: BroadcastButton[]; funnels: Ref[]; offers: (Ref & { link: string | null })[] }) {
+export function BroadcastButtonsEditor({ initial, funnels, offers, hubOffers = [] }: { initial: BroadcastButton[]; funnels: Ref[]; offers: (Ref & { link: string | null })[]; hubOffers?: { id: number; name: string; key: string }[] }) {
   const [rows, setRows] = useState<BroadcastButton[]>(initial);
   const [open, setOpen] = useState<number | null>(null);
   const json = useMemo(() => JSON.stringify(rows), [rows]);
@@ -46,7 +46,7 @@ export function BroadcastButtonsEditor({ initial, funnels, offers }: { initial: 
               <label className="field">Тип<select value={b.type} onChange={(e) => upd(i, { type: e.target.value as BroadcastButton["type"] })} className="input">{TYPES.map((t) => <option key={t.k} value={t.k}>{t.label}</option>)}</select></label>
             </div>
             {(b.type === "link" || b.type === "miniapp") && <label className="field">{b.type === "miniapp" ? "URL Mini App (https)" : "Посилання"}<input value={b.url ?? ""} onChange={(e) => upd(i, { url: e.target.value })} placeholder="https://…" className="input" /></label>}
-            {b.type === "payment" && <label className="field">Оффер (посилання на оплату)<select value={b.url ?? ""} onChange={(e) => upd(i, { url: e.target.value })} className="input"><option value="">Оберіть оффер</option>{offers.filter((o) => o.link).map((o) => <option key={o.id} value={o.link!}>{o.name}</option>)}</select></label>}
+            {b.type === "payment" && <label className="field">Оффер (посилання на оплату)<select value={b.url ?? ""} onChange={(e) => upd(i, { url: e.target.value })} className="input"><option value="">Оберіть оффер</option>{hubOffers.map((o) => <option key={"h" + o.id} value={`hub:${o.key}`}>Hub · {o.name}</option>)}{offers.filter((o) => o.link).map((o) => <option key={o.id} value={o.link!}>ZenEdu · {o.name}</option>)}</select></label>}
             {b.type === "link" && <div className="row-actions" style={{ gap: 16 }}>
               <label className="ck" title="Посилання йде через редирект Hub: адресу не видно, клік рахується"><input type="checkbox" checked={!b.directLink} onChange={(e) => upd(i, { directLink: !e.target.checked })} /> Захист від копіювання й облік кліків</label>
               <label className="ck" title="Пряме посилання без редиректу: клік не рахується"><input type="checkbox" checked={Boolean(b.directLink)} onChange={(e) => upd(i, { directLink: e.target.checked })} /> Пряме посилання</label>

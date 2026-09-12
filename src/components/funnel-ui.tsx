@@ -135,6 +135,7 @@ export function SendTimeFields({ initial }: { initial: { mode: string; value?: n
           <option value="immediately">Одразу після попереднього кроку</option>
           <option value="after">Через певний час після попереднього кроку</option>
           <option value="exact">У конкретний день о вказаній годині</option>
+          <option value="after_action">Після дії: коли людина відповість або натисне кнопку попереднього кроку</option>
         </select></label>
       {mode === "after" && <div className="row-actions"><span className="muted">через</span><input name="sendValue" type="number" min={0} defaultValue={initial.value ?? 1} className="input" style={{ width: 90 }} /><select name="sendUnit" defaultValue={initial.unit ?? "hours"} className="input" style={{ width: 120 }}><option value="minutes">хвилин</option><option value="hours">годин</option><option value="days">днів</option></select></div>}
       {mode === "exact" && <div className="row-actions"><span className="muted">день</span><input name="sendDay" type="number" min={0} defaultValue={initial.day ?? 1} className="input" style={{ width: 80 }} /><span className="muted">після попереднього кроку (0 = того ж дня), о</span><input name="sendTime" type="time" defaultValue={initial.time ?? "12:00"} className="input" style={{ width: 120 }} /><span className="muted">за Києвом</span></div>}

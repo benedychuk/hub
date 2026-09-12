@@ -2,6 +2,7 @@ import { processDue, processDeletions } from "@/lib/funnels";
 import { accessTick } from "@/lib/telegram-access";
 import { processBroadcasts } from "@/lib/broadcasts";
 import { chargeDue } from "@/lib/payments";
+import { syncProductAccess } from "@/lib/offers";
 import { hasDb } from "@/db";
 
 export const dynamic = "force-dynamic";
@@ -19,9 +20,10 @@ export async function GET(req: Request) {
     const deletions = await processDeletions().catch((e) => ({ error: String(e).slice(0, 200) }));
     const access = await accessTick().catch((e) => ({ error: String(e).slice(0, 200) }));
     const payments = await chargeDue().catch((e) => ({ error: String(e).slice(0, 200) }));
+    const products = await syncProductAccess().catch((e) => ({ error: String(e).slice(0, 200) })); // доступ до цифрових продуктів за офферами
     // розсилки: заплановані, черга надсилання, видалення у підписників; у межах бюджету, щоб тіки не накладались
     const broadcasts = await processBroadcasts(Math.max(5_000, 50_000 - (Date.now() - t0))).catch((e) => ({ error: String(e).slice(0, 200) }));
-    return Response.json({ ok: true, funnels, deletions, access, payments, broadcasts });
+    return Response.json({ ok: true, funnels, deletions, access, payments, products, broadcasts });
   }
   catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 500 }); }
 }

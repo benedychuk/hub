@@ -23,7 +23,7 @@ export default async function BroadcastEditor({ params, searchParams }: { params
   const { id } = await params; const sp = await searchParams;
   const [counts, d] = await Promise.all([navCounts(), broadcastDetail(Number(id))]);
   if (!d) notFound();
-  const { b, recipients, clicks, media, tags, funnels, plans, offers, resources, byStatus } = d;
+  const { b, recipients, clicks, media, tags, funnels, plans, offers, hubOffers, resources, byStatus } = d;
   const editable = b.status === "draft" || b.status === "scheduled";
   const a = b.audience ?? {};
   const hasFilters = Object.entries(a).some(([k, v]) => k !== "onlyAdmin" && (Array.isArray(v) ? v.length > 0 : Boolean(v)));
@@ -84,7 +84,7 @@ export default async function BroadcastEditor({ params, searchParams }: { params
               </div>
             </Section>
             <Section title="Кнопки" description="До 10 кнопок під повідомленням: посилання, дії в боті, оплата, Mini App.">
-              <BroadcastButtonsEditor initial={b.buttons ?? []} funnels={funnels} offers={offers} />
+              <BroadcastButtonsEditor initial={b.buttons ?? []} funnels={funnels} offers={offers} hubOffers={hubOffers} />
             </Section>
           </div>
           <div className="form aside-sticky">

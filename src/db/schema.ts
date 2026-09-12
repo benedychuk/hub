@@ -68,17 +68,43 @@ export const resources = pgTable("resources", {
   isActive: boolean("is_active").notNull().default(true),
 });
 
-// Тариф.
+export type OfferDesign = {
+  titleMode?: "offer" | "custom"; title?: string;
+  description?: string;   // Telegram HTML, показується на сторінці оплати й у повідомленні бота
+  buttonText?: string;
+  image?: string;         // data URL
+};
+export type OfferSettings = {
+  removeContentOnEnd?: boolean;   // після закінчення доступу видалити надіслані кроки продуктів із бота
+  postPurchaseText?: string;      // повідомлення в боті після оплати (Telegram HTML)
+  retries?: boolean;              // повторні списання 1/3/5 днів (підписка)
+  reminder?: boolean;             // нагадування про майбутнє списання
+  expiryReminder?: boolean;       // нагадування про закінчення доступу (разова оплата з обмеженим доступом)
+  expiryDays?: number; expiryText?: string; renewalOfferId?: number;
+  collectEmail?: boolean;         // просити email на сторінці оплати
+};
+// Оффер Hub (ZenEdu Offer): те, що продається — набір продуктів і каналів, тип оплати, ціна, інтервал, тривалість доступу.
 export const plans = pgTable("plans", {
   id: serial("id").primaryKey(),
   key: text("key").notNull().unique(),
   name: text("name").notNull(),
   price: numeric("price", { precision: 12, scale: 2 }).notNull(),
   currency: text("currency").notNull().default("UAH"),
-  period: text("period").notNull().default("month"), // month | quarter | year
+  paymentType: text("payment_type").notNull().default("subscription"), // subscription | one_time
+  period: text("period").notNull().default("month"), // day | week | month | quarter | year — одиниця інтервалу підписки
+  intervalCount: integer("interval_count").notNull().default(1),   // N одиниць в інтервалі
   trialDays: integer("trial_days").notNull().default(0),
   trialPrice: numeric("trial_price", { precision: 12, scale: 2 }),
-  entitlements: jsonb("entitlements").$type<Record<string, string>>().notNull().default({}), // key -> quota/label
+  entitlements: jsonb("entitlements").$type<Record<string, string>>().notNull().default({}), // resourceKey -> quota/label (канали, групи, функції бота)
+  products: jsonb("products").$type<number[]>().notNull().default([]), // id цифрових продуктів (funnels.kind = product)
+  accessMode: text("access_mode").notNull().default("forever"), // разова оплата: forever | days | until | none
+  accessDays: integer("access_days"),
+  accessUntil: timestamp("access_until", { withTimezone: true }),
+  salesEndAt: timestamp("sales_end_at", { withTimezone: true }),
+  spotsLimit: integer("spots_limit"),
+  showInBot: boolean("show_in_bot").notNull().default(true),
+  design: jsonb("design").$type<OfferDesign>().notNull().default({}),
+  settings: jsonb("settings").$type<OfferSettings>().notNull().default({}),
   isActive: boolean("is_active").notNull().default(true),
   isFeatured: boolean("is_featured").notNull().default(false),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -127,6 +153,8 @@ export const subscriptions = pgTable("subscriptions", {
   planId: integer("plan_id").references(() => plans.id),
   offerId: integer("offer_id").references(() => offers.id),
   source: text("source").notNull().default("zenedu"), // zenedu | hub
+  kind: text("kind").notNull().default("subscription"), // subscription | one_time | grant
+  accessLinkId: integer("access_link_id"),
   status: text("status").notNull().default("active"), // trialing | active | past_due | paused | cancelled | expired
   price: numeric("price", { precision: 12, scale: 2 }).notNull().default("0"),
   currency: text("currency").notNull().default("UAH"),
@@ -147,7 +175,7 @@ export const subscriptions = pgTable("subscriptions", {
   paymentsCount: integer("payments_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [uniqueIndex("subs_person_source_uidx").on(t.personId, t.source), index("subs_status_idx").on(t.status)]);
+}, (t) => [index("subs_person_source_idx").on(t.personId, t.source), index("subs_status_idx").on(t.status)]);
 
 // Право людини на ресурс.
 export const entitlements = pgTable("entitlements", {
@@ -191,15 +219,18 @@ export const events = pgTable("events", {
 // Папки воронок.
 export const funnelFolders = pgTable("funnel_folders", {
   id: serial("id").primaryKey(),
+  kind: text("kind").notNull().default("funnel"), // funnel | product
   name: text("name").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Воронки (структура як у ZenEdu; імпорт із ZenEdu + власні).
+// kind = product: цифровий продукт (ZenEdu Digital product) — той самий редактор кроків, але доступ дається офферами й посиланнями доступу, а не /start.
 export const funnels = pgTable("funnels", {
   id: serial("id").primaryKey(),
   source: text("source").notNull().default("hub"),
+  kind: text("kind").notNull().default("funnel"), // funnel | product
   zenFunnelId: integer("zen_funnel_id"),
   folderId: integer("folder_id").references(() => funnelFolders.id, { onDelete: "set null" }),
   name: text("name").notNull(),
@@ -462,3 +493,17 @@ export const paymentAttempts = pgTable("payment_attempts", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
 }, (t) => [uniqueIndex("pa_ref_uidx").on(t.orderReference), index("pa_person_idx").on(t.personId), index("pa_status_idx").on(t.status, t.createdAt)]);
+
+// Посилання доступу до оффера без оплати (ZenEdu Access links): N людей, до дати, можна рахувати як оплату.
+export const accessLinks = pgTable("access_links", {
+  id: serial("id").primaryKey(),
+  planId: integer("plan_id").notNull().references(() => plans.id, { onDelete: "cascade" }),
+  token: text("token").notNull(),
+  name: text("name"),
+  maxUses: integer("max_uses"),
+  usedCount: integer("used_count").notNull().default(0),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  markAsPayment: boolean("mark_as_payment").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("access_links_token_uidx").on(t.token), index("access_links_plan_idx").on(t.planId)]);
