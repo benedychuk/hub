@@ -16,9 +16,9 @@ const RETRY_DAYS = [1, 3, 5];
 
 // ---------- налаштування ----------
 export async function paymentSettings() {
-  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled"]));
+  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled", "payments.testers"]));
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true };
+  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true, testers: (Array.isArray(m["payments.testers"]) ? m["payments.testers"] as number[] : []) };
 }
 export async function setSetting(key: string, value: unknown) {
   await db().insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
@@ -50,11 +50,11 @@ async function hubSubFor(personId: number, planId: number | null | undefined) {
 }
 
 // ---------- початок оплати ----------
-/** Поки оплати не увімкнені власником, ними може користуватись лише адміністратор (ADMIN_TELEGRAM_ID) для тестів. */
+/** Поки оплати не увімкнені власником, ними можуть користуватись лише адміністратор (ADMIN_TELEGRAM_ID) і тестувальники зі списку в Налаштування → Оплати. */
 export async function paymentsAllowedFor(personId: number) {
   const st = await paymentSettings(); if (st.enabled) return true;
   const [p] = await db().select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, personId));
-  return Boolean(p && p.tg === adminTelegramId());
+  return Boolean(p && (p.tg === adminTelegramId() || st.testers.includes(p.tg)));
 }
 export async function beginPayment(personId: number, planKey: string, kind: "first" | "card" | "migrate") {
   const d = db();

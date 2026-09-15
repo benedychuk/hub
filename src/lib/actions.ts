@@ -681,6 +681,7 @@ export async function savePaymentSettings(fd: FormData) {
   await setPaySetting("payments.trialVerifyAmount", Math.max(1, Number(fd.get("verifyAmount") || 1)));
   await setPaySetting("payments.migrationAuto", fd.get("migrationAuto") === "on");
   await setPaySetting("payments.enabled", fd.get("enabled") === "on");
+  await setPaySetting("payments.testers", str(fd, "testers").split(/[\s,;]+/).map(Number).filter((n) => n > 0)); // Telegram ID тестувальників: бачать оплату, поки вона вимкнена для учасниць
   revalidatePath("/settings"); redirect("/settings?tab=payments&ok=" + encodeURIComponent(`Збережено. Режим: ${mode === "live" ? "бойовий" : "тестовий"}.`));
 }
 export async function makeTestPayLink(fd: FormData) {
