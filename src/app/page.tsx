@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { Activity } from "lucide-react";
 import Shell from "@/components/shell";
-import { Pill } from "@/components/ui";
 import { Section, Stat, Alert, Timeline, EmptyState, Toolbar } from "@/components/ui/layout";
 import { AutoSubmitSelect } from "@/components/ui/controls";
 import { offerOptions } from "@/lib/offers";
