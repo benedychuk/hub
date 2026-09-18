@@ -1,6 +1,7 @@
-import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db, hasDb, schema } from "@/db";
 import { adminTelegramId } from "./auth";
+import { offerScope, scopeSql } from "./offers";
 
 const { persons, subscriptions, orders, plans, offers, funnels, events, identities, syncRuns, resources, broadcasts, automations, bots } = schema;
 
@@ -23,24 +24,24 @@ export async function navCounts() {
   }, {} as Record<string, number>);
 }
 
-export async function dashboard() {
+export async function dashboard(offer?: string) {
   return safe(async () => {
     const d = db();
     const since30 = new Date(Date.now() - 30 * 86400000), since60 = new Date(Date.now() - 60 * 86400000);
-    const byStatus = await d.select({ status: subscriptions.status, c: count() }).from(subscriptions).groupBy(subscriptions.status);
-    const rev = await d.select({ cur: orders.currency, sum: sql<string>`coalesce(sum(price),0)`, c: count() }).from(orders)
-      .where(and(eq(orders.status, "paid"), gte(orders.createdAt, since30))).groupBy(orders.currency);
-    const starts30 = await d.select({ c: count() }).from(orders).where(and(eq(orders.status, "paid"), eq(orders.type, "subscription_start"), gte(orders.createdAt, since30)));
-    const startsPrev = await d.select({ c: count() }).from(orders).where(and(eq(orders.status, "paid"), eq(orders.type, "subscription_start"), gte(orders.createdAt, since60), lte(orders.createdAt, since30)));
-    const expiring = await d.select({ day: sql<string>`to_char(current_period_end, 'YYYY-MM-DD')`, c: count() }).from(subscriptions)
-      .where(and(inArray(subscriptions.status, ACTIVE), gte(subscriptions.currentPeriodEnd, new Date()), lte(subscriptions.currentPeriodEnd, new Date(Date.now() + 14 * 86400000))))
-      .groupBy(sql`to_char(current_period_end, 'YYYY-MM-DD')`).orderBy(sql`1`);
+    // фільтр за оффером: підписки (s) і замовлення (o) звужуються до оффера Hub із привʼязаними офферами ZenEdu або до одного оффера ZenEdu
+    const sc = await offerScope(offer);
+    const sW = sc ? scopeSql(sc, "s") : sql`true`; const oW = sc ? scopeSql(sc, "o") : sql`true`;
+    const byStatus = (await d.execute(sql`select s.status, count(*)::int as c from subscriptions s where ${sW} group by 1`)).rows as { status: string; c: number }[];
+    const rev = (await d.execute(sql`select o.currency as cur, coalesce(sum(o.price),0)::text as sum, count(*)::int as c from orders o where o.status = 'paid' and o.created_at >= ${since30} and ${oW} group by 1`)).rows as { cur: string; sum: string; c: number }[];
+    const starts30 = (await d.execute(sql`select count(*)::int as c from orders o where o.status = 'paid' and o.type = 'subscription_start' and o.created_at >= ${since30} and ${oW}`)).rows as { c: number }[];
+    const startsPrev = (await d.execute(sql`select count(*)::int as c from orders o where o.status = 'paid' and o.type = 'subscription_start' and o.created_at >= ${since60} and o.created_at <= ${since30} and ${oW}`)).rows as { c: number }[];
+    const expiring = (await d.execute(sql`select to_char(s.current_period_end, 'YYYY-MM-DD') as day, count(*)::int as c from subscriptions s where s.status in ('active','trialing','past_due') and s.current_period_end >= now() and s.current_period_end <= now() + interval '14 days' and ${sW} group by 1 order by 1`)).rows as { day: string; c: number }[];
     const monthly = await d.execute(sql`
-      select to_char(created_at, 'YYYY-MM') as m,
-        count(*) filter (where type = 'subscription_start')::int as starts,
-        count(*) filter (where type = 'subscription_renew')::int as renews,
-        coalesce(sum(price) filter (where currency = 'UAH' and type <> 'one_time'),0)::numeric as uah
-      from orders where status = 'paid' and created_at >= now() - interval '8 months'
+      select to_char(o.created_at, 'YYYY-MM') as m,
+        count(*) filter (where o.type = 'subscription_start')::int as starts,
+        count(*) filter (where o.type = 'subscription_renew')::int as renews,
+        coalesce(sum(o.price) filter (where o.currency = 'UAH' and o.type <> 'one_time'),0)::numeric as uah
+      from orders o where o.status = 'paid' and o.created_at >= now() - interval '8 months' and ${oW}
       group by 1 order by 1`);
     const recent = await d.select({ id: events.id, type: events.type, createdAt: events.createdAt, payload: events.payload, personId: events.personId, first: persons.firstName, last: persons.lastName, username: persons.username })
       .from(events).leftJoin(persons, eq(persons.id, events.personId)).orderBy(desc(events.createdAt)).limit(10);
@@ -49,33 +50,51 @@ export async function dashboard() {
   }, null);
 }
 
-export type PeopleFilter = { q?: string; status?: string; page?: number; tag?: string };
+export type PeopleFilter = { q?: string; status?: string; page?: number; tag?: string; offer?: string; product?: number; sort?: string; all?: boolean };
+/** Умови списку людей: пошук, статус підписки, тег, оффер (Hub або ZenEdu), доступ до продукту. Підписка людини — одна «головна»: активна, інакше остання. */
+async function peopleWhere(f: PeopleFilter) {
+  const conds = [];
+  if (f.q) {
+    const q = `%${f.q.trim()}%`;
+    const asNum = Number(f.q.trim());
+    conds.push(or(ilike(persons.firstName, q), ilike(persons.lastName, q), ilike(persons.username, q), ilike(persons.phone, q), ilike(persons.email, q),
+      Number.isFinite(asNum) && asNum > 0 ? eq(persons.telegramUserId, asNum) : sql`false`));
+  }
+  if (f.tag) conds.push(sql`${persons.tags} @> ${JSON.stringify([f.tag])}::jsonb`);
+  const sc = await offerScope(f.offer);
+  if (sc) conds.push(sql`exists (select 1 from subscriptions s where s.person_id = ${persons.id} and s.status in ('active','trialing','past_due') and ${scopeSql(sc, "s")})`);
+  if (f.product) conds.push(sql`exists (select 1 from funnel_enrollments e where e.person_id = ${persons.id} and e.funnel_id = ${f.product} and e.status = 'active')`);
+  if (f.status === "active") conds.push(sql`exists (select 1 from subscriptions s where s.person_id = ${persons.id} and s.status in ('active','past_due'))`);
+  else if (f.status === "trialing") conds.push(sql`exists (select 1 from subscriptions s where s.person_id = ${persons.id} and s.status = 'trialing')`);
+  else if (f.status === "past_due") conds.push(sql`exists (select 1 from subscriptions s where s.person_id = ${persons.id} and s.status = 'past_due')`);
+  else if (f.status === "expired") conds.push(sql`exists (select 1 from subscriptions s where s.person_id = ${persons.id} and s.status in ('expired','cancelled')) and not exists (select 1 from subscriptions s where s.person_id = ${persons.id} and s.status in ('active','trialing','past_due'))`);
+  else if (f.status === "none") conds.push(sql`not exists (select 1 from subscriptions s where s.person_id = ${persons.id})`);
+  else if (f.status === "hub") conds.push(sql`exists (select 1 from identities i where i.person_id = ${persons.id} and i.bot_key = 'hub')`);
+  return conds.length ? and(...conds) : undefined;
+}
+const mainSub = () => db().select({ personId: subscriptions.personId, status: subscriptions.status, price: subscriptions.price, currency: subscriptions.currency, end: subscriptions.currentPeriodEnd, source: subscriptions.source, planId: subscriptions.planId, offerId: subscriptions.offerId })
+  .from(subscriptions).where(sql`${subscriptions.id} = (select x.id from subscriptions x where x.person_id = ${subscriptions.personId} order by (x.status in ('active','trialing','past_due')) desc, x.updated_at desc limit 1)`).as("s");
+const peopleOrder = (sort?: string) => sort === "joined" ? [desc(sql`(select min(i.started_at) from identities i where i.person_id = ${persons.id} and i.bot_key = 'hub')`), desc(persons.id)]
+  : sort === "payments" ? [desc(sql`(select count(*) from orders o where o.person_id = ${persons.id} and o.status = 'paid')`), desc(persons.id)]
+  : sort === "name" ? [asc(persons.firstName), asc(persons.lastName)] : [desc(persons.lastActiveAt), desc(persons.id)];
 export async function people(f: PeopleFilter) {
   return safe(async () => {
     const d = db();
     const per = 50, page = Math.max(1, f.page ?? 1);
-    const conds = [];
-    if (f.q) {
-      const q = `%${f.q.trim()}%`;
-      const asNum = Number(f.q.trim());
-      conds.push(or(ilike(persons.firstName, q), ilike(persons.lastName, q), ilike(persons.username, q), ilike(persons.phone, q), ilike(persons.email, q),
-        Number.isFinite(asNum) && asNum > 0 ? eq(persons.telegramUserId, asNum) : sql`false`));
-    }
-    if (f.tag) conds.push(sql`${persons.tags} @> ${JSON.stringify([f.tag])}::jsonb`);
-    const subQ = d.select({ personId: subscriptions.personId, status: subscriptions.status, price: subscriptions.price, currency: subscriptions.currency, end: subscriptions.currentPeriodEnd, source: subscriptions.source })
-      .from(subscriptions).where(sql`true`).as("s");
-    let where = conds.length ? and(...conds) : undefined;
-    if (f.status === "active") where = and(where, inArray(subQ.status, ["active", "past_due"]));
-    else if (f.status === "trialing") where = and(where, eq(subQ.status, "trialing"));
-    else if (f.status === "past_due") where = and(where, eq(subQ.status, "past_due"));
-    else if (f.status === "expired") where = and(where, inArray(subQ.status, ["expired", "cancelled"]));
-    else if (f.status === "none") where = and(where, sql`${subQ.status} is null`);
-    else if (f.status === "hub") where = and(where, sql`exists (select 1 from identities i where i.person_id = ${persons.id} and i.bot_key = 'hub')`);
-    const rows = await d.select({ p: persons, subStatus: subQ.status, subPrice: subQ.price, subCur: subQ.currency, subEnd: subQ.end, subSource: subQ.source })
-      .from(persons).leftJoin(subQ, eq(subQ.personId, persons.id)).where(where).orderBy(desc(persons.lastActiveAt), desc(persons.id)).limit(per).offset((page - 1) * per);
-    const [total] = await d.select({ c: count() }).from(persons).leftJoin(subQ, eq(subQ.personId, persons.id)).where(where);
+    const where = await peopleWhere(f); const subQ = mainSub();
+    const rows = await d.select({ p: persons, subStatus: subQ.status, subPrice: subQ.price, subCur: subQ.currency, subEnd: subQ.end, subSource: subQ.source, hubStarted: sql<Date | null>`(select min(i.started_at) from identities i where i.person_id = ${persons.id} and i.bot_key = 'hub')`, paid: sql<number>`(select count(*)::int from orders o where o.person_id = ${persons.id} and o.status = 'paid')` })
+      .from(persons).leftJoin(subQ, eq(subQ.personId, persons.id)).where(where).orderBy(...peopleOrder(f.sort)).limit(per).offset((page - 1) * per);
+    const [total] = await d.select({ c: count() }).from(persons).where(where);
     return { rows, total: total.c, page, per };
   }, { rows: [], total: 0, page: 1, per: 50 });
+}
+/** Експорт людей за тими самими фільтрами (до 5000 рядків). */
+export async function peopleExport(f: PeopleFilter) {
+  const d = db(); const where = await peopleWhere(f); const subQ = mainSub();
+  const rows = await d.select({ p: persons, subStatus: subQ.status, subPrice: subQ.price, subCur: subQ.currency, subEnd: subQ.end, subSource: subQ.source, planId: subQ.planId, offerId: subQ.offerId, hubStarted: sql<Date | null>`(select min(i.started_at) from identities i where i.person_id = ${persons.id} and i.bot_key = 'hub')`, paid: sql<number>`(select count(*)::int from orders o where o.person_id = ${persons.id} and o.status = 'paid')`, paidSum: sql<string>`(select coalesce(sum(o.price),0) from orders o where o.person_id = ${persons.id} and o.status = 'paid')` })
+    .from(persons).leftJoin(subQ, eq(subQ.personId, persons.id)).where(where).orderBy(...peopleOrder(f.sort)).limit(5000);
+  const [pls, zs] = await Promise.all([d.select({ id: plans.id, name: plans.name }).from(plans), d.select({ id: offers.id, name: offers.name }).from(offers)]);
+  return rows.map((r) => ({ ...r, offerName: r.planId ? pls.find((x) => x.id === r.planId)?.name ?? "" : r.offerId ? zs.find((x) => x.id === r.offerId)?.name ?? "" : "" }));
 }
 
 export async function person(id: number) {
@@ -121,17 +140,42 @@ export async function subscriptionList(status?: string, page = 1) {
   }, { rows: [], total: 0, page: 1, per: 50, byStatus: [] });
 }
 
-export async function paymentList(page = 1, type?: string) {
+/** Умова списку замовлень: тип (перші, продовження, разові, пробний → оплата, пробний без продовження) і оффер. */
+async function ordersWhere(type?: string, offer?: string) {
+  const parts = [];
+  const sc = await offerScope(offer);
+  if (sc) parts.push(scopeSql(sc, "o"));
+  if (type === "trial_to_paid") parts.push(sql`o.type = 'subscription_renew' and (select count(*) from orders y where y.person_id = o.person_id and coalesce(y.offer_id, -coalesce(y.plan_id, 0)) = coalesce(o.offer_id, -coalesce(o.plan_id, 0)) and y.status = 'paid' and y.created_at < o.created_at) = 1 and (select y.price from orders y where y.person_id = o.person_id and coalesce(y.offer_id, -coalesce(y.plan_id, 0)) = coalesce(o.offer_id, -coalesce(o.plan_id, 0)) and y.status = 'paid' and y.created_at < o.created_at order by y.created_at limit 1) < o.price`);
+  else if (type === "trial_churn") parts.push(sql`o.type = 'subscription_start' and o.created_at < now() - interval '40 days' and o.price < coalesce((select z.price from offers z where z.id = o.offer_id), (select pl.price from plans pl where pl.id = o.plan_id), o.price + 1) and not exists (select 1 from orders y where y.person_id = o.person_id and coalesce(y.offer_id, -coalesce(y.plan_id, 0)) = coalesce(o.offer_id, -coalesce(o.plan_id, 0)) and y.status = 'paid' and y.created_at > o.created_at)`);
+  else if (type && type !== "all") parts.push(sql`o.type = ${type}`);
+  return parts.length ? sql.join(parts, sql` and `) : sql`true`;
+}
+export async function paymentList(page = 1, type?: string, offer?: string) {
   return safe(async () => {
     const d = db();
     const per = 50;
-    const where = type && type !== "all" ? eq(orders.type, type) : undefined;
-    const rows = await d.select({ o: orders, p: persons }).from(orders).leftJoin(persons, eq(persons.id, orders.personId)).where(where).orderBy(desc(orders.createdAt)).limit(per).offset((page - 1) * per);
-    const [total] = await d.select({ c: count() }).from(orders).where(where);
+    const where = await ordersWhere(type, offer);
+    const rows = (await d.execute(sql`select o.id, o.created_at, o.type, o.price, o.currency, o.payment_system, o.status, o.offer_name, o.source, o.plan_id, p.id as pid, p.first_name, p.last_name, p.username, p.telegram_user_id
+      from orders o left join persons p on p.id = o.person_id where ${where} order by o.created_at desc limit ${per} offset ${(page - 1) * per}`)).rows as { id: number; created_at: string; type: string | null; price: string; currency: string; payment_system: string | null; status: string; offer_name: string | null; source: string; plan_id: number | null; pid: number | null; first_name: string | null; last_name: string | null; username: string | null; telegram_user_id: number | null }[];
+    const [total] = (await d.execute(sql`select count(*)::int as c, coalesce(sum(o.price) filter (where o.status = 'paid'), 0) as s from orders o where ${where}`)).rows as { c: number; s: string }[];
     const since30 = new Date(Date.now() - 30 * 86400000);
     const sum = await d.select({ cur: orders.currency, sum: sql<string>`coalesce(sum(price),0)`, c: count() }).from(orders).where(and(eq(orders.status, "paid"), gte(orders.createdAt, since30))).groupBy(orders.currency);
-    return { rows, total: total.c, page, per, sum };
-  }, { rows: [], total: 0, page: 1, per: 50, sum: [] });
+    return { rows, total: total.c, filteredSum: total.s, page, per, sum };
+  }, { rows: [], total: 0, filteredSum: "0", page: 1, per: 50, sum: [] });
+}
+export async function ordersExport(type?: string, offer?: string) {
+  const where = await ordersWhere(type, offer);
+  return (await db().execute(sql`select o.id, o.created_at, o.paid_at, o.type, o.price, o.currency, o.payment_system, o.status, o.offer_name, o.source, p.id as pid, p.first_name, p.last_name, p.username, p.telegram_user_id, p.email, p.phone
+    from orders o left join persons p on p.id = o.person_id where ${where} order by o.created_at desc limit 20000`)).rows as Record<string, unknown>[];
+}
+/** Пробні періоди за оффером: скільки почали, скільки продовжили, скільки не продовжили (за замовленнями ZenEdu і Hub). */
+export async function trialStats(offer?: string) {
+  return safe(async () => {
+    const started = (await db().execute(sql`select count(*)::int as c from orders o where ${await ordersWhere("all", offer)} and o.status = 'paid' and o.type = 'subscription_start' and o.price < coalesce((select z.price from offers z where z.id = o.offer_id), (select pl.price from plans pl where pl.id = o.plan_id), o.price + 1)`)).rows[0] as { c: number };
+    const conv = (await db().execute(sql`select count(*)::int as c from orders o where ${await ordersWhere("trial_to_paid", offer)}`)).rows[0] as { c: number };
+    const churn = (await db().execute(sql`select count(*)::int as c from orders o where ${await ordersWhere("trial_churn", offer)}`)).rows[0] as { c: number };
+    return { started: started.c, converted: conv.c, churned: churn.c };
+  }, { started: 0, converted: 0, churned: 0 });
 }
 
 export async function planList() { return safe(() => db().select().from(plans).orderBy(plans.sortOrder, plans.id), []); }

@@ -174,7 +174,7 @@ async function onApproved(a: Attempt, r: WfpResponse, c: Creds) {
 
 async function recordOrder(a: Attempt, s: Sub, name: string, type: string) {
   const d = db();
-  const [o] = await d.insert(orders).values({ source: "hub", personId: a.personId, offerName: name, type, price: a.amount, currency: a.currency, status: "paid", paymentSystem: "wayforpay", paidAt: new Date() }).returning();
+  const [o] = await d.insert(orders).values({ source: "hub", personId: a.personId, planId: a.planId ?? s.planId ?? null, offerName: name, type, price: a.amount, currency: a.currency, status: "paid", paymentSystem: "wayforpay", paidAt: new Date() }).returning();
   await d.update(paymentAttempts).set({ orderId: o.id, subscriptionId: s.id }).where(eq(paymentAttempts.id, a.id));
   return o;
 }

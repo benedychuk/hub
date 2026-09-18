@@ -50,6 +50,11 @@ export async function saveOffer(fd: FormData) {
   let oid = id;
   if (id) await db().update(plans).set(row).where(eq(plans.id, id));
   else { const [n] = await db().insert(plans).values(row as typeof plans.$inferInsert).returning({ id: plans.id }); oid = n.id; }
+  if (part === "general") { // відповідність офферам ZenEdu: спільні звіти й фільтри для підписок з обох джерел
+    const zen = fd.getAll("zenOfferIds").map(Number).filter((n) => n > 0);
+    await db().update(schema.offers).set({ planId: null }).where(eq(schema.offers.planId, oid));
+    if (zen.length) await db().update(schema.offers).set({ planId: oid }).where(inArray(schema.offers.id, zen));
+  }
   revalidatePath("/offers"); revalidatePath(`/offers/${oid}`); revalidatePath("/products");
   redirect(`/offers/${oid}?tab=${part}&saved=1`);
 }
@@ -89,6 +94,21 @@ export async function createOfferForProduct(fd: FormData) {
   const [n] = await db().insert(plans).values({ key: `${slugKey(f.name)}_${Date.now().toString(36)}`, name: str(fd, "name") || f.name, price: str(fd, "price") || "0", currency: str(fd, "currency") || "UAH", paymentType, products: [productId], isActive: false, showInBot: true }).returning({ id: plans.id });
   revalidatePath(`/products/${productId}`); revalidatePath("/offers"); redirect(`/offers/${n.id}`);
 }
+/** Масові дії зі списку людей: у воронку, доступ за оффером, тег (лише для обраних на сторінці). */
+export async function bulkPeople(fd: FormData) {
+  const ids = fd.getAll("ids").map(Number).filter((n) => n > 0).slice(0, 200);
+  const act = str(fd, "act"); const back = str(fd, "back") || "/people";
+  let n = 0;
+  for (const personId of ids) {
+    if (act === "funnel" && num(fd, "funnelId")) { if (await enrollPerson(num(fd, "funnelId"), personId, "bulk")) n++; }
+    else if (act === "offer" && num(fd, "planId")) { await grantOffer(personId, num(fd, "planId"), "admin"); n++; }
+    else if (act === "tag" && str(fd, "tag")) { await db().update(persons).set({ tags: sql`(select jsonb_agg(distinct x) from jsonb_array_elements(coalesce(${persons.tags}, '[]'::jsonb) || ${JSON.stringify([str(fd, "tag").slice(0, 60)])}::jsonb) x)` }).where(eq(persons.id, personId)); n++; }
+  }
+  if (act === "funnel") await processDue(50);
+  revalidatePath("/people");
+  redirect(`${back}${back.includes("?") ? "&" : "?"}ok=${encodeURIComponent(`Виконано для ${n} із ${ids.length}`)}`);
+}
+
 // --- посилання доступу (без оплати) ---
 export async function createAccessLink(fd: FormData) {
   const planId = Number(fd.get("planId"));

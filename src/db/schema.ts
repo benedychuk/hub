@@ -136,6 +136,7 @@ export const orders = pgTable("orders", {
   zenOrderId: integer("zen_order_id"),
   personId: integer("person_id").references(() => persons.id),
   offerId: integer("offer_id").references(() => offers.id),
+  planId: integer("plan_id"), // оффер Hub (для платежів через Hub)
   offerName: text("offer_name"),
   type: text("type"), // subscription_start | subscription_renew | one_time
   price: numeric("price", { precision: 12, scale: 2 }).notNull().default("0"),

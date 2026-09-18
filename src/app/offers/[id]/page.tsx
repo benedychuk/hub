@@ -8,7 +8,7 @@ import { Kebab, MenuAction, MenuLink, MenuSep, Switch, Checkbox, AutoSubmitToggl
 import { Modal } from "@/components/modal";
 import { CoverInput, StepText } from "@/components/funnel-ui";
 import { OfferPaymentFields } from "@/components/offer-ui";
-import { navCounts, offerDetail, productPicker, resourceList, botList } from "@/lib/queries";
+import { navCounts, offerDetail, productPicker, resourceList, botList, offerList } from "@/lib/queries";
 import { saveOffer, setOfferStatus, duplicateOffer, deleteOffer, createAccessLink, toggleAccessLink, deleteAccessLink } from "@/lib/actions";
 import { priceLabel, accessLabel, intervalLabel } from "@/lib/offers";
 import { money, date, dateTime, fullName } from "@/lib/format";
@@ -24,7 +24,7 @@ const toDateTimeInput = (d: Date | null | undefined) => d ? new Date(d.getTime()
 export default async function OfferEditor({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; saved?: string }> }) {
   const { id } = await params; const sp = await searchParams;
   const isNew = id === "new";
-  const [counts, d, prods, res, bl] = await Promise.all([navCounts(), isNew ? Promise.resolve(null) : offerDetail(Number(id)), productPicker(), resourceList(), botList()]);
+  const [counts, d, prods, res, bl, zen] = await Promise.all([navCounts(), isNew ? Promise.resolve(null) : offerDetail(Number(id)), productPicker(), resourceList(), botList(), offerList()]);
   if (!isNew && !d) notFound();
   const pl = d?.pl ?? null; const design = pl?.design ?? {}; const st = pl?.settings ?? {};
   const tab = isNew ? "general" : TABS.some((t) => t[0] === sp.tab) ? sp.tab! : "general";
@@ -65,6 +65,9 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
               : <p className="fld-h">Каналів ще немає: підключіть у розділі <Link href="/resources">Канали і групи</Link>.</p>}
           </Section>
           <Section title="Оплата"><OfferPaymentFields initial={initial} /></Section>
+          {zen.length > 0 && <Section title="Відповідає офферам ZenEdu" description="Позначте оффери ZenEdu, які продають те саме. Тоді дашборд, фільтри людей і платежів показують підписки з обох джерел разом, а «Дати доступ» у картці людини відкриває Hub-версію того самого оффера.">
+            {zen.map(({ o }) => <div key={o.id} className="row-actions" style={{ justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--line)" }}><Checkbox name="zenOfferIds" value={String(o.id)} defaultChecked={pl ? o.planId === pl.id : false} label={<>{o.name} <span className="fld-h">{money(o.price, o.currency)}{o.isSubscription ? " · підписка" : " · разово"}{o.planId && pl && o.planId !== pl.id ? " · привʼязано до іншого оффера" : ""}</span></>} /></div>)}
+          </Section>}
         </div>
         <div className="form aside-sticky">
           <Section title="Статус і показ" description="Активний оффер можна купити й відкрити за посиланням; зупинений — ні, але чинні підписки лишаються. «Показувати в боті» додає оффер у список /plans; без цього він доступний лише за посиланнями й кнопками. Рекомендований позначається зірочкою в /plans.">

@@ -95,7 +95,7 @@ export async function grantByLink(token: string, personId: number) {
   const [already] = await d.select({ id: subscriptions.id }).from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.accessLinkId, l.id)));
   if (!already) await d.update(accessLinks).set({ usedCount: sql`${accessLinks.usedCount} + 1` }).where(eq(accessLinks.id, l.id));
   const r = await grantOffer(personId, pl.id, "access_link", { linkId: l.id });
-  if (l.markAsPayment && !already) await d.insert(orders).values({ source: "hub", personId, offerName: pl.name, type: pl.paymentType === "one_time" ? "one_time" : "subscription_start", price: "0", currency: pl.currency, status: "paid", paymentSystem: "access_link", paidAt: new Date() });
+  if (l.markAsPayment && !already) await d.insert(orders).values({ source: "hub", personId, planId: pl.id, offerName: pl.name, type: pl.paymentType === "one_time" ? "one_time" : "subscription_start", price: "0", currency: pl.currency, status: "paid", paymentSystem: "access_link", paidAt: new Date() });
   return { ok: true as const, plan: pl, until: r.until };
 }
 
@@ -160,4 +160,30 @@ export function telegramHtmlToSafe(html: string) {
   s = s.replace(/&(?!(amp|lt|gt|quot|#\d+);)/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   s = s.replace(/@@K(\d+)@@/g, (_m, i) => keep[Number(i)]);
   return s.replace(/\n/g, "<br>");
+}
+
+// ---------- оффер як спільний вимір для ZenEdu і Hub ----------
+/** Ключ оффера у фільтрах: h:<plan id> — оффер Hub разом із привʼязаними офферами ZenEdu; z:<offer id> — оффер ZenEdu без привʼязки. */
+export type OfferScope = { planId: number | null; zenIds: number[] };
+export async function offerOptions() {
+  const d = db();
+  const [pls, zs] = await Promise.all([d.select({ id: plans.id, name: plans.name, paymentType: plans.paymentType }).from(plans).orderBy(plans.sortOrder, plans.name), d.select({ id: schema.offers.id, name: schema.offers.name, planId: schema.offers.planId, isActive: schema.offers.isActive }).from(schema.offers).orderBy(schema.offers.name)]);
+  const opts: { key: string; name: string; group: "hub" | "zen" }[] = pls.map((p) => { const linked = zs.filter((z) => z.planId === p.id); return { key: `h:${p.id}`, name: linked.length ? `${p.name} (+ ZenEdu: ${linked.map((z) => z.name).join(", ")})` : p.name, group: "hub" }; });
+  for (const z of zs) if (!z.planId) opts.push({ key: `z:${z.id}`, name: `ZenEdu · ${z.name}${z.isActive ? "" : " (зупинено)"}`, group: "zen" });
+  return opts;
+}
+export async function offerScope(key?: string | null): Promise<OfferScope | null> {
+  const m = (key ?? "").match(/^(h|z):(\d+)$/); if (!m) return null;
+  if (m[1] === "z") return { planId: null, zenIds: [Number(m[2])] };
+  const planId = Number(m[2]);
+  const zs = await db().select({ id: schema.offers.id }).from(schema.offers).where(eq(schema.offers.planId, planId));
+  return { planId, zenIds: zs.map((z) => z.id) };
+}
+/** SQL-умова для таблиці підписок (псевдонім s) або замовлень (псевдонім o) за scope. */
+export function scopeSql(sc: OfferScope, alias: "s" | "o") {
+  const parts = [];
+  if (sc.planId) parts.push(sql.raw(`${alias}.plan_id = ${sc.planId}`));
+  if (sc.zenIds.length) parts.push(sql.raw(`${alias}.offer_id in (${sc.zenIds.join(",")})`));
+  if (!parts.length) return sql`false`;
+  return sql`(${sql.join(parts, sql` or `)})`;
 }
