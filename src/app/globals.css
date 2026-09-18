@@ -397,3 +397,14 @@ ol.stepper a:hover { color: var(--ink); }
 .att-th { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--surface-2, #f3f4f5); flex: none; }
 .upl { display: inline-flex; align-items: center; gap: 6px; }
 .upl input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+/* Історія подій людини */
+.tl-day { margin-bottom: 14px; }
+.tl-dayh { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); padding: 6px 0; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.tl-row { display: grid; grid-template-columns: 44px 14px 1fr; gap: 8px; align-items: start; padding: 6px 0; }
+.tl-time { font-size: 12px; color: var(--ink-3); padding-top: 2px; }
+.tl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); margin-top: 6px; }
+.tl-row.good .tl-dot { background: var(--good); } .tl-row.warn .tl-dot { background: var(--warn); } .tl-row.crit .tl-dot { background: var(--crit); } .tl-row.moon .tl-dot { background: var(--moon); } .tl-row.acc .tl-dot { background: var(--orange); }
+.tl-body { font-size: 13.5px; min-width: 0; }
+.tl-grp { margin-left: 8px; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+.chip button { background: none; border: 0; padding: 0 0 0 6px; cursor: pointer; color: inherit; display: inline-flex; vertical-align: middle; }

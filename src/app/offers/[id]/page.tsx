@@ -67,7 +67,7 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
           <Section title="Оплата"><OfferPaymentFields initial={initial} /></Section>
         </div>
         <div className="form aside-sticky">
-          <Section title="Статус і показ">
+          <Section title="Статус і показ" description="Активний оффер можна купити й відкрити за посиланням; зупинений — ні, але чинні підписки лишаються. «Показувати в боті» додає оффер у список /plans; без цього він доступний лише за посиланнями й кнопками. Рекомендований позначається зірочкою в /plans.">
             <Field label="Статус"><select name="status" defaultValue={pl ? (pl.isActive ? "active" : "stopped") : "active"}><option value="active">Активний</option><option value="stopped">Зупинений</option></select></Field>
             <Switch name="showInBot" defaultChecked={pl?.showInBot ?? true} label="Показувати в боті за /plans" hint="інакше лише за посиланнями й кнопками" />
             <Switch name="isFeatured" defaultChecked={pl?.isFeatured ?? false} label="Рекомендований" hint="виділяється в списку" />

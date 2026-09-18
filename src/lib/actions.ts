@@ -198,6 +198,7 @@ export async function saveBroadcastContent(fd: FormData) {
 }
 const list = (fd: FormData, k: string) => fd.getAll(k).map(String).map((x) => x.trim()).filter(Boolean);
 const nums = (fd: FormData, k: string) => list(fd, k).map(Number).filter((n) => n > 0);
+const parseRules = (json: string): BroadcastAudience["funnelRules"] => { try { const a = JSON.parse(json || "[]") as { funnelId?: number; state?: string }[]; return a.filter((r) => Number(r.funnelId) > 0).map((r) => ({ funnelId: Number(r.funnelId), state: (["any", "active", "done", "stopped", "never"].includes(String(r.state)) ? r.state : "any") as "any" })); } catch { return []; } };
 export async function saveBroadcastAudience(fd: FormData) {
   const id = Number(fd.get("id"));
   const mode = str(fd, "mode") || "filters";
@@ -208,7 +209,7 @@ export async function saveBroadcastAudience(fd: FormData) {
     tagsAny: str(fd, "tagsAny").split(",").map((x) => x.trim()).filter(Boolean),
     tagsAll: str(fd, "tagsAll").split(",").map((x) => x.trim()).filter(Boolean),
     tagsNone: str(fd, "tagsNone").split(",").map((x) => x.trim()).filter(Boolean),
-    funnelIn: nums(fd, "funnelIn"), funnelNotIn: nums(fd, "funnelNotIn"), planIds: nums(fd, "planIds"), offerIds: nums(fd, "offerIds"), entitlements: list(fd, "entitlements"),
+    funnelRules: parseRules(str(fd, "funnelRulesJson")), planIds: nums(fd, "planIds"), offerIds: nums(fd, "offerIds"), entitlements: list(fd, "entitlements"),
     activeDays: Number(fd.get("activeDays") || 0) || undefined, startedAfter: str(fd, "startedAfter") || undefined, startedBefore: str(fd, "startedBefore") || undefined,
     excludeIds: str(fd, "excludeIds").split(/[\s,]+/).map(Number).filter((n) => n > 0), includeIds: str(fd, "includeIds").split(/[\s,]+/).map(Number).filter((n) => n > 0),
   };
@@ -632,8 +633,7 @@ export async function toggleBot(fd: FormData) {
 
 
 // ---------- канали ----------
-import { accessTick, reconcile as reconcileChannels, processGrants } from "./telegram-access";
-const { memberships: membershipsT } = schema;
+import { accessTick, reconcile as reconcileChannels, inviteNow } from "./telegram-access";
 
 export async function saveChannelResource(fd: FormData) {
   const key = str(fd, "key"); if (!key) return;
@@ -697,9 +697,8 @@ export async function deleteResource(fd: FormData) {
 }
 export async function resendInvite(fd: FormData) {
   const personId = Number(fd.get("personId")); const key = str(fd, "resourceKey");
-  await db().update(membershipsT).set({ status: "none", inviteLink: null, updatedAt: new Date() }).where(and(eq(membershipsT.personId, personId), eq(membershipsT.resourceKey, key)));
-  await processGrants(5);
-  revalidatePath(`/people/${personId}`);
+  const r = await inviteNow(personId, key); // явна дія: працює навіть без автоматики доступу
+  revalidatePath(`/people/${personId}`); redirect(`/people/${personId}?${r.ok ? "ok=" + encodeURIComponent("Посилання надіслано в бот") : "err=" + encodeURIComponent(r.reason)}`);
 }
 
 // ---------- оплати WayForPay ----------

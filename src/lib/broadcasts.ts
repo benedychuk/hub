@@ -37,6 +37,10 @@ export function audienceWhere(a: BroadcastAudience) {
   if (a.tagsNone?.length) parts.push(sql`not (p.tags ?| array[${sql.join(a.tagsNone.map((t) => sql`${t}`), sql`, `)}]::text[])`);
   if (a.funnelIn?.length) parts.push(sql`exists (select 1 from funnel_enrollments e where e.person_id = p.id and e.funnel_id in (${sql.join(a.funnelIn.map((x) => sql`${x}`), sql`, `)}))`);
   if (a.funnelNotIn?.length) parts.push(sql`not exists (select 1 from funnel_enrollments e where e.person_id = p.id and e.funnel_id in (${sql.join(a.funnelNotIn.map((x) => sql`${x}`), sql`, `)}))`);
+  for (const r of a.funnelRules ?? []) { // воронка + стан проходження (усі умови мають виконуватись)
+    const st = r.state === "active" ? sql` and e.status = 'active'` : r.state === "done" ? sql` and e.status = 'done'` : r.state === "stopped" ? sql` and e.status = 'stopped'` : sql``;
+    parts.push(r.state === "never" ? sql`not exists (select 1 from funnel_enrollments e where e.person_id = p.id and e.funnel_id = ${r.funnelId})` : sql`exists (select 1 from funnel_enrollments e where e.person_id = p.id and e.funnel_id = ${r.funnelId}${st})`);
+  }
   if (a.planIds?.length) parts.push(sql`exists (select 1 from subscriptions s where s.person_id = p.id and s.status in ('active','trialing','past_due') and s.plan_id in (${sql.join(a.planIds.map((x) => sql`${x}`), sql`, `)}))`);
   if (a.offerIds?.length) parts.push(sql`exists (select 1 from subscriptions s where s.person_id = p.id and s.status in ('active','trialing','past_due') and s.offer_id in (${sql.join(a.offerIds.map((x) => sql`${x}`), sql`, `)}))`);
   if (a.entitlements?.length) parts.push(sql`exists (select 1 from entitlements en where en.person_id = p.id and en.revoked_at is null and (en.valid_until is null or en.valid_until > now()) and en.resource_key in (${sql.join(a.entitlements.map((x) => sql`${x}`), sql`, `)}))`);

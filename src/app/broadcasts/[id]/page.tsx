@@ -6,6 +6,7 @@ import { Pill } from "@/components/ui";
 import { PageHeader, Stepper, Section, Field, FormRow, Stat, Summary, EmptyState, Alert, FilterGroup } from "@/components/ui/layout";
 import { Checkbox, Switch, Kebab, MenuAction } from "@/components/ui/controls";
 import { StepText, AttachmentsPicker } from "@/components/funnel-ui";
+import { FunnelFilter } from "@/components/funnel-filter";
 import { BroadcastButtonsEditor, SendTimePicker } from "@/components/broadcast-ui";
 import { AudienceMode } from "../audience-mode";
 import { navCounts, broadcastDetail } from "@/lib/queries";
@@ -41,7 +42,7 @@ export default async function BroadcastEditor({ params, searchParams }: { params
   const n = (arr?: unknown[]) => arr?.length ?? 0;
   const groupCounts = {
     sub: (a.customer && a.customer !== "any" ? 1 : 0) + n(a.subStatus) + n(a.planIds) + n(a.offerIds),
-    tags: n(a.tagsAny) + n(a.tagsAll) + n(a.tagsNone), funnels: n(a.funnelIn) + n(a.funnelNotIn), access: n(a.entitlements),
+    tags: n(a.tagsAny) + n(a.tagsAll) + n(a.tagsNone), funnels: n(a.funnelRules) + n(a.funnelIn) + n(a.funnelNotIn), access: n(a.entitlements),
     activity: (a.activeDays ? 1 : 0) + (a.startedAfter ? 1 : 0) + (a.startedBefore ? 1 : 0), manual: n(a.includeIds) + n(a.excludeIds),
   };
   const Nav = () => editable ? <Stepper steps={STEPS} current={stepIdx} hrefFor={(i) => `/broadcasts/${b.id}?step=${["content", "recipients", "send"][i]}`} />
@@ -145,10 +146,7 @@ export default async function BroadcastEditor({ params, searchParams }: { params
                   <datalist id="taglist">{tags.map((t) => <option key={t.tag} value={t.tag}>{t.n}</option>)}</datalist>
                 </FilterGroup>
                 <FilterGroup title="Воронки" active={groupCounts.funnels}>
-                  {funnels.length ? <FormRow>
-                    <Field label="Проходили воронку"><div className="chips-in">{funnels.map((f) => <Checkbox key={f.id} name="funnelIn" value={String(f.id)} defaultChecked={a.funnelIn?.includes(f.id)} label={f.name} />)}</div></Field>
-                    <Field label="Не проходили воронку"><div className="chips-in">{funnels.map((f) => <Checkbox key={f.id} name="funnelNotIn" value={String(f.id)} defaultChecked={a.funnelNotIn?.includes(f.id)} label={f.name} />)}</div></Field>
-                  </FormRow> : <p className="fld-h">Воронок ще немає.</p>}
+                  {funnels.length ? <FunnelFilter funnels={funnels} initial={a.funnelRules ?? [...(a.funnelIn ?? []).map((id) => ({ funnelId: id, state: "any" as const })), ...(a.funnelNotIn ?? []).map((id) => ({ funnelId: id, state: "never" as const }))]} /> : <p className="fld-h">Воронок ще немає.</p>}
                 </FilterGroup>
                 <FilterGroup title="Доступ до продуктів" active={groupCounts.access}>
                   <Field label="Має активний доступ до"><div className="chips-in">{resources.map((r) => <Checkbox key={r.key} name="entitlements" value={r.key} defaultChecked={a.entitlements?.includes(r.key)} label={r.name} />)}</div></Field>

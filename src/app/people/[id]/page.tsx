@@ -5,6 +5,7 @@ import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { PageHeader, Section, Field, FormRow, Row, Timeline, EmptyState, KV } from "@/components/ui/layout";
 import { navCounts, person, resourceList, hubFunnels, personPayments, productPicker } from "@/lib/queries";
+import { EventList } from "@/components/event-list";
 import { Kebab, MenuAction, MenuLink } from "@/components/ui/controls";
 import { subscriptionAction, refundPayment, grantOfferToPerson } from "@/lib/actions";
 import { Modal } from "@/components/modal";
@@ -104,8 +105,8 @@ export default async function Person({ params, searchParams }: { params: Promise
           </> : <EmptyState title="Людина ще не запускала Hub-бот" text="Писати їй і додавати у воронки можна буде після /start у боті. Поки що лише через ZenEdu." />}
         </Section>
       </div>
-      <Section title="Історія" description={`${events.length} подій`} className="sec">
-        {events.length ? <Timeline items={events.map((e) => ({ id: e.id, when: dateTime(e.createdAt), what: <><Pill tone={e.source === "zenedu" ? "" : "acc"}>{e.type}</Pill> {e.type.startsWith("bot.") && (e.payload as { text?: string })?.text ? <span className="muted">— {(e.payload as { text?: string }).text}</span> : null}</> }))} /> : <EmptyState icon={<History size={20} />} title="Подій ще немає" />}
+      <Section title="Історія" description={`${events.length} останніх подій`} className="sec">
+        {events.length ? <EventList events={events as never} names={d.names} /> : <EmptyState title="Подій ще немає" />}
       </Section>
     </Shell>
   );

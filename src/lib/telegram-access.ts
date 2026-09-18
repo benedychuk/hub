@@ -61,12 +61,39 @@ export async function syncEntitlementsFromSubscriptions() {
 }
 
 /** Видає одноразове посилання в канал усім, хто має право, але ще не в каналі. */
+/** Одне запрошення в канал: одноразове посилання (або за заявкою), повідомлення в бот, запис у memberships. true — доставлено, false — бот не запущено, null — помилка Telegram. */
+async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, pid: number): Promise<boolean | null> {
+  const d = db(); const bot = getBot(); const now = new Date();
+  try {
+    const ttl = Number(cfg.inviteTtlHours ?? 24);
+    const expire = Math.floor(now.getTime() / 1000) + ttl * 3600;
+    const link = cfg.joinMode === "request"
+      ? await bot.api.createChatInviteLink(cfg.chatId!, { name: `p${pid}`, expire_date: expire, creates_join_request: true })
+      : await bot.api.createChatInviteLink(cfg.chatId!, { name: `p${pid}`, expire_date: expire, member_limit: 1 });
+    const text = (cfg.inviteText || `Доступ відкрито: ${r.name}.\nПосилання одноразове і діє ${ttl} год.`);
+    const ok = await sendTo(pid, text, new InlineKeyboard().url(`Увійти: ${r.name}`, link.invite_link));
+    const row = { status: "invited", inviteLink: link.invite_link, inviteExpiresAt: new Date(expire * 1000), invitedAt: now, note: ok ? null : "людина не запускала Hub-бот, посилання не доставлено", updatedAt: now };
+    await d.insert(memberships).values({ personId: pid, resourceKey: r.key, ...row }).onConflictDoUpdate({ target: [memberships.personId, memberships.resourceKey], set: row });
+    await d.insert(events).values({ personId: pid, type: ok ? "channel.invited" : "channel.invite_undelivered", source: "hub", payload: { resource: r.key } });
+    return ok;
+  } catch (e) {
+    await d.insert(events).values({ personId: pid, type: "channel.invite_failed", source: "hub", payload: { resource: r.key, error: String(e).slice(0, 200) } });
+    return null;
+  }
+}
+/** Запрошення вручну з картки людини: працює і без увімкненої автоматики, бо це явна дія адміністратора; людина має мати право на ресурс. */
+export async function inviteNow(personId: number, resourceKey: string) {
+  const res = (await channelResources()).find((x) => x.r.key === resourceKey);
+  if (!res?.cfg.chatId) return { ok: false as const, reason: "Канал не підключено" };
+  if (!(await hasEntitlement(personId, resourceKey))) return { ok: false as const, reason: "У людини немає права на цей канал: спершу видайте доступ" };
+  const ok = await inviteOne(res.r, res.cfg, personId);
+  return ok === true ? { ok: true as const } : ok === false ? { ok: false as const, reason: "Людина не запускала Hub-бот: посилання нікуди доставити" } : { ok: false as const, reason: "Telegram не дав створити посилання: перевірте права бота в каналі" };
+}
+
 export async function processGrants(limit = 30) {
   const d = db();
-  const bot = getBot();
   let invited = 0, skipped = 0, failed = 0;
   for (const { r, cfg } of await enforcedResources()) {
-    const now = new Date();
     const due = await d.execute(sql`
       select distinct e.person_id from entitlements e
       left join memberships m on m.person_id = e.person_id and m.resource_key = e.resource_key
@@ -74,23 +101,8 @@ export async function processGrants(limit = 30) {
         and (m.id is null or m.status in ('none','left','kicked') or (m.status = 'invited' and m.invite_expires_at < now()))
       limit ${limit}`);
     for (const row of due.rows as { person_id: number }[]) {
-      const pid = row.person_id;
-      try {
-        const ttl = Number(cfg.inviteTtlHours ?? 24);
-        const expire = Math.floor(now.getTime() / 1000) + ttl * 3600;
-        const link = cfg.joinMode === "request"
-          ? await bot.api.createChatInviteLink(cfg.chatId!, { name: `p${pid}`, expire_date: expire, creates_join_request: true })
-          : await bot.api.createChatInviteLink(cfg.chatId!, { name: `p${pid}`, expire_date: expire, member_limit: 1 });
-        const text = (cfg.inviteText || `Доступ відкрито: ${r.name}.\nПосилання одноразове і діє ${ttl} год.`);
-        const ok = await sendTo(pid, text, new InlineKeyboard().url(`Увійти: ${r.name}`, link.invite_link));
-        await d.insert(memberships).values({ personId: pid, resourceKey: r.key, status: "invited", inviteLink: link.invite_link, inviteExpiresAt: new Date(expire * 1000), invitedAt: now, note: ok ? null : "людина не запускала Hub-бот, посилання не доставлено", updatedAt: now })
-          .onConflictDoUpdate({ target: [memberships.personId, memberships.resourceKey], set: { status: "invited", inviteLink: link.invite_link, inviteExpiresAt: new Date(expire * 1000), invitedAt: now, note: ok ? null : "людина не запускала Hub-бот, посилання не доставлено", updatedAt: now } });
-        await d.insert(events).values({ personId: pid, type: ok ? "channel.invited" : "channel.invite_undelivered", source: "hub", payload: { resource: r.key } });
-        if (ok) invited++; else skipped++;
-      } catch (e) {
-        failed++;
-        await d.insert(events).values({ personId: pid, type: "channel.invite_failed", source: "hub", payload: { resource: r.key, error: String(e).slice(0, 200) } });
-      }
+      const ok = await inviteOne(r, cfg, row.person_id);
+      if (ok === true) invited++; else if (ok === false) skipped++; else failed++;
       await new Promise((res) => setTimeout(res, 60));
     }
   }

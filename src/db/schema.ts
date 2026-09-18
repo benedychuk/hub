@@ -347,7 +347,8 @@ export type BroadcastAudience = {
   customer?: "any" | "customer" | "not";
   subStatus?: string[];      // active | trialing | past_due | cancelled | expired | none
   tagsAny?: string[]; tagsAll?: string[]; tagsNone?: string[];
-  funnelIn?: number[]; funnelNotIn?: number[];
+  funnelIn?: number[]; funnelNotIn?: number[]; // застаріле: замінено funnelRules
+  funnelRules?: { funnelId: number; state: "any" | "active" | "done" | "stopped" | "never" }[];
   planIds?: number[]; offerIds?: number[];
   entitlements?: string[];   // ключі ресурсів з активним доступом
   activeDays?: number;       // активність у боті за останні N днів

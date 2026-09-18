@@ -94,7 +94,17 @@ export async function person(id: number) {
         (select count(*)::int from funnel_steps s where s.funnel_id = f.id and s.is_active) as total,
         (select count(distinct step_id)::int from funnel_deliveries d where d.enrollment_id = e.id) as received
       from funnel_enrollments e join funnels f on f.id = e.funnel_id where e.person_id = ${id} order by e.started_at desc`)).rows as { id: number; funnel_id: number; name: string; kind: string; status: string; next_at: string | null; started_at: string; finished_at: string | null; stop_reason: string | null; total: number; received: number }[];
-    return { p, subs, orders: ords, events: ev, identities: idn, entitlements: ents, memberships: mem, funnels: fun };
+    // назви обʼєктів, на які посилаються події (воронки, оффери, розсилки, кроки)
+    const pl = (k: string) => ev.map((e) => Number((e.payload as Record<string, unknown> | null)?.[k] ?? 0)).filter((x) => x > 0);
+    const fids = [...new Set([...pl("funnelId"), ...fun.map((x) => x.funnel_id), ...ents.map((x) => Number((x.resourceKey.match(/^product:(\d+)$/) ?? [])[1] ?? 0)).filter(Boolean)])];
+    const [fn, pn, bn, sn] = await Promise.all([
+      fids.length ? d.select({ id: funnels.id, name: funnels.name, kind: funnels.kind }).from(funnels).where(inArray(funnels.id, fids)) : [],
+      pl("planId").length ? d.select({ id: plans.id, name: plans.name }).from(plans).where(inArray(plans.id, [...new Set(pl("planId"))])) : [],
+      pl("broadcastId").length ? d.select({ id: broadcasts.id, name: broadcasts.name }).from(broadcasts).where(inArray(broadcasts.id, [...new Set(pl("broadcastId"))])) : [],
+      pl("stepId").length ? d.select({ id: schema.funnelSteps.id, title: schema.funnelSteps.title }).from(schema.funnelSteps).where(inArray(schema.funnelSteps.id, [...new Set(pl("stepId"))])) : [],
+    ]);
+    const names = { funnels: Object.fromEntries(fn.map((x) => [x.id, { name: x.name, kind: x.kind }])), plans: Object.fromEntries(pn.map((x) => [x.id, x.name])), broadcasts: Object.fromEntries(bn.map((x) => [x.id, x.name])), steps: Object.fromEntries(sn.map((x) => [x.id, x.title ?? ""])) };
+    return { p, subs, orders: ords, events: ev, identities: idn, entitlements: ents, memberships: mem, funnels: fun, names };
   }, null);
 }
 
