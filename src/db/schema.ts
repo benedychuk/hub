@@ -342,7 +342,8 @@ export type BroadcastAudience = {
   activeDays?: number;       // активність у боті за останні N днів
   startedAfter?: string; startedBefore?: string; // дата запуску Hub-бота
   includeIds?: number[]; excludeIds?: number[];
-  onlyAdmin?: boolean;       // тест: лише адміністратор
+  onlyAdmin?: boolean;       // тест: лише той, хто налаштовує (Telegram із «Мій акаунт» або власник)
+  onlyTelegramId?: number;
 };
 
 // Розсилки (структура як у ZenEdu: Зміст → Отримувачі → Надсилання).
@@ -432,6 +433,7 @@ export const users = pgTable("users", {
   email: text("email").notNull(),
   name: text("name").notNull(),
   role: text("role").notNull().default("admin"), // owner | admin
+  telegramUserId: bigint("telegram_user_id", { mode: "number" }), // Telegram акаунт користувача команди: тести на себе, завантаження медіа через бот
   passwordHash: text("password_hash"),
   status: text("status").notNull().default("invited"), // invited | active | disabled
   inviteTokenHash: text("invite_token_hash"),

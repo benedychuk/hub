@@ -2,7 +2,7 @@ import { Bot, InlineKeyboard, webhookCallback } from "grammy";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
-import { adminTelegramId } from "./auth";
+import { teamTelegramIds } from "./auth";
 import { onBroadcastButton } from "./broadcasts";
 import { payLink, cancelAtEnd, resumeSub, paymentsAllowedFor } from "./payments";
 import { grantByLink, priceLabel, accessLabel } from "./offers";
@@ -146,8 +146,8 @@ export function getBot() {
     if (!ctx.from) return;
     const personId = await upsertFrom(ctx.from, ctx.chat.id);
     const m = ctx.message;
-    // Медіа від адміністратора потрапляє в бібліотеку і далі використовується у кроках воронок і розсилках.
-    const adminId = adminTelegramId();
+    // Медіа від команди (власник і користувачі Hub із вказаним Telegram ID) потрапляє в бібліотеку для кроків воронок і розсилок.
+    const team = await teamTelegramIds();
     const med = m.video_note ? { kind: "video_note", f: m.video_note, w: m.video_note.length, h: m.video_note.length, d: m.video_note.duration }
       : m.photo ? { kind: "photo", f: m.photo[m.photo.length - 1], w: m.photo[m.photo.length - 1].width, h: m.photo[m.photo.length - 1].height }
       : m.video ? { kind: "video", f: m.video, w: m.video.width, h: m.video.height, d: m.video.duration, mime: m.video.mime_type }
@@ -155,7 +155,7 @@ export function getBot() {
       : m.voice ? { kind: "voice", f: m.voice, d: m.voice.duration } : m.audio ? { kind: "audio", f: m.audio, d: m.audio.duration, mime: m.audio.mime_type }
       : m.document ? { kind: "document", f: m.document, mime: m.document.mime_type } : m.sticker ? { kind: "sticker", f: m.sticker } : null;
     await db().insert(events).values({ personId, type: "bot.message", source: "hub", payload: { text: m.text ?? m.caption ?? null, message_id: m.message_id, media: med ? { kind: med.kind, file_id: med.f.file_id } : null } });
-    if (med && ctx.from.id === adminId) {
+    if (med && team.has(ctx.from.id)) {
       const f = med.f as { file_id: string; file_unique_id: string; file_size?: number; file_name?: string };
       const [row] = await db().insert(media).values({ kind: med.kind, fileId: f.file_id, fileUniqueId: f.file_unique_id, title: f.file_name ?? null, caption: m.caption ?? null, width: med.w ?? null, height: med.h ?? null, duration: med.d ?? null, fileSize: f.file_size ?? null, mimeType: med.mime ?? null, fromPersonId: personId })
         .onConflictDoUpdate({ target: media.fileUniqueId, set: { fileId: f.file_id, caption: m.caption ?? null } }).returning({ id: media.id });

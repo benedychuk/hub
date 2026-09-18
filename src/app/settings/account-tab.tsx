@@ -15,6 +15,7 @@ export default async function AccountTab({ me }: { me: (User & { sessionId: numb
       <form action={updateProfile}><Section title="Профіль" actions={<Pill tone={me.role === "owner" ? "acc" : "moon"}>{ROLE_LABEL[me.role] ?? me.role}</Pill>}>
         <Field label="Ім’я"><input name="name" defaultValue={me.name} required maxLength={80} /></Field>
         <Field label="Email (логін)"><input type="email" name="email" defaultValue={me.email} required /></Field>
+        <Field label="Telegram ID" hint="Кнопки «Тест собі», превʼю розсилок і завантаження медіа працюють через ваш Telegram; дізнатись ID можна в боті @userinfobot. Після цього натисніть /start у Hub-боті."><input name="telegramUserId" inputMode="numeric" defaultValue={me.telegramUserId ?? ""} placeholder="123456789" /></Field>
         <div className="row-actions" style={{ marginTop: 14 }}><button className="btn pri" type="submit"><Save size={15} /> Зберегти</button></div>
       </Section></form>
       <form action={changePassword}><Section title="Зміна пароля" description="Після зміни всі інші пристрої вийдуть з акаунта.">

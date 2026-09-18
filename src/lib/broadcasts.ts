@@ -23,7 +23,7 @@ export const SUB_STATUSES: [string, string][] = [["active", "Active"], ["trialin
 /** Умова вибору людей: усі, хто запустив Hub-бот і не заблокував його, звужена фільтрами. Псевдоніми: p = persons, i = identities. */
 export function audienceWhere(a: BroadcastAudience) {
   const parts = [sql`i.bot_key = ${BOT_KEY} and i.chat_id is not null and i.blocked_at is null`];
-  if (a.onlyAdmin) parts.push(sql`p.telegram_user_id = ${adminTelegramId()}`);
+  if (a.onlyAdmin) parts.push(sql`p.telegram_user_id = ${a.onlyTelegramId || adminTelegramId()}`);
   if (a.customer === "customer") parts.push(sql`exists (select 1 from orders o where o.person_id = p.id and o.status = 'paid')`);
   if (a.customer === "not") parts.push(sql`not exists (select 1 from orders o where o.person_id = p.id and o.status = 'paid')`);
   if (a.subStatus?.length) {
@@ -289,11 +289,11 @@ export async function onBroadcastButton(kind: "r" | "p", id: number, btn: number
 
 // ---------- керування ----------
 /** Перегляд: надсилає розсилку адміністратору без запису в отримувачі. */
-export async function previewToAdmin(id: number) {
+export async function previewToAdmin(id: number, telegramUserId?: number) {
   const d = db();
   const [b] = await d.select().from(broadcasts).where(eq(broadcasts.id, id)); if (!b) return "Розсилку не знайдено";
-  const [row] = await d.select({ p: persons, chatId: identities.chatId }).from(persons).innerJoin(identities, and(eq(identities.personId, persons.id), eq(identities.botKey, BOT_KEY))).where(eq(persons.telegramUserId, adminTelegramId()));
-  if (!row?.chatId) return "Натисніть /start у Hub-боті з акаунта ADMIN_TELEGRAM_ID";
+  const [row] = await d.select({ p: persons, chatId: identities.chatId }).from(persons).innerJoin(identities, and(eq(identities.personId, persons.id), eq(identities.botKey, BOT_KEY))).where(eq(persons.telegramUserId, telegramUserId || adminTelegramId()));
+  if (!row?.chatId) return "Натисніть /start у Hub-боті зі свого Telegram (ID вказано в Налаштування → Мій акаунт)";
   const meds = b.attachments?.length ? await d.select().from(media).where(inArray(media.id, b.attachments)) : [];
   try { await sendBroadcastMessage(b, row.chatId, row.p, meds, { kind: "p", id: b.id }); return null; } catch (e) { return String(e).slice(0, 300); }
 }

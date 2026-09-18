@@ -71,6 +71,13 @@
       "when": 1789218972364,
       "tag": "0009_medical_rockslide",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789734349544,
+      "tag": "0010_yummy_absorbing_man",
+      "breakpoints": true
     }
   ]
 }

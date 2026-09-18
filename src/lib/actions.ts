@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
-import { adminTelegramId } from "./auth";
+import { myTelegramId } from "./auth";
 import { installWebhook, sendToPerson, getBot, botToken } from "./bot";
 import { grantOffer, newLinkToken } from "./offers";
 
@@ -201,7 +201,7 @@ const nums = (fd: FormData, k: string) => list(fd, k).map(Number).filter((n) => 
 export async function saveBroadcastAudience(fd: FormData) {
   const id = Number(fd.get("id"));
   const mode = str(fd, "mode") || "filters";
-  const a: BroadcastAudience = mode === "me" ? { onlyAdmin: true } : mode === "all" ? {} : {
+  const a: BroadcastAudience = mode === "me" ? { onlyAdmin: true, onlyTelegramId: await myTelegramId() } : mode === "all" ? {} : {
     onlyAdmin: false,
     customer: (str(fd, "customer") || "any") as BroadcastAudience["customer"],
     subStatus: list(fd, "subStatus"),
@@ -264,7 +264,7 @@ export async function deleteBroadcast(fd: FormData) {
   revalidatePath("/broadcasts"); redirect("/broadcasts");
 }
 export async function previewBroadcast(fd: FormData) {
-  const id = Number(fd.get("id")); const err = await previewToAdmin(id);
+  const id = Number(fd.get("id")); const err = await previewToAdmin(id, await myTelegramId());
   redirect(`/broadcasts/${id}?step=${str(fd, "step") || "content"}&${err ? "err=" + encodeURIComponent(err) : "sent=1"}`);
 }
 export async function runBroadcastsNow() {
@@ -464,7 +464,7 @@ export async function saveStep(fd: FormData) {
   redirect(`${await fb(funnelId)}/${funnelId}/steps/${id}?saved=1`);
 }
 async function sendStepToAdmin(stepId: number) {
-  const tg = adminTelegramId();
+  const tg = await myTelegramId();
   const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, tg));
   const [st] = await db().select().from(funnelSteps).where(eq(funnelSteps.id, stepId));
   if (p[0] && st) await sendStep(p[0].id, st, false);
@@ -534,7 +534,7 @@ export async function enrollToFunnel(fd: FormData) {
 }
 export async function testFunnelOnMe(fd: FormData) {
   const funnelId = num(fd, "funnelId"); const mode = str(fd, "mode"); // intro | steps
-  const tg = adminTelegramId();
+  const tg = await myTelegramId();
   const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, tg));
   if (p[0]) {
     // тест завжди перезапускає воронку для адміністратора
@@ -686,8 +686,8 @@ export async function savePaymentSettings(fd: FormData) {
 }
 export async function makeTestPayLink(fd: FormData) {
   const planKey = str(fd, "planKey"); const kind = (str(fd, "kind") || "first") as "first" | "card" | "migrate";
-  const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, adminTelegramId()));
-  if (!p[0]) redirect("/settings?tab=payments&err=" + encodeURIComponent("Спершу натисніть /start у Hub-боті з акаунта ADMIN_TELEGRAM_ID"));
+  const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, await myTelegramId()));
+  if (!p[0]) redirect("/settings?tab=payments&err=" + encodeURIComponent("Спершу натисніть /start у Hub-боті зі свого Telegram (ID вказано в «Мій акаунт») або з акаунта ADMIN_TELEGRAM_ID"));
   redirect(`/settings?tab=payments&link=${encodeURIComponent(payLink(p[0].id, planKey, kind))}`);
 }
 export async function refundPayment(fd: FormData) {

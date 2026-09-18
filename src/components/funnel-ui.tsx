@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { StepButton } from "@/lib/funnels";
 import { RichText } from "./rich-text";
 import { ConfirmSubmitButton } from "./ui/confirm";
-import { ArrowUp, ArrowDown, X, Plus, Upload, Trash2 } from "lucide-react";
+import { ArrowUp, ArrowDown, X, Plus, Upload, Trash2, File as FileIcon } from "lucide-react";
 
 /** Кнопка сабміту з підтвердженням (видалення тощо). */
 export function ConfirmSubmit({ message, className, children, formAction, name, value }: { message: string; className?: string; children: React.ReactNode; formAction?: (fd: FormData) => void | Promise<void>; name?: string; value?: string }) {
@@ -57,7 +57,37 @@ const KIND: Record<string, string> = { video_note: "кружечок", photo: "�
 const mediaLabel = (m: Media) => `#${m.id} ${KIND[m.kind] ?? m.kind}${m.title ? " · " + m.title : m.caption ? " · " + m.caption.slice(0, 30) : ""}${m.duration ? ` · ${m.duration} с` : ""}`;
 
 /** Вкладення кроку: файли з бібліотеки (надіслані в Hub-бот). */
-export function AttachmentsPicker({ media, initial }: { media: Media[]; initial: number[] }) {
+/** Кнопка «Завантажити»: файл іде на /api/media/upload (через Hub-бот у Telegram користувача) і одразу додається в список. */
+export function UploadButton({ onDone, kinds = true, label = "Завантажити" }: { onDone: (m: Media & { fileSize?: number | null }) => void; kinds?: boolean; label?: string }) {
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [kind, setKind] = useState("");
+  const send = async (file: File) => {
+    setBusy(true); setErr(null);
+    try {
+      const fd = new FormData(); fd.append("file", file); if (kind) fd.append("kind", kind);
+      const r = await fetch("/api/media/upload", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({ error: `Помилка ${r.status}` }));
+      if (!r.ok || !j.ok) throw new Error(j.error || `Помилка ${r.status}`);
+      onDone(j.media);
+    } catch (e) { setErr(String((e as Error).message ?? e)); } finally { setBusy(false); }
+  };
+  return (
+    <span className="row-actions" style={{ gap: 8 }}>
+      {kinds && <select value={kind} onChange={(e) => setKind(e.target.value)} className="input" style={{ width: 150 }} aria-label="Тип файлу"><option value="">Тип: авто</option><option value="video_note">Кружечок</option><option value="voice">Голосове</option><option value="document">Як файл</option></select>}
+      <label className={`btn sm upl ${busy ? "disabled" : ""}`}><Upload size={14} /> {busy ? "Завантажую…" : label}<input type="file" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) void send(f); e.target.value = ""; }} /></label>
+      {err && <span className="fld-h" style={{ color: "var(--crit)" }}>{err}</span>}
+    </span>
+  );
+}
+export function MediaThumb({ m, size = 36 }: { m: Media; size?: number }) {
+  const visual = m.kind === "photo" || m.kind === "video" || m.kind === "video_note" || m.kind === "animation" || m.kind === "sticker";
+  if (!visual) return <span className="att-th" style={{ width: size, height: size, display: "grid", placeItems: "center" }}><FileIcon size={16} /></span>;
+  // eslint-disable-next-line @next/next/no-img-element
+  return m.kind === "photo" || m.kind === "sticker" ? <img className="att-th" style={{ width: size, height: size }} src={`/api/media/${m.id}/file`} alt="" loading="lazy" />
+    : <video className="att-th" style={{ width: size, height: size, borderRadius: m.kind === "video_note" ? "50%" : undefined }} src={`/api/media/${m.id}/file`} muted preload="metadata" />;
+}
+
+export function AttachmentsPicker({ media: initialMedia, initial }: { media: Media[]; initial: number[] }) {
+  const [media, setMedia] = useState<Media[]>(initialMedia);
   const [ids, setIds] = useState<number[]>(initial);
   const [pick, setPick] = useState("");
   const chosen = ids.map((id) => media.find((m) => m.id === id)).filter(Boolean) as Media[];
@@ -65,16 +95,16 @@ export function AttachmentsPicker({ media, initial }: { media: Media[]; initial:
   return (
     <div>
       <input type="hidden" name="attachmentsJson" value={JSON.stringify(ids)} />
-      {chosen.map((m, i) => <div key={m.id} className="att"><span className={`pill ${m.kind === "video_note" ? "acc" : "moon"}`}>{KIND[m.kind] ?? m.kind}</span><span style={{ flex: 1 }}>{mediaLabel(m)}</span>
+      {chosen.map((m, i) => <div key={m.id} className="att"><MediaThumb m={m} /><span className={`pill ${m.kind === "video_note" ? "acc" : "moon"}`}>{KIND[m.kind] ?? m.kind}</span><span style={{ flex: 1 }}>{mediaLabel(m)}</span>
         <button type="button" className="btn sm ghost" disabled={i === 0} aria-label="Вище" onClick={() => setIds((a) => { const b = [...a]; [b[i - 1], b[i]] = [b[i], b[i - 1]]; return b; })}><ArrowUp size={14} /></button>
         <button type="button" className="btn sm ghost" disabled={i === chosen.length - 1} aria-label="Нижче" onClick={() => setIds((a) => { const b = [...a]; [b[i + 1], b[i]] = [b[i], b[i + 1]]; return b; })}><ArrowDown size={14} /></button>
         <button type="button" className="btn sm danger ghost" aria-label="Прибрати" onClick={() => setIds((a) => a.filter((x) => x !== m.id))}><X size={14} /></button></div>)}
       <div className="row-actions" style={{ marginTop: 6 }}>
         <select value={pick} onChange={(e) => setPick(e.target.value)} className="input" style={{ maxWidth: 360 }}><option value="">Файл із бібліотеки…</option>{free.map((m) => <option key={m.id} value={m.id}>{mediaLabel(m)}</option>)}</select>
         <button type="button" className="btn sm" disabled={!pick} onClick={() => { setIds((a) => [...a, Number(pick)]); setPick(""); }}><Plus size={14} /> Додати</button>
-        {!media.length && <span className="muted">Бібліотека порожня: перешліть медіа в Hub-бот.</span>}
+        <UploadButton onDone={(m) => { setMedia((all) => [m, ...all.filter((x) => x.id !== m.id)]); setIds((a) => [...a, m.id]); }} />
       </div>
-      <p className="fld-h">Кружечки й стікери завжди йдуть окремими повідомленнями. Одне фото/відео з текстом до 1024 знаків надсилається з підписом і кнопками; кілька фото/відео йдуть альбомом, а текст окремо.</p>
+      <p className="fld-h">Можна додати кілька файлів: кілька кружечків, фото з відео, файл із кружечком. Завантаження з браузера до 4 МБ; більші файли надішліть у Hub-бот зі свого Telegram, вони зʼявляться в бібліотеці. Кружечки й стікери завжди йдуть окремими повідомленнями. Одне фото/відео з текстом до 1024 знаків надсилається з підписом і кнопками; кілька фото/відео йдуть альбомом, а текст окремо.</p>
     </div>
   );
 }

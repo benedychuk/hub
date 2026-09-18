@@ -132,7 +132,8 @@ export async function updateProfile(fd: FormData) {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) back("Вкажіть коректний email", "account");
   const [dup] = await db().select({ id: users.id }).from(users).where(and(eq(users.email, e), ne(users.id, me.id)));
   if (dup) back("Цей email уже зайнятий", "account");
-  await db().update(users).set({ name: name || me.name, email: e, updatedAt: new Date() }).where(eq(users.id, me.id));
+  const telegramUserId = Number(String(fd.get("telegramUserId") ?? "").replace(/\D/g, "")) || null;
+  await db().update(users).set({ name: name || me.name, email: e, telegramUserId, updatedAt: new Date() }).where(eq(users.id, me.id));
   revalidatePath("/settings"); back("ok:Профіль збережено", "account");
 }
 export async function changePassword(fd: FormData) {

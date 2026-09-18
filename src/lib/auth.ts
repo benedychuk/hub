@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, sql, isNotNull } from "drizzle-orm";
 import { db, hasDb, schema } from "@/db";
 
 const { users, userSessions, events } = schema;
@@ -16,6 +16,17 @@ export const ROLE_LABEL: Record<string, string> = { owner: "Власник", adm
 export function authEnabled() { return Boolean(process.env.ADMIN_PASSWORD); }
 /** Числовий Telegram id адміністратора зі змінної ADMIN_TELEGRAM_ID; літери й пробіли відкидаються. */
 export function adminTelegramId(): number { return Number(String(process.env.ADMIN_TELEGRAM_ID ?? "").replace(/\D/g, "")) || 0; }
+/** Telegram поточного користувача Hub (Налаштування → Мій акаунт), інакше власника з ADMIN_TELEGRAM_ID: тести «на себе», превʼю, завантаження медіа. */
+export async function myTelegramId(): Promise<number> {
+  const me = await currentUser().catch(() => null);
+  return me?.telegramUserId || adminTelegramId();
+}
+/** Telegram-акаунти всієї команди: медіа від них потрапляє в бібліотеку. */
+export async function teamTelegramIds(): Promise<Set<number>> {
+  const ids = new Set<number>([adminTelegramId()].filter(Boolean));
+  if (hasDb()) { const rows = await db().select({ tg: users.telegramUserId }).from(users).where(and(eq(users.status, "active"), isNotNull(users.telegramUserId))).catch(() => []); rows.forEach((r) => { if (r.tg) ids.add(r.tg); }); }
+  return ids;
+}
 
 // ---------- паролі й токени ----------
 export function hashPassword(pw: string) {
