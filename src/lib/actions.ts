@@ -9,7 +9,7 @@ import { grantOffer, newLinkToken } from "./offers";
 
 const { plans, persons, events, broadcasts, entitlements, resources, subscriptions, identities, accessLinks } = schema;
 
-const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
+const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").replace(/\r\n?/g, "\n").trim(); // браузер надсилає переноси як CRLF
 
 const on = (fd: FormData, k: string) => fd.get(k) === "on";
 const dt = (fd: FormData, k: string) => { const v = str(fd, k); const d = v ? new Date(v) : null; return d && !isNaN(d.getTime()) ? d : null; };

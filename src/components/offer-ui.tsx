@@ -56,7 +56,9 @@ export function ProductCreateFields({ offers, folders, defaultFolder }: { offers
     <div className="form">
       <div style={{ display: step === 1 ? "block" : "none" }} className="form">
         <Field label="Назва"><input name="name" placeholder="Наприклад, Курс про гроші" required maxLength={120} /></Field>
-        <Field label="Формат"><div className="rcards c2"><label className="rcard on"><span className="rcard-i"><Package size={18} /></span><span className="rcard-t"><b>У боті</b><small>кроки приходять у Hub-бот</small></span></label><label className="rcard" aria-disabled="true"><span className="rcard-i"><Ban size={18} /></span><span className="rcard-t"><b>У порталі</b><small>у Hub немає веб-порталу</small></span></label></div></Field>
+        <Field label="Формат" hint="Поки що продукти доставляються лише в Hub-бот: вебпорталу для учасниць у Hub немає.">
+          <RadioCards name="format" defaultValue="bot" cols={2} options={[{ value: "bot", label: "У боті", hint: "кроки приходять у Hub-бот", icon: <Package size={18} /> }, { value: "portal", label: "У порталі", hint: "недоступно: порталу немає", icon: <Ban size={18} /> }]} onChange={(v) => { if (v === "portal") window.alert("Формат «У порталі» недоступний: у Hub немає вебпорталу. Продукт буде в боті."); }} />
+        </Field>
         {folders.length > 0 && <Field label="Папка"><select name="folderId" defaultValue={defaultFolder ?? ""}><option value="">Без папки</option>{folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></Field>}
         <div className="modal-f"><button type="button" className="btn pri" onClick={() => setStep(2)}>Далі</button></div>
       </div>

@@ -5,7 +5,7 @@ import * as RRadio from "@radix-ui/react-radio-group";
 import * as RMenu from "@radix-ui/react-dropdown-menu";
 import * as RTooltip from "@radix-ui/react-tooltip";
 import { Check, MoreVertical } from "lucide-react";
-import { useRef, useState } from "react";
+import { startTransition, useRef, useState } from "react";
 import { useConfirm } from "./confirm";
 
 /** Чекбокс, сумісний із формами: у FormData йде name=value, коли увімкнено. */
@@ -65,11 +65,12 @@ export function MenuAction({ action, fields = {}, icon, children, confirm, dange
     <form action={action} ref={formRef}>
       {Object.entries(fields).map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
       <RMenu.Item asChild disabled={disabled}><button type="submit" className={danger ? "danger" : ""} onClick={(e) => {
-        if (!confirm) return;
         e.preventDefault();
-        // меню закриється і форма зникне з DOM, тому копіюємо її у провайдер і надсилаємо звідти
+        // меню закриється і форма зникне з DOM раніше, ніж спрацює submit, тому копіюємо поля й викликаємо дію напряму
         const fd = new FormData(formRef.current ?? undefined);
-        ask({ message: confirm, danger, confirmLabel: typeof children === "string" ? children : undefined, onConfirm: () => { void action(fd); } });
+        const run = () => startTransition(() => { void action(fd); });
+        if (!confirm) { run(); return; }
+        ask({ message: confirm, danger, confirmLabel: typeof children === "string" ? children : undefined, onConfirm: run });
       }}>{icon}{children}</button></RMenu.Item>
     </form>
   );
@@ -83,4 +84,9 @@ export function Tip({ text, children }: { text: string; children: React.ReactNod
 /** Перемикач у таблиці, що одразу сабмітить форму. */
 export function AutoSubmitToggleClient({ checked, label }: { checked: boolean; label?: string }) {
   return <RSwitch.Root className="sw-root" defaultChecked={checked} aria-label={label} onClick={(e) => { const f = (e.currentTarget as HTMLElement).closest("form"); setTimeout(() => f?.requestSubmit(), 0); }}><RSwitch.Thumb className="sw-thumb" /></RSwitch.Root>;
+}
+
+/** Select у тулбарі списку: зміна значення одразу надсилає форму фільтра (без окремої кнопки «Застосувати»). */
+export function AutoSubmitSelect({ name, defaultValue, className, children, ariaLabel }: { name: string; defaultValue?: string; className?: string; children: React.ReactNode; ariaLabel?: string }) {
+  return <select name={name} defaultValue={defaultValue} className={className} aria-label={ariaLabel} onChange={(e) => e.currentTarget.form?.requestSubmit()}>{children}</select>;
 }

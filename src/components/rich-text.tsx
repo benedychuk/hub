@@ -43,14 +43,21 @@ const I = {
   var: <svg viewBox="0 0 24 24"><path d="M8 4c-2 0-3 1-3 3v3c0 1-1 2-2 2 1 0 2 1 2 2v3c0 2 1 3 3 3M16 4c2 0 3 1 3 3v3c0 1 1 2 2 2-1 0-2 1-2 2v3c0 2-1 3-3 3" /></svg>,
 };
 
-/** Візуальний редактор тексту для Telegram: форматування видно одразу, у форму йде HTML із тегами Telegram. */
+/** Кнопка тулбара; винесена з компонента, щоб не перемонтовуватись на кожному введенні. */
+function B({ t, title, onClick, icon, cls }: { t?: string; title: string; onClick: () => void; icon?: React.ReactNode; cls?: string }) {
+  return <button type="button" className={`rte-b ${cls ?? ""}`} title={title} onMouseDown={(e) => e.preventDefault()} onClick={onClick}>{icon ?? t}</button>;
+}
+
+/** Візуальний редактор тексту для Telegram: форматування видно одразу, у форму йде HTML із тегами Telegram.
+ *  Вміст contenteditable React не керує: він встановлюється один раз, інакше React перезаписує введений текст. */
 export function RichText({ name, defaultValue, max = 4096, minHeight = 180, placeholder = "Текст повідомлення…", variables }: { name: string; defaultValue: string; max?: number; minHeight?: number; placeholder?: string; variables?: { key: string; label: string }[] }) {
   const ed = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState(defaultValue);
   const [len, setLen] = useState(0);
   const [showVars, setShowVars] = useState(false);
   const initial = useMemo(() => toEditor(defaultValue), [defaultValue]);
-  useEffect(() => { if (ed.current) setLen(textLength(ed.current)); }, []);
+  const mounted = useRef(false);
+  useEffect(() => { if (ed.current && !mounted.current) { mounted.current = true; ed.current.innerHTML = initial; setLen(textLength(ed.current)); } }, [initial]);
   const emit = () => { if (!ed.current) return; setHtml(serialize(ed.current)); setLen(textLength(ed.current)); };
   const cmd = (c: string, v?: string) => { ed.current?.focus(); document.execCommand(c, false, v); emit(); };
   const selectionIn = (tag: string, cls?: string) => {
@@ -77,7 +84,6 @@ export function RichText({ name, defaultValue, max = 4096, minHeight = 180, plac
     if (hasSel) cmd("createLink", url); else cmd("insertHTML", `<a href="${esc(url)}">${esc(url)}</a>`);
   };
   const insertVar = (k: string) => { ed.current?.focus(); document.execCommand("insertText", false, `{${k}}`); emit(); setShowVars(false); };
-  const B = ({ t, title, onClick, icon, cls }: { t?: string; title: string; onClick: () => void; icon?: React.ReactNode; cls?: string }) => <button type="button" className={`rte-b ${cls ?? ""}`} title={title} onMouseDown={(e) => e.preventDefault()} onClick={onClick}>{icon ?? t}</button>;
   return (
     <div className="rte">
       <input type="hidden" name={name} value={html} />
@@ -96,7 +102,7 @@ export function RichText({ name, defaultValue, max = 4096, minHeight = 180, plac
         {variables?.length ? <span style={{ position: "relative" }}><B title="Вставити змінну" icon={I.var} onClick={() => setShowVars((v) => !v)} />{showVars && <div className="dd" style={{ left: 0, right: "auto", top: 34, position: "absolute", zIndex: 30 }}>{variables.map((v) => <button key={v.key} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertVar(v.key)}><code style={{ fontSize: 12 }}>{`{${v.key}}`}</code><span className="muted" style={{ fontSize: 12 }}>{v.label}</span></button>)}</div>}</span> : null}
         <span className={`rte-cnt ${len > max ? "over" : ""}`}>{len} / {max}</span>
       </div>
-      <div ref={ed} className="rte-ed" contentEditable suppressContentEditableWarning data-placeholder={placeholder} style={{ minHeight }} dangerouslySetInnerHTML={{ __html: initial }}
+      <div ref={ed} className="rte-ed" contentEditable suppressContentEditableWarning data-placeholder={placeholder} style={{ minHeight }}
         onInput={emit} onBlur={emit}
         onPaste={(e) => { e.preventDefault(); document.execCommand("insertText", false, e.clipboardData.getData("text/plain")); emit(); }}
         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.execCommand("insertLineBreak"); emit(); } }} />

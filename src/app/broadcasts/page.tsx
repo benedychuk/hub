@@ -2,7 +2,7 @@ import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { Send, Eye, Copy, Pencil, XCircle, Trash2, RefreshCw, Plus, Inbox } from "lucide-react";
-import { Kebab, MenuAction, MenuLink, MenuSep } from "@/components/ui/controls";
+import { Kebab, MenuAction, MenuLink, MenuSep, AutoSubmitSelect } from "@/components/ui/controls";
 import { EmptyState } from "@/components/ui/layout";
 import { navCounts, broadcastList } from "@/lib/queries";
 import { createBroadcast, duplicateBroadcast, cancelBroadcast, deleteBroadcastFromSubscribers, deleteBroadcast, previewBroadcast, runBroadcastsNow } from "@/lib/actions";
@@ -21,7 +21,7 @@ export default async function Broadcasts({ searchParams }: { searchParams: Promi
             {sp.err && <div className="alert bad">{sp.err}</div>}
       <div className="toolbar">
         <form className="search" method="get"><span className="muted">⌕</span><input name="q" defaultValue={sp.q ?? ""} placeholder="Пошук розсилки" />{sp.status && <input type="hidden" name="status" value={sp.status} />}</form>
-        <form method="get" className="row-actions">{sp.q && <input type="hidden" name="q" value={sp.q} />}<select name="status" defaultValue={sp.status ?? ""} className="btn"><option value="">Статус: усі</option>{Object.entries(STATUS_UA).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}</select><button className="btn" type="submit">Фільтр</button></form>
+        <form method="get" className="row-actions">{sp.q && <input type="hidden" name="q" value={sp.q} />}<AutoSubmitSelect name="status" defaultValue={sp.status ?? ""} className="btn" ariaLabel="Статус"><option value="">Статус: усі</option>{Object.entries(STATUS_UA).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}</AutoSubmitSelect><button className="btn" type="submit">Фільтр</button></form>
         {sending && <form action={runBroadcastsNow}><button className="btn sm ghost" type="submit"><RefreshCw size={14} /> Продовжити надсилання</button></form>}
         <span className="spacer" />
         <form action={createBroadcast}><button className="btn pri" type="submit" name="name" value=""><Plus size={15} /> Нова розсилка</button></form>
