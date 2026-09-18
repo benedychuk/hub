@@ -7,7 +7,7 @@ import { onBroadcastButton } from "./broadcasts";
 import { payLink, cancelAtEnd, resumeSub, paymentsAllowedFor } from "./payments";
 import { grantByLink, priceLabel, accessLabel } from "./offers";
 import { coverFile, escapeHtml } from "./funnels";
-import { enroll, matchEntry, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
+import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 
 const { persons, identities, subscriptions, plans, events, bots, media } = schema;
@@ -57,7 +57,11 @@ export function getBot() {
       await ctx.reply(r.ok ? `Доступ до «${r.plan.name}» відкрито${r.until ? ` до ${r.until.toLocaleDateString("uk-UA")}` : ""}. Матеріали з'являться в цьому боті за хвилину.` : r.reason);
       await processDue(5); return;
     }
-    if (payload) { const f = await matchEntry("start", payload); if (f) { if (await sendIntro(f.id, personId)) return; await enroll(f.id, personId, "start:" + payload); await processDue(5); return; } }
+    if (payload) {
+      const link = await matchStartLink(payload); // f_ID або f_ID_slug: іменоване посилання ставить тег і рахує перехід
+      const f = link?.f ?? await matchEntry("start", payload);
+      if (f) { if (await sendIntro(f.id, personId, link?.link?.slug)) return; await enroll(f.id, personId, "start:" + payload, { tag: link?.link?.tag, linkId: link?.link?.id }); await processDue(5); return; }
+    }
     if (await enrollDirectAccess(personId)) { await processDue(5); return; }
     const sub = await db().select().from(subscriptions).where(eq(subscriptions.personId, personId)).orderBy(desc(subscriptions.updatedAt)).limit(1);
     const active = sub[0] && ["active", "trialing", "past_due"].includes(sub[0].status);
@@ -129,11 +133,13 @@ export function getBot() {
     const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
     if (p[0]) { const reply = await onBroadcastButton(ctx.match[1] ? "p" : "r", Number(ctx.match[2]), Number(ctx.match[3]), p[0].id); if (reply) await ctx.reply(reply, { link_preview_options: { is_disabled: true } }); }
   });
-  bot.callbackQuery(/^fstart:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^fstart:(\d+)(?::([a-z0-9-]+))?$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
     const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
-    if (p[0]) { await enroll(Number(ctx.match[1]), p[0].id, "intro"); await processDue(5); }
+    if (!p[0]) return;
+    const link = ctx.match[2] ? await matchStartLink(`f_${ctx.match[1]}_${ctx.match[2]}`) : null;
+    await enroll(Number(ctx.match[1]), p[0].id, "intro", { tag: link?.link?.tag, linkId: link?.link?.id }); await processDue(5);
   });
   bot.callbackQuery(/^fs:(\d+)(?::(\d+))?$/, async (ctx) => {
     await ctx.answerCallbackQuery();

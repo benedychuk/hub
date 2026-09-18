@@ -4,7 +4,7 @@ import { db, schema } from "@/db";
 import { getBot, BOT_KEY } from "./bot";
 import { payLink } from "./payments";
 
-const { funnels, funnelSteps, funnelEnrollments, funnelDeliveries, funnelCommands, identities, events, persons, media } = schema;
+const { funnels, funnelSteps, funnelEnrollments, funnelDeliveries, funnelCommands, funnelLinks, identities, events, persons, media } = schema;
 
 export type StepType = "message" | "lesson" | "assignment" | "survey" | "quiz" | "question";
 export const STEP_TYPES: { key: StepType; label: string; hint: string }[] = [
@@ -99,11 +99,13 @@ function nextAuto(steps: typeof funnelSteps.$inferSelect[], afterIdx: number) {
   return null;
 }
 
-export async function enroll(funnelId: number, personId: number, reason = "manual") {
+export type EnrollOpts = { tag?: string | null; linkId?: number | null };
+export async function enroll(funnelId: number, personId: number, reason = "manual", opts: EnrollOpts = {}) {
   const d = db();
   const [f] = await d.select().from(funnels).where(eq(funnels.id, funnelId));
   if (!f || !f.isActive) return null;
   const fs = (f.settings ?? {}) as FunnelSettings;
+  if (opts.tag) await addTag(personId, opts.tag, "funnel_link", { funnelId, linkId: opts.linkId ?? null }); // тег джерела ставиться за кожним переходом
   const [existing] = await d.select().from(funnelEnrollments).where(and(eq(funnelEnrollments.funnelId, funnelId), eq(funnelEnrollments.personId, personId))).orderBy(desc(funnelEnrollments.startedAt)).limit(1);
   if (existing?.status === "active") return existing;
   if (existing && !fs.restart) return existing; // перезапуск вимкнено
@@ -113,10 +115,51 @@ export async function enroll(funnelId: number, personId: number, reason = "manua
   const nextAt = first ? scheduleFor((first.step.config ?? {}) as StepConfig, now, fs.quietHours) : null;
   const product = f.kind === "product"; // продукт: доступ триває, поки є право, навіть без автоматичних кроків
   const [e] = await d.insert(funnelEnrollments).values({ funnelId, personId, nextPosition: first?.step.position ?? 0, nextAt, status: first || product ? "active" : "done", lastStepAt: now, finishedAt: first || product ? null : now }).returning();
-  await d.insert(events).values({ personId, type: "funnel.enrolled", source: "hub", payload: { funnelId, name: f.name, reason } });
+  await d.insert(events).values({ personId, type: "funnel.enrolled", source: "hub", payload: { funnelId, name: f.name, reason, linkId: opts.linkId ?? null } });
+  if (opts.linkId) await d.update(funnelLinks).set({ joins: sql`${funnelLinks.joins} + 1` }).where(eq(funnelLinks.id, opts.linkId));
   await d.update(funnels).set({ subscribersCount: sql`(select count(distinct person_id)::int from funnel_enrollments where funnel_id = ${funnelId})` }).where(eq(funnels.id, funnelId));
   await applyMenu(personId);
   return e;
+}
+
+/** Перерахунок розкладу після зміни кроків: наступний крок кожної активної людини = перший автоматичний крок після останнього отриманого, час від часу останнього кроку.
+ *  Тому кроки можна додавати, міняти місцями й редагувати затримки у воронці, яку вже проходять. */
+export async function rescheduleFunnel(funnelId: number) {
+  const d = db();
+  const [f] = await d.select().from(funnels).where(eq(funnels.id, funnelId)); if (!f) return 0;
+  const fs = (f.settings ?? {}) as FunnelSettings;
+  const steps = await activeSteps(funnelId);
+  const rows = await d.select().from(funnelEnrollments).where(and(eq(funnelEnrollments.funnelId, funnelId), eq(funnelEnrollments.status, "active")));
+  let n = 0;
+  for (const e of rows) {
+    const [last] = await d.select({ pos: funnelSteps.position, sid: funnelSteps.id, sentAt: funnelDeliveries.sentAt }).from(funnelDeliveries).innerJoin(funnelSteps, eq(funnelSteps.id, funnelDeliveries.stepId))
+      .where(eq(funnelDeliveries.enrollmentId, e.id)).orderBy(desc(funnelDeliveries.sentAt)).limit(1);
+    const idx = last ? steps.findIndex((s) => s.id === last.sid) : -1;
+    const afterIdx = idx >= 0 ? idx : last ? steps.findIndex((s) => s.position > last.pos) - 1 : -1; // останній отриманий крок вимкнено або видалено: рахуємо від його позиції
+    const next = nextAuto(steps, Math.max(-1, afterIdx));
+    const base = last?.sentAt ?? e.lastStepAt ?? e.startedAt;
+    const nextAt = next ? scheduleFor((next.step.config ?? {}) as StepConfig, base, fs.quietHours) : null;
+    const nextPosition = next ? next.step.position : (last ? last.pos + 1 : 0);
+    if (nextPosition !== e.nextPosition || (nextAt?.getTime() ?? null) !== (e.nextAt?.getTime() ?? null)) { await d.update(funnelEnrollments).set({ nextPosition, nextAt }).where(eq(funnelEnrollments.id, e.id)); n++; }
+  }
+  return n;
+}
+
+/** Надіслати конкретний крок обраним людям, не змінюючи їхнього місця у воронці (повторно, після пропуску, після додавання кроку). */
+export async function sendStepToPeople(funnelId: number, stepId: number, personIds: number[]) {
+  const d = db();
+  const [f] = await d.select().from(funnels).where(eq(funnels.id, funnelId));
+  const [step] = await d.select().from(funnelSteps).where(and(eq(funnelSteps.id, stepId), eq(funnelSteps.funnelId, funnelId)));
+  if (!f || !step) return { sent: 0, failed: 0 };
+  let sent = 0, failed = 0;
+  for (const personId of personIds) {
+    let [enr] = await d.select().from(funnelEnrollments).where(and(eq(funnelEnrollments.funnelId, funnelId), eq(funnelEnrollments.personId, personId))).orderBy(desc(funnelEnrollments.startedAt)).limit(1);
+    if (!enr) [enr] = await d.insert(funnelEnrollments).values({ funnelId, personId, nextPosition: step.position + 1, status: "done", finishedAt: new Date() }).returning();
+    try { if (await deliver(enr, step, (f.settings ?? {}) as FunnelSettings)) sent++; else failed++; } catch { failed++; }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  await d.insert(events).values({ personId: null, type: "funnel.step_sent_manually", source: "admin", payload: { funnelId, stepId, sent, failed } });
+  return { sent, failed };
 }
 
 /** Доступ до продукту повернувся (нова оплата, посилання доступу): відновлює зупинене проходження або створює нове. */
@@ -296,9 +339,16 @@ export async function sendStepNow(funnelId: number, stepId: number, personId: nu
 }
 
 /** Вхід за ключовим словом або payload /start (f_<id> або власний параметр). */
+/** Посилання f_ID або f_ID_slug: воронка і, якщо є, іменоване посилання з тегом. */
+export async function matchStartLink(payload: string) {
+  const m = payload.trim().toLowerCase().match(/^f_(\d+)(?:_([a-z0-9-]{1,40}))?$/); if (!m) return null;
+  const [f] = await db().select().from(funnels).where(and(eq(funnels.id, Number(m[1])), eq(funnels.isActive, true), eq(funnels.kind, "funnel"))); if (!f) return null;
+  const [link] = m[2] ? await db().select().from(funnelLinks).where(and(eq(funnelLinks.funnelId, f.id), eq(funnelLinks.slug, m[2]))) : [];
+  return { f, link: link ?? null };
+}
 export async function matchEntry(kind: "start" | "keyword", value: string) {
   const v = value.trim().toLowerCase(); if (!v) return null;
-  if (kind === "start" && /^f_\d+$/.test(v)) { const [f] = await db().select().from(funnels).where(and(eq(funnels.id, Number(v.slice(2))), eq(funnels.isActive, true), eq(funnels.kind, "funnel"))); return f ?? null; }
+  if (kind === "start" && /^f_\d+/.test(v)) { const r = await matchStartLink(v); return r?.f ?? null; }
   const all = await db().select().from(funnels).where(and(eq(funnels.isActive, true), eq(funnels.source, "hub"), eq(funnels.kind, "funnel")));
   for (const f of all) {
     const s = (f.settings ?? {}) as FunnelSettings;
@@ -393,14 +443,14 @@ export function coverFile(cover: string | null | undefined) {
 
 /** Вступне повідомлення воронки (обкладинка + опис + кнопка «Отримати доступ»), як у ZenEdu за посиланням на воронку.
  *  Повертає false, якщо вступу немає (тоді людину одразу записують у воронку). */
-export async function sendIntro(funnelId: number, personId: number) {
+export async function sendIntro(funnelId: number, personId: number, linkSlug?: string | null) {
   const d = db();
   const [f] = await d.select().from(funnels).where(eq(funnels.id, funnelId));
   if (!f || !f.isActive || (!f.description && !f.cover)) return false;
   const [idn] = await d.select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
   if (!idn?.chatId) return false;
   const api = getBot().api;
-  const kb = new InlineKeyboard().text(f.buttonText || "Отримати доступ", `fstart:${f.id}`);
+  const kb = new InlineKeyboard().text(f.buttonText || "Отримати доступ", `fstart:${f.id}${linkSlug ? ":" + linkSlug : ""}`);
   const text = `<b>${escapeHtml(f.name)}</b>${f.description ? "\n\n" + f.description : ""}`;
   const photo = coverFile(f.cover);
   if (photo && text.length <= 1024) await api.sendPhoto(idn.chatId, photo, { caption: text, parse_mode: "HTML", reply_markup: kb });

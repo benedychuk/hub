@@ -55,7 +55,7 @@ export default async function Funnels({ searchParams }: { searchParams: Promise<
               <div className="meta"><span title="Людей"><Users size={12} /> {f.subscribersCount.toLocaleString("uk-UA")}</span><span title="Проходять зараз"><Zap size={12} /> {f.activeNow}</span><span title="Кроків"><Layers size={12} /> {f.stepsCount}</span><span>{date(f.updatedAt)}</span></div>
             </div>
             {!zen && <Kebab>
-              <MenuLink href={`/funnels/${f.id}?tab=settings#links`} icon={<Link2 />}>Посилання</MenuLink>
+              <MenuLink href={`/funnels/${f.id}?tab=links`} icon={<Link2 />}>Посилання</MenuLink>
               <MenuLink href={`/f/${f.id}`} icon={<Eye />} external>Перегляд лендінгу</MenuLink>
               <MenuAction action={setFunnelStatus} fields={{ id: f.id, status: f.isActive ? "stopped" : "active" }} icon={f.isActive ? <Pause /> : <Play />}>{f.isActive ? "Зупинити" : "Активувати"}</MenuAction>
               <MenuLink href={`/funnels/${f.id}?tab=settings`} icon={<Settings />}>Налаштування</MenuLink>

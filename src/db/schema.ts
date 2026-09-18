@@ -268,6 +268,17 @@ export const funnelSteps = pgTable("funnel_steps", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Посилання на воронку з власним тегом: одна воронка, багато джерел (t.me/бот?start=f_ID_slug); кожен перехід ставить тег і рахується.
+export const funnelLinks = pgTable("funnel_links", {
+  id: serial("id").primaryKey(),
+  funnelId: integer("funnel_id").notNull().references(() => funnels.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  tag: text("tag"),
+  joins: integer("joins").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("funnel_links_slug_uidx").on(t.funnelId, t.slug)]);
+
 // Команди меню, прив'язані до воронки.
 export const funnelCommands = pgTable("funnel_commands", {
   id: serial("id").primaryKey(),

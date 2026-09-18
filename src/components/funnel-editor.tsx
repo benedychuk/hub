@@ -9,14 +9,14 @@ import { Kebab, MenuAction, MenuLink, MenuSep, Switch, AutoSubmitToggleClient } 
 import { CoverInput, StepText } from "@/components/funnel-ui";
 import { StepIcon } from "@/components/step-icon";
 import { navCounts, funnelDetail, botList } from "@/lib/queries";
-import { saveFunnelSettings, deleteFunnel, setFunnelStatus, addStep, deleteStep, moveStep, toggleStep, duplicateStep, testFunnelOnMe, stopFunnelEnrollment, runTickNow, addModule, renameModule, deleteModule, moveModule, saveCommand, deleteCommand, createOfferForProduct, addProductToOffer, removeProductFromOffer } from "@/lib/actions";
+import { saveFunnelSettings, deleteFunnel, setFunnelStatus, addStep, deleteStep, moveStep, toggleStep, duplicateStep, testFunnelOnMe, stopFunnelEnrollment, runTickNow, addModule, renameModule, deleteModule, moveModule, saveCommand, deleteCommand, createOfferForProduct, addProductToOffer, removeProductFromOffer, createFunnelLink, deleteFunnelLink } from "@/lib/actions";
 import { Modal } from "@/components/modal";
 import { priceLabel, accessLabel } from "@/lib/offers";
 import { money } from "@/lib/format";
 import { dateTime, fullName } from "@/lib/format";
 import { STEP_TYPES, sendTimeLabel, type StepConfig, type FunnelSettings } from "@/lib/funnels";
 
-const FUNNEL_TABS = [["content", "Зміст"], ["modules", "Модулі"], ["menu", "Меню"], ["settings", "Налаштування"]] as const;
+const FUNNEL_TABS = [["content", "Зміст"], ["modules", "Модулі"], ["menu", "Меню"], ["links", "Посилання"], ["settings", "Налаштування"]] as const;
 const PRODUCT_TABS = [["content", "Зміст"], ["modules", "Модулі"], ["menu", "Меню"], ["offers", "Оффери"], ["settings", "Налаштування"]] as const;
 export type EditorSP = { tab?: string; saved?: string; tested?: string };
 
@@ -26,7 +26,7 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
   const TABS: readonly (readonly [string, string])[] = product ? PRODUCT_TABS : FUNNEL_TABS;
   const [counts, d, bl] = await Promise.all([navCounts(), funnelDetail(Number(id)), botList()]);
   if (!d || d.f.kind !== kind) notFound();
-  const { f, steps, modules, commands, stats, enr, waiting, summary, offersWith, allOffers } = d;
+  const { f, steps, modules, commands, stats, enr, waiting, summary, offersWith, allOffers, links, directJoins } = d;
   const fs = (f.settings ?? {}) as FunnelSettings;
   const tab = TABS.some((t) => t[0] === sp.tab) ? sp.tab! : "content";
   const botUser = bl.find((b) => b.key === "hub")?.username;
@@ -65,6 +65,7 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
             {!product && <MenuLink href={`/f/${f.id}`} icon={<Eye />} external>Перегляд лендінгу</MenuLink>}
             {!product && <MenuAction action={testFunnelOnMe} fields={{ funnelId: f.id, mode: "intro" }} icon={<MessageSquareText />} disabled={!f.isActive}>Тест вступу з кнопкою</MenuAction>}
             {product && <MenuLink href={`${base}/${f.id}?tab=offers`} icon={<Tag />}>Оффери продукту</MenuLink>}
+            {!product && <MenuLink href={`${base}/${f.id}?tab=links`} icon={<Link2 />}>Посилання на воронку</MenuLink>}
             <MenuAction action={runTickNow} icon={<RefreshCw />}>Надіслати належні кроки зараз</MenuAction>
             <MenuSep />
             <MenuAction action={deleteFunnel} fields={{ id: f.id }} icon={<Trash2 />} danger confirm={product ? `Видалити продукт «${f.name}»? Він зникне з офферів, кроки й статистика видаляться.` : `Видалити воронку «${f.name}»?`}>{product ? "Видалити продукт" : "Видалити воронку"}</MenuAction>
@@ -75,7 +76,7 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
       {sp.tested === "0" && <Alert tone="bad">Не знайдено вашу людину в Hub: натисніть /start у Hub-боті з акаунта, вказаного в ADMIN_TELEGRAM_ID.</Alert>}
       {!f.isActive && <Alert tone="warn">{product ? "Продукт не активний: покупці не отримують кроки, доки ви не натиснете «Активувати»." : "Воронка не активна: люди не заходять у неї, кроки не надсилаються. Натисніть «Активувати», коли зміст готовий."}</Alert>}
       {product && f.isActive && !offersWith.length && <Alert tone="info">Продукт ще не входить у жоден оффер: його ніхто не може купити. Додайте оффер на вкладці «Оффери».</Alert>}
-      <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`${base}/${f.id}?tab=${k}`} className={tab === k ? "on" : ""}>{l}{k === "content" ? ` · ${steps.length}` : k === "modules" ? ` · ${modules.length}` : k === "menu" ? ` · ${commands.length}` : k === "offers" ? ` · ${offersWith.length}` : ""}</Link>)}</div>
+      <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`${base}/${f.id}?tab=${k}`} className={tab === k ? "on" : ""}>{l}{k === "content" ? ` · ${steps.length}` : k === "modules" ? ` · ${modules.length}` : k === "menu" ? ` · ${commands.length}` : k === "offers" ? ` · ${offersWith.length}` : k === "links" ? ` · ${links.length + 1}` : ""}</Link>)}</div>
 
       {tab === "content" && <>
         <div className="grid g4" style={{ marginBottom: 16 }}>
@@ -84,7 +85,8 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
           <Stat label="Зупинені" value={summary.stopped} hint={`${pct(summary.stopped)}%`} tone={summary.stopped ? "warn" : undefined} />
           <Stat label="Завершили" value={summary.finished} hint={`${pct(summary.finished)}%`} />
         </div>
-        <Section title="Кроки" description={product ? "Порядок у списку = порядок надсилання після відкриття доступу. Кроки з часом «Ні» доступні лише за кнопками й командами меню." : "Порядок у списку = порядок надсилання. Час кожного кроку рахується від попереднього."} className="tbl">
+        <Section title="Кроки" description={product ? "Порядок у списку = порядок надсилання після відкриття доступу. Кроки з часом «Ні» доступні лише за кнопками й командами меню." : "Порядок у списку = порядок надсилання. Час кожного кроку рахується від попереднього. Кроки можна додавати й міняти місцями у воронці, яку вже проходять: розклад перераховується."} className="tbl"
+          actions={<Modal title="Новий крок" width={640} trigger={<button type="button" className="btn"><Plus size={15} /> Додати крок</button>}><AddStep /></Modal>}>
           <table><thead><tr><th>Крок</th><th className="num">Отримали</th><th className="num">Чекають</th><th className="num">Дійшли</th><th>Час надсилання</th><th>Статус</th><th></th></tr></thead><tbody>
             {groups.map((g) => <Fragment key={g.mod?.id ?? "none"}>
               {g.mod && <tr className="modhead"><td colSpan={7}>{g.mod.name} <span className="muted" style={{ fontWeight: 400 }}>· {g.items.length} кроків</span></td></tr>}
@@ -101,6 +103,30 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
           {!enr.length && <EmptyState icon={<Users size={20} />} title="Ще ніхто не проходив" text={product ? "Доступ відкривається після оплати оффера, за посиланням доступу або з картки людини." : "Додайте людину з її картки або натисніть «Тест собі»."} />}
         </Section>
       </>}
+
+      {tab === "links" && !product && <div className="grid g21">
+        <div className="form">
+          <Section title="Посилання на воронку" description="Одна воронка, багато джерел. Кожне іменоване посилання ставить людині свій тег і рахує переходи, тож не треба дублювати воронку під кожен ресурс." className="tbl">
+            <table><thead><tr><th>Назва</th><th>Посилання</th><th>Тег</th><th className="num">Переходів</th><th></th></tr></thead><tbody>
+              <tr><td>Основне</td><td className="mono" style={{ userSelect: "all" }}>https://t.me/{botUser ?? "hub-бот"}?start=f_{f.id}</td><td className="muted">без тега</td><td className="num">{directJoins}</td><td></td></tr>
+              {links.map((l) => <tr key={l.id}><td>{l.name}</td><td className="mono" style={{ userSelect: "all" }}>https://t.me/{botUser ?? "hub-бот"}?start=f_{f.id}_{l.slug}</td><td>{l.tag ? <span className="tag">{l.tag}</span> : <span className="muted">без тега</span>}</td><td className="num">{l.joins}</td>
+                <td><Kebab><MenuSep /><MenuAction action={deleteFunnelLink} fields={{ id: l.id, funnelId: f.id }} icon={<Trash2 />} danger confirm={`Видалити посилання «${l.name}»? Теги в людей залишаться.`}>Видалити</MenuAction></Kebab></td></tr>)}
+            </tbody></table>
+            <p className="fld-h" style={{ marginTop: 10 }}>Переходи рахуються за новими входами у воронку. Хто прийшов за яким посиланням, видно за тегом у картці людини та у фільтрах розсилок.</p>
+          </Section>
+          <Section title="Лендінг" description="Сторінка з описом, обкладинкою і кнопкою «Відкрити в Telegram», яку можна давати в сторіз чи рекламі.">
+            <KV items={[{ k: "Адреса", v: <a href={`/f/${f.id}`} target="_blank" rel="noreferrer">/f/{f.id}</a>, mono: true }]} />
+          </Section>
+        </div>
+        <div className="form aside-sticky">
+          <form action={createFunnelLink}><input type="hidden" name="funnelId" value={f.id} /><Section title="Нове посилання">
+            <Field label="Назва" hint="наприклад, Instagram сторіз, вебінар вересень"><input name="name" required maxLength={80} /></Field>
+            <Field label="Тег" hint="ставиться кожному, хто перейшов; порожньо = без тега"><input name="tag" maxLength={60} placeholder="src:instagram" /></Field>
+            <Field label="Код у посиланні" hint="латиниця; порожньо = з назви"><input name="slug" maxLength={40} pattern="[a-z0-9-]*" placeholder="instagram" /></Field>
+            <div className="row-actions" style={{ marginTop: 12 }}><button className="btn pri" type="submit"><Plus size={15} /> Створити посилання</button></div>
+          </Section></form>
+        </div>
+      </div>}
 
       {tab === "offers" && <>
         <Section title="Оффери з цим продуктом" description="Оффер визначає ціну, тип оплати й тривалість доступу. Один продукт може бути в кількох офферах." className="tbl"
@@ -162,7 +188,7 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
             {!product && <Field label="Текст кнопки"><input name="buttonText" defaultValue={f.buttonText ?? "Отримати доступ"} maxLength={64} /></Field>}
             <Field label="Обкладинка"><CoverInput current={f.cover} /></Field>
           </Section>
-          {!product && <Section title="Посилання" description={`Якщо у воронки є опис або обкладинка, за посиланням людина спершу бачить вступ із кнопкою «${f.buttonText || "Отримати доступ"}». Без них воронка стартує одразу.`}>
+          {!product && <Section title="Вхід у воронку" description={`Іменовані посилання з тегами — на вкладці «Посилання». Якщо у воронки є опис або обкладинка, за посиланням людина спершу бачить вступ із кнопкою «${f.buttonText || "Отримати доступ"}». Без них воронка стартує одразу.`}>
             <div id="links"><KV items={[{ k: "Посилання на воронку", v: <span style={{ userSelect: "all" }}>https://t.me/{botUser ?? "hub-бот"}?start=f_{f.id}</span>, mono: true }, { k: "Лендінг", v: <a href={`/f/${f.id}`} target="_blank" rel="noreferrer">/f/{f.id}</a>, mono: true }]} /></div>
             <FormRow><Field label="Вхід"><select name="entryKind" defaultValue={fs.entryKind ?? "start"}><option value="start">параметр /start</option><option value="keyword">ключове слово в боті</option><option value="manual">лише вручну та за f_{f.id}</option></select></Field><Field label="Параметр або слова через кому"><input name="entryValue" defaultValue={fs.entryValue ?? ""} placeholder="promo_sep" /></Field></FormRow>
           </Section>}

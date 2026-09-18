@@ -1,24 +1,25 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Eye, Trash2, Save } from "lucide-react";
+import { Eye, Trash2, Save, Plus } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { PageHeader, Section, Field, FormRow, Alert } from "@/components/ui/layout";
 import { Switch } from "@/components/ui/controls";
 import { ConfirmSubmit, StepText, AttachmentsPicker, ButtonsEditor, SendTimeFields, AutoDeleteFields } from "@/components/funnel-ui";
 import { StepIcon } from "@/components/step-icon";
+import { PeoplePicker } from "@/components/people-picker";
 import { navCounts, stepDetail } from "@/lib/queries";
-import { saveStep, deleteStep, addStep } from "@/lib/actions";
+import { saveStep, deleteStep, addStep, sendStepToPeople } from "@/lib/actions";
 import { STEP_TYPES, sendTimeLabel, type StepConfig, type FunnelSettings } from "@/lib/funnels";
 
 const VARS = [{ key: "first_name", label: "ім’я" }, { key: "name", label: "ім’я та прізвище" }, { key: "username", label: "@username" }];
 
-export type StepSP = { saved?: string; sent?: string };
+export type StepSP = { saved?: string; sent?: string; sentTo?: string; failed?: string };
 export async function StepEditorView({ id, sid, sp, kind }: { id: string; sid: string; sp: StepSP; kind: "funnel" | "product" }) {
   const product = kind === "product"; const base = product ? "/products" : "/funnels";
   const [counts, d] = await Promise.all([navCounts(), stepDetail(Number(id), Number(sid))]);
   if (!d || d.f.kind !== kind) notFound();
-  const { f, step, steps, modules, media, allFunnels, offers } = d;
+  const { f, step, steps, modules, media, allFunnels, offers, people } = d;
   const c = (step.config ?? {}) as StepConfig;
   const fs = (f.settings ?? {}) as FunnelSettings;
   const idx = steps.findIndex((s) => s.id === step.id);
@@ -29,6 +30,7 @@ export async function StepEditorView({ id, sid, sp, kind }: { id: string; sid: s
       <PageHeader back={`${base}/${f.id}`} backLabel={f.name} icon={<StepIcon type={step.type} size={32} />} title={`Крок ${idx + 1}: ${step.title || type.label}`} status={<><Pill tone="moon">{type.label}</Pill><Pill tone={step.isActive ? "good" : "mute"}>{step.isActive ? "активний" : "зупинений"}</Pill></>} />
       {sp.saved && <Alert tone="ok">Крок збережено.</Alert>}
       {sp.sent && <Alert tone="ok">Крок надіслано на ваш Telegram для перегляду.</Alert>}
+      {sp.sentTo != null && <Alert tone={Number(sp.failed) ? "warn" : "ok"}>Крок надіслано: {sp.sentTo}{Number(sp.failed) ? `, не вдалося: ${sp.failed} (бот заблоковано або не запущено)` : ""}.</Alert>}
       <form action={saveStep} className="editor">
         <input type="hidden" name="id" value={step.id} /><input type="hidden" name="funnelId" value={f.id} />
         <div className="form">
@@ -57,7 +59,7 @@ export async function StepEditorView({ id, sid, sp, kind }: { id: string; sid: s
             <Field label="Статус"><select name="status" defaultValue={step.isActive ? "active" : "stopped"}><option value="active">Активний</option><option value="stopped">Зупинений: пропускається</option></select></Field>
           </Section>
           <Section>
-            <div className="form"><button className="btn pri" type="submit"><Save size={15} /> Зберегти</button><button className="btn" type="submit" name="after" value="preview" title="Зберегти й надіслати цей крок на ваш Telegram"><Eye size={15} /> Зберегти й переглянути</button><button className="btn ghost" type="submit" name="after" value="close">Зберегти й закрити</button></div>
+            <div className="form"><button className="btn pri" type="submit"><Save size={15} /> Зберегти</button><button className="btn" type="submit" name="after" value="next" title="Зберегти цей крок і одразу створити наступний"><Plus size={15} /> Зберегти й додати наступний</button><button className="btn" type="submit" name="after" value="preview" title="Зберегти й надіслати цей крок на ваш Telegram"><Eye size={15} /> Зберегти й переглянути</button><button className="btn ghost" type="submit" name="after" value="close">Зберегти й закрити</button></div>
             <div style={{ marginTop: 10 }}><ConfirmSubmit className="btn sm danger ghost" formAction={deleteStep} name="back" value="1" message="Видалити цей крок?"><Trash2 size={14} /> Видалити крок</ConfirmSubmit></div>
           </Section>
           <Section title="Кроки" description={`${steps.length} у воронці`} className="steps-side">
@@ -66,6 +68,10 @@ export async function StepEditorView({ id, sid, sp, kind }: { id: string; sid: s
         </div>
       </form>
       <form action={addStep} style={{ marginTop: 16 }}><input type="hidden" name="funnelId" value={f.id} /><input type="hidden" name="moduleId" value={step.moduleId ?? ""} /><Section title="Додати наступний крок"><div className="types">{STEP_TYPES.map((t) => <button key={t.key} type="submit" name="type" value={t.key}><b><StepIcon type={t.key} /> {t.label}</b><small>{t.hint}</small></button>)}</div></Section></form>
+      {people.length > 0 && <form action={sendStepToPeople} id="send" style={{ marginTop: 16 }}><input type="hidden" name="funnelId" value={f.id} /><input type="hidden" name="stepId" value={step.id} />
+        <Section title="Надіслати цей крок людям" description="Повторно тим, хто пропустив, або всім, хто вже пройшов це місце, коли крок додано пізніше. Місце людини у воронці не змінюється.">
+          <PeoplePicker people={people} />
+        </Section></form>}
     </Shell>
   );
 }

@@ -279,7 +279,7 @@ export async function identitiesCount() {
 
 // ---------- воронки (структура й логіка як у ZenEdu) ----------
 import { asc, desc, inArray } from "drizzle-orm";
-import { enroll as enrollPerson, processDue, sendStep, sendIntro, STEP_TYPES, type StepType, type StepButton, type StepConfig, type FunnelSettings } from "./funnels";
+import { enroll as enrollPerson, processDue, sendStep, sendIntro, rescheduleFunnel, sendStepToPeople as sendStepToPeopleFn, STEP_TYPES, type StepType, type StepButton, type StepConfig, type FunnelSettings } from "./funnels";
 const { funnels, funnelSteps, funnelEnrollments, funnelFolders, funnelModules, funnelCommands } = schema;
 
 const num = (fd: FormData, k: string) => Number(fd.get(k) || 0) || 0;
@@ -432,7 +432,7 @@ export async function addStep(fd: FormData) {
   const all = await db().select({ p: funnelSteps.position }).from(funnelSteps).where(eq(funnelSteps.funnelId, funnelId)).orderBy(asc(funnelSteps.position));
   const label = STEP_TYPES.find((t) => t.key === type)?.label ?? "Крок";
   const [s] = await db().insert(funnelSteps).values({ funnelId, moduleId, position: (all.at(-1)?.p ?? 0) + 10, type, title: `${label} ${all.length + 1}`, body: "", isActive: true, config: DEFAULT_CONFIG(type, all.length === 0) as Record<string, unknown> }).returning({ id: funnelSteps.id });
-  await refreshFunnelCounts(funnelId);
+  await refreshFunnelCounts(funnelId); await rescheduleFunnel(funnelId);
   revalidatePath(`${await fb(funnelId)}/${funnelId}`); redirect(`${await fb(funnelId)}/${funnelId}/steps/${s.id}`);
 }
 export async function saveStep(fd: FormData) {
@@ -458,9 +458,18 @@ export async function saveStep(fd: FormData) {
   await db().update(funnelSteps).set({ title: str(fd, "title") || null, body, moduleId: num(fd, "moduleId") || null, isActive: str(fd, "status") !== "stopped", config: config as Record<string, unknown> }).where(eq(funnelSteps.id, id));
   await refreshFunnelCounts(funnelId);
   revalidatePath(`${await fb(funnelId)}/${funnelId}`); revalidatePath(`${await fb(funnelId)}/${funnelId}/steps/${id}`);
-  const next = str(fd, "after"); // preview | close
+  await rescheduleFunnel(funnelId);
+  const next = str(fd, "after"); // preview | close | next
   if (next === "preview") { await sendStepToAdmin(id); redirect(`${await fb(funnelId)}/${funnelId}/steps/${id}?sent=1`); }
   if (next === "close") redirect(`${await fb(funnelId)}/${funnelId}`);
+  if (next === "next") { // зберегти й одразу створити наступний крок після цього
+    const all = await db().select({ id: funnelSteps.id, p: funnelSteps.position }).from(funnelSteps).where(eq(funnelSteps.funnelId, funnelId)).orderBy(asc(funnelSteps.position), asc(funnelSteps.id));
+    for (let i = 0; i < all.length; i++) if (all[i].p !== (i + 1) * 10) await db().update(funnelSteps).set({ position: (i + 1) * 10 }).where(eq(funnelSteps.id, all[i].id));
+    const idx = all.findIndex((x) => x.id === id);
+    const [ns] = await db().insert(funnelSteps).values({ funnelId, moduleId: num(fd, "moduleId") || null, position: (idx + 1) * 10 + 5, type: "message", title: `Повідомлення ${all.length + 1}`, body: "", isActive: true, config: DEFAULT_CONFIG("message", false) as Record<string, unknown> }).returning({ id: funnelSteps.id });
+    await refreshFunnelCounts(funnelId); await rescheduleFunnel(funnelId);
+    redirect(`${await fb(funnelId)}/${funnelId}/steps/${ns.id}`);
+  }
   redirect(`${await fb(funnelId)}/${funnelId}/steps/${id}?saved=1`);
 }
 async function sendStepToAdmin(stepId: number) {
@@ -477,6 +486,7 @@ export async function previewStep(fd: FormData) {
 export async function toggleStep(fd: FormData) {
   const id = num(fd, "id"); const funnelId = num(fd, "funnelId");
   await db().update(funnelSteps).set({ isActive: sql`not ${funnelSteps.isActive}` }).where(eq(funnelSteps.id, id));
+  await rescheduleFunnel(funnelId);
   revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function duplicateStep(fd: FormData) {
@@ -487,13 +497,13 @@ export async function duplicateStep(fd: FormData) {
   const nextPos = after[idx + 1]?.p; const position = nextPos != null && nextPos - s.position > 1 ? Math.floor((s.position + nextPos) / 2) : s.position + 10;
   if (nextPos != null && nextPos - s.position <= 1) for (const x of after.slice(idx + 1)) await d.update(funnelSteps).set({ position: x.p + 10 }).where(eq(funnelSteps.id, x.id));
   await d.insert(funnelSteps).values({ funnelId, moduleId: s.moduleId, position, type: s.type, title: `${s.title ?? "Крок"} (копія)`, body: s.body, isActive: s.isActive, config: s.config });
-  await refreshFunnelCounts(funnelId);
+  await refreshFunnelCounts(funnelId); await rescheduleFunnel(funnelId);
   revalidatePath(`${await fb(funnelId)}/${funnelId}`);
 }
 export async function deleteStep(fd: FormData) {
   const funnelId = num(fd, "funnelId");
   await db().delete(funnelSteps).where(eq(funnelSteps.id, num(fd, "id")));
-  await refreshFunnelCounts(funnelId);
+  await refreshFunnelCounts(funnelId); await rescheduleFunnel(funnelId);
   revalidatePath(`${await fb(funnelId)}/${funnelId}`);
   if (str(fd, "back") === "1") redirect(`${await fb(funnelId)}/${funnelId}`);
 }
@@ -506,7 +516,32 @@ export async function moveStep(fd: FormData) {
     await db().update(funnelSteps).set({ position: pj }).where(eq(funnelSteps.id, steps[i].id));
     await db().update(funnelSteps).set({ position: steps[i].position }).where(eq(funnelSteps.id, steps[j].id));
   }
+  await rescheduleFunnel(funnelId);
   revalidatePath(`${await fb(funnelId)}/${funnelId}`);
+}
+
+// --- іменовані посилання на воронку ---
+const slugify = (v: string) => v.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+export async function createFunnelLink(fd: FormData) {
+  const funnelId = num(fd, "funnelId"); const name = str(fd, "name").slice(0, 80) || "Посилання";
+  const raw = str(fd, "slug") || name.replace(/[а-яіїєґ]/gi, (c) => ({ а: "a", б: "b", в: "v", г: "h", ґ: "g", д: "d", е: "e", є: "ie", ж: "zh", з: "z", и: "y", і: "i", ї: "i", й: "i", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh", щ: "shch", ь: "", ю: "iu", я: "ia" } as Record<string, string>)[c.toLowerCase()] ?? "");
+  const slug = slugify(raw) || `l${Date.now().toString(36)}`;
+  const tag = str(fd, "tag").slice(0, 60) || null;
+  await db().insert(schema.funnelLinks).values({ funnelId, name, slug, tag }).onConflictDoNothing();
+  revalidatePath(`/funnels/${funnelId}`); redirect(`/funnels/${funnelId}?tab=links`);
+}
+export async function deleteFunnelLink(fd: FormData) {
+  const funnelId = num(fd, "funnelId");
+  await db().delete(schema.funnelLinks).where(eq(schema.funnelLinks.id, num(fd, "id")));
+  revalidatePath(`/funnels/${funnelId}`);
+}
+/** Надіслати крок обраним людям (повторно або після додавання кроку); місце людини у воронці не змінюється. */
+export async function sendStepToPeople(fd: FormData) {
+  const funnelId = num(fd, "funnelId"); const stepId = num(fd, "stepId");
+  const ids = fd.getAll("personIds").map(Number).filter((n) => n > 0);
+  const r = ids.length ? await sendStepToPeopleFn(funnelId, stepId, ids) : { sent: 0, failed: 0 };
+  revalidatePath(`${await fb(funnelId)}/${funnelId}`);
+  redirect(`${await fb(funnelId)}/${funnelId}/steps/${stepId}?sentTo=${r.sent}&failed=${r.failed}#send`);
 }
 
 // --- меню (команди) ---

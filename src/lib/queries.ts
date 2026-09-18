@@ -89,7 +89,12 @@ export async function person(id: number) {
     const idn = await d.select().from(identities).where(eq(identities.personId, id));
     const ents = await d.select().from(schema.entitlements).where(eq(schema.entitlements.personId, id)).orderBy(desc(schema.entitlements.createdAt));
     const mem = await d.select().from(schema.memberships).where(eq(schema.memberships.personId, id));
-    return { p, subs, orders: ords, events: ev, identities: idn, entitlements: ents, memberships: mem };
+    // воронки й продукти людини: скільки кроків отримала з активних
+    const fun = (await d.execute(sql`select e.id, e.funnel_id, f.name, f.kind, e.status, e.next_at, e.started_at, e.finished_at, e.stop_reason,
+        (select count(*)::int from funnel_steps s where s.funnel_id = f.id and s.is_active) as total,
+        (select count(distinct step_id)::int from funnel_deliveries d where d.enrollment_id = e.id) as received
+      from funnel_enrollments e join funnels f on f.id = e.funnel_id where e.person_id = ${id} order by e.started_at desc`)).rows as { id: number; funnel_id: number; name: string; kind: string; status: string; next_at: string | null; started_at: string; finished_at: string | null; stop_reason: string | null; total: number; received: number }[];
+    return { p, subs, orders: ords, events: ev, identities: idn, entitlements: ents, memberships: mem, funnels: fun };
   }, null);
 }
 
@@ -160,7 +165,9 @@ export async function funnelDetail(id: number) {
     // продукт: оффери, які його містять, і всі оффери для вибору
     const offersWith = f.kind === "product" ? await d.select({ pl: plans, active: sql<number>`(select count(*)::int from subscriptions s where s.plan_id = plans.id and s.source = 'hub' and s.status in ('active','trialing','past_due'))`, payments: sql<number>`(select count(*)::int from payment_attempts a where a.plan_id = plans.id and a.status = 'approved' and a.kind in ('first','manual','renewal'))`, grants: sql<number>`(select count(*)::int from subscriptions s where s.plan_id = plans.id and s.source = 'hub' and s.kind = 'grant')`, revenue: sql<string>`(select coalesce(sum(amount),0) from payment_attempts a where a.plan_id = plans.id and a.status = 'approved' and a.kind in ('first','manual','renewal'))` }).from(plans).where(sql`${plans.products} @> to_jsonb(array[${id}::int])`).orderBy(plans.sortOrder, plans.id) : [];
     const allOffers = f.kind === "product" ? await d.select({ id: plans.id, name: plans.name, isActive: plans.isActive }).from(plans).orderBy(plans.sortOrder, plans.name) : [];
-    return { f, steps, modules, commands, stats, enr, waiting, summary: { started, active: by("active"), stopped: by("stopped"), finished: by("done") }, offersWith, allOffers };
+    const links = await d.select().from(schema.funnelLinks).where(eq(schema.funnelLinks.funnelId, id)).orderBy(asc(schema.funnelLinks.id));
+    const [direct] = await d.select({ c: sql<number>`count(*)::int` }).from(events).where(and(eq(events.type, "funnel.enrolled"), sql`(payload->>'funnelId')::int = ${id}`, sql`payload->>'linkId' is null`));
+    return { f, steps, modules, commands, stats, enr, waiting, summary: { started, active: by("active"), stopped: by("stopped"), finished: by("done") }, offersWith, allOffers, links, directJoins: direct?.c ?? 0 };
   }, null);
 }
 export async function stepDetail(funnelId: number, stepId: number) {
@@ -180,7 +187,11 @@ export async function stepDetail(funnelId: number, stepId: number) {
     // кнопка «оффер»: оффери Hub (персональне посилання на оплату) і оффери ZenEdu (статичне посилання)
     const hub = await d.select({ id: plans.id, name: plans.name, key: plans.key }).from(plans).where(eq(plans.isActive, true)).orderBy(plans.sortOrder, plans.name);
     const offerOptions = [...hub.map((o) => ({ id: -o.id, name: `Hub · ${o.name}`, url: `hub:${o.key}` })), ...offers.map((o) => ({ id: o.id, name: `ZenEdu · ${o.name}`, url: o.url }))];
-    return { f, step, steps, modules, media: med, allFunnels, offers: offerOptions };
+    // люди у воронці для «Надіслати цей крок людям»: чи отримували саме цей крок
+    const people = (await d.execute(sql`select e.id, e.person_id, e.status, p.first_name, p.last_name, p.username,
+        exists (select 1 from funnel_deliveries x where x.step_id = ${stepId} and x.person_id = e.person_id) as received, e.started_at
+      from funnel_enrollments e join persons p on p.id = e.person_id where e.funnel_id = ${funnelId} order by e.started_at desc limit 500`)).rows as { id: number; person_id: number; status: string; first_name: string | null; last_name: string | null; username: string | null; received: boolean; started_at: string }[];
+    return { f, step, steps, modules, media: med, allFunnels, offers: offerOptions, people };
   }, null);
 }
 export async function funnelPublic(id: number) {

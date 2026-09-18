@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { X, Plus, Send, KeyRound, MessageSquare, History, Gift, Tag } from "lucide-react";
+import { X, Plus, Send, KeyRound, MessageSquare, History, Gift, Tag, Package, GitBranch } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { PageHeader, Section, Field, FormRow, Row, Timeline, EmptyState, KV } from "@/components/ui/layout";
@@ -12,7 +12,7 @@ import { payLink } from "@/lib/payments";
 import { Alert } from "@/components/ui/layout";
 import { CreditCard, Pause, Play, XCircle, RefreshCw, Undo2 } from "lucide-react";
 import { date, dateTime, fullName, money } from "@/lib/format";
-import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson, enrollToFunnel, resendInvite } from "@/lib/actions";
+import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson, enrollToFunnel, resendInvite, stopFunnelEnrollment } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,7 @@ export default async function Person({ params, searchParams }: { params: Promise
   const { id } = await params; const sp = await searchParams;
   const [counts, d, res, fun, pay, prods] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels(), personPayments(Number(id)), productPicker()]);
   if (!d) notFound();
-  const { p, subs, orders, events, identities, entitlements, memberships } = d;
+  const { p, subs, orders, events, identities, entitlements, memberships, funnels: enrolls } = d;
   const hub = identities.find((i) => i.botKey === "hub");
   const initials = fullName(p).split(" ").map((x) => x[0]).join("").slice(0, 2);
   const period = (days: number) => days >= 360 ? "рік" : days >= 90 ? "3 міс" : days <= 14 ? "2 тижні" : "міс";
@@ -96,6 +96,10 @@ export default async function Person({ params, searchParams }: { params: Promise
         <Section title="Дії в Hub-боті">
           {hub && !hub.blockedAt ? <>
             <form action={replyToPerson}><input type="hidden" name="personId" value={p.id} /><Field label="Написати повідомлення"><textarea name="text" rows={3} placeholder="Повідомлення від імені клубу" required /></Field><div className="row-actions" style={{ marginTop: 10 }}><button className="btn pri" type="submit"><Send size={15} /> Надіслати</button><Link href={`/chats?p=${p.id}`} className="btn ghost"><MessageSquare size={15} /> Відкрити чат</Link></div></form>
+            {enrolls.length > 0 && <div style={{ marginTop: 12 }}>{enrolls.map((e) => <Row key={e.id} tone={e.status === "active" ? "on" : "off"} icon={e.kind === "product" ? <Package size={14} /> : <GitBranch size={14} />}
+              title={<Link href={`${e.kind === "product" ? "/products" : "/funnels"}/${e.funnel_id}`}>{e.name}</Link>}
+              sub={`${e.status === "active" ? "проходить" : e.status === "done" ? "завершила" : `зупинено${e.stop_reason ? " · " + e.stop_reason : ""}`} · отримала ${e.received} з ${e.total} кроків · з ${date(e.started_at)}${e.status === "active" && e.next_at ? ` · наступний крок ${dateTime(e.next_at)}` : ""}`}
+              right={e.status === "active" ? <form action={stopFunnelEnrollment}><input type="hidden" name="id" value={e.id} /><input type="hidden" name="funnelId" value={e.funnel_id} /><button className="btn sm ghost" type="submit">Зупинити</button></form> : undefined} />)}</div>}
             <div style={{ marginTop: 16 }}>{fun.length ? <form action={enrollToFunnel}><input type="hidden" name="personId" value={p.id} /><FormRow><Field label="Додати у воронку"><select name="funnelId">{fun.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field><div className="fld"><span className="fld-l">&nbsp;</span><button className="btn" type="submit"><Plus size={15} /> Додати</button></div></FormRow></form> : <p className="fld-h">Активних воронок Hub ще немає: <Link href="/funnels">створити</Link>.</p>}</div>
           </> : <EmptyState title="Людина ще не запускала Hub-бот" text="Писати їй і додавати у воронки можна буде після /start у боті. Поки що лише через ZenEdu." />}
         </Section>
