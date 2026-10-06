@@ -36,6 +36,10 @@ export default async function Settings({ searchParams }: { searchParams: Promise
     ["ADMIN_TELEGRAM_ID", Boolean(process.env.ADMIN_TELEGRAM_ID), "ваш telegram id для тестових розсилок"],
     ["ZENEDU_WEBHOOK_SECRET", Boolean(process.env.ZENEDU_WEBHOOK_SECRET), "довільний секрет для адреси вебхука ZenEdu"],
     ["CRON_SECRET", Boolean(process.env.CRON_SECRET), "захист щоденного cron; Vercel підставляє сам"],
+    ["SHCHYRO_API_URL", Boolean(process.env.SHCHYRO_API_URL), "адреса панелі «Щиро» разом із її префіксом, напр. https://panel…/panel-x7k2"],
+    ["SHCHYRO_API_SECRET", Boolean(process.env.SHCHYRO_API_SECRET), "спільний секрет API «Щиро» (HUB_API_SECRET у боті)"],
+    ["ONBOARDING_URL", Boolean(process.env.ONBOARDING_URL), "адреса платформи онбордингу для посилань у кабінет, напр. https://mariia-kravchuk.com.ua/app"],
+    ["ONBOARDING_TOKEN_SECRET", Boolean(process.env.ONBOARDING_TOKEN_SECRET), "секрет підпису токенів кабінету; якщо порожній, береться SESSION_SECRET"],
   ] as const;
   return (
     <Shell title="Налаштування" counts={counts}>

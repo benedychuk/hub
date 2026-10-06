@@ -522,3 +522,38 @@ export const accessLinks = pgTable("access_links", {
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex("access_links_token_uidx").on(t.token), index("access_links_plan_idx").on(t.planId)]);
+
+// Платформа онбордингу (кабінет кандидатки): акаунт живе в Hub, браузер лише кешує.
+// person_id порожній, поки людина не підтвердила вхід через Hub-бот (deep link ob_<link_code>) або не зайшла за magic link.
+export type OnboardingQuiz = { answers?: Record<string, unknown>; scores?: Record<string, number> };
+export type OnboardingDeepQuiz = { test1?: { category: number; score: number; answers?: Record<string, number> } | null; test2?: { category: number; score: number; answers?: Record<string, number>; hasCriticalRedFlag?: boolean } | null; completed?: boolean };
+export const onboardingAccounts = pgTable("onboarding_accounts", {
+  id: serial("id").primaryKey(),
+  personId: integer("person_id").references(() => persons.id, { onDelete: "set null" }),
+  name: text("name"),
+  contact: text("contact"),            // як ввела людина: @username, телефон або email
+  contactNorm: text("contact_norm"),   // нормалізований для пошуку й унікальності
+  passwordHash: text("password_hash"),
+  linkCode: text("link_code").notNull(), // код для deep link у Hub-бот: t.me/<bot>?start=ob_<code>
+  source: text("source").notNull().default("web"), // web | magic | bot | feedback
+  utm: jsonb("utm").$type<Record<string, string>>().default({}),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  registeredAt: timestamp("registered_at", { withTimezone: true }).notNull().defaultNow(),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),   // підтверджено через Telegram
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }).notNull(),
+  extensionCount: integer("extension_count").notNull().default(0),
+  quizResultId: integer("quiz_result_id"),
+  quizScenario: text("quiz_scenario"),
+  quiz: jsonb("quiz").$type<OnboardingQuiz>().default({}),
+  quizStartedAt: timestamp("quiz_started_at", { withTimezone: true }),
+  quizCompletedAt: timestamp("quiz_completed_at", { withTimezone: true }),
+  deepQuiz: jsonb("deep_quiz").$type<OnboardingDeepQuiz>().default({}),
+  deepQuizCompletedAt: timestamp("deep_quiz_completed_at", { withTimezone: true }),
+  diagnosticCompletedAt: timestamp("diagnostic_completed_at", { withTimezone: true }),
+  feedback: jsonb("feedback").$type<Record<string, unknown>>(),
+  feedbackAt: timestamp("feedback_at", { withTimezone: true }),
+  shchyroSyncedAt: timestamp("shchyro_synced_at", { withTimezone: true }), // коли контекст квізу записано в пам'ять «Щиро»
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("ob_person_uidx").on(t.personId), uniqueIndex("ob_link_uidx").on(t.linkCode), index("ob_contact_idx").on(t.contactNorm), index("ob_trial_idx").on(t.trialEndsAt)]);

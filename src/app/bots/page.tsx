@@ -8,10 +8,13 @@ import { navCounts, botList, resourceList } from "@/lib/queries";
 import { setupWebhook, createExternalBot, rotateBotKey, toggleBot } from "@/lib/actions";
 import { appUrl, webhookInfo } from "@/lib/bot";
 import { dateTime } from "@/lib/format";
+import Link from "next/link";
+import { shchyroConfigured, shchyroSettings } from "@/lib/shchyro";
+import { safe } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
-export default async function Bots({ searchParams }: { searchParams: Promise<{ newkey?: string; for?: string }> }) {
+export default async function Bots({ searchParams }: { searchParams: Promise<{ newkey?: string; for?: string; ok?: string; err?: string }> }) {
   const sp = await searchParams;
   const [counts, list, res] = await Promise.all([navCounts(), botList(), resourceList()]);
   const ext = list.filter((b) => b.mode === "external");
@@ -21,8 +24,11 @@ export default async function Bots({ searchParams }: { searchParams: Promise<{ n
   const hub = list.find((b) => b.key === "hub");
   const zen = list.filter((b) => b.role === "zenedu");
   const url = (info as { url?: string })?.url;
+  const shConf = shchyroConfigured(); const sh = await safe(() => shchyroSettings(), { enabled: false, resourceKey: "shchyro.access", pushedIds: [] as number[], lastSync: null, lastPush: null, lastCheck: null });
   return (
     <Shell title="Боти й меню" counts={counts}>
+      {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}
+      {sp.err && <Alert tone="bad">{sp.err}</Alert>}
       {sp.newkey && <Section title={`API-ключ для бота «${sp.for}»`} description="Показується один раз. Скопіюйте й передайте інженеру безпечним каналом." className="sec"><CopyBox text={sp.newkey} /></Section>}
       <div className="grid g21" style={{ marginTop: sp.newkey ? 16 : 0 }}>
         <div className="form">
@@ -39,6 +45,9 @@ export default async function Bots({ searchParams }: { searchParams: Promise<{ n
               <FormRow><Field label="Username бота"><input name="username" placeholder="ShchyroBot" /></Field><Field label="Яке право перевіряє"><select name="resourceKey">{res.filter((r) => r.kind === "bot_feature" || r.kind === "external_url").map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</select></Field></FormRow>
               <div className="row-actions" style={{ marginTop: 12 }}><button className="btn pri" type="submit"><KeyRound size={15} /> Створити і видати API-ключ</button><span className="fld-h">Адреса API: {base}/api/v1/access</span></div>
             </form>
+          </Section>
+          <Section title="Бот «Щиро»" description="Доступ до «Щиро» керується з Hub за підписками. Люди, доступ, аналітика й налаштування — на сторінці продукту.">
+            <Row tone={!shConf ? "off" : sh.enabled ? "on" : "warn"} title={<Link href="/shchyro">Бот «Щиро»</Link>} sub={!shConf ? "SHCHYRO_API_URL і SHCHYRO_API_SECRET не задані" : sh.enabled ? `автоматика увімкнена · відкрито в боті ${sh.pushedIds.length}` : "автоматика вимкнена: Hub лише спостерігає"} right={<Link href="/shchyro?tab=access" className="btn sm">Відкрити</Link>} />
           </Section>
         </div>
         <div className="form">

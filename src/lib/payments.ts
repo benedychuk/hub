@@ -7,6 +7,8 @@ import { creds, charge as wfpCharge, refund as wfpRefund, purchaseForm, verifyRe
 import { money } from "./format";
 import { adminTelegramId } from "./auth";
 import { periodDaysOf, accessEndFor, offerAvailability, syncProductAccess, expireOneTime } from "./offers";
+import { DEFAULT_GRACE_HOURS } from "./access-rule";
+import { onboardingConfigured, ensureAccountForPerson, magicLinkFor } from "./onboarding";
 
 const { persons, plans, subscriptions, orders, events, settings, paymentMethods, paymentAttempts, identities } = schema;
 export type Attempt = typeof paymentAttempts.$inferSelect;
@@ -16,9 +18,9 @@ const RETRY_DAYS = [1, 3, 5];
 
 // ---------- налаштування ----------
 export async function paymentSettings() {
-  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled", "payments.testers"]));
+  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled", "payments.testers", "access.graceHours"]));
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true, testers: (Array.isArray(m["payments.testers"]) ? m["payments.testers"] as number[] : []) };
+  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true, testers: (Array.isArray(m["payments.testers"]) ? m["payments.testers"] as number[] : []), graceHours: Number.isFinite(Number(m["access.graceHours"])) && m["access.graceHours"] != null ? Number(m["access.graceHours"]) : DEFAULT_GRACE_HOURS };
 }
 export async function setSetting(key: string, value: unknown) {
   await db().insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
@@ -146,6 +148,7 @@ async function onApproved(a: Attempt, r: WfpResponse, c: Creds) {
     await notify(a.personId, `Оплату отримано: ${money(a.amount, a.currency)}. Доступ до «${pl?.name ?? "клубу"}» ${end ? `діє до ${end.toLocaleDateString("uk-UA")}` : "безстроковий"}${pl?.accessMode === "none" && oneTime ? "" : `. ${what}`}`);
     const pp = pl?.settings?.postPurchaseText?.trim();
     if (pp) { try { await sendToPerson(a.personId, pp, { html: true }); } catch { /* бот не запущений */ } }
+    await sendCabinetAccess(a.personId); // доступ до особистого кабінету онбордингу разом з оплатою
   } else if (a.kind === "renewal") {
     if (hubSub) await extendAfterCharge(hubSub, a, pl?.name ?? "Підписка Hub", pm?.id ?? null);
   } else if (a.kind === "card" || a.kind === "migrate") {
@@ -179,6 +182,16 @@ async function recordOrder(a: Attempt, s: Sub, name: string, type: string) {
   return o;
 }
 async function notify(personId: number, text: string) { try { await sendToPerson(personId, text); } catch { /* бот не запущений */ } }
+/** Після оплати: кабінет платформи створюється для людини, у бот іде кнопка з одноразовим посиланням без пароля. */
+async function sendCabinetAccess(personId: number) {
+  if (!onboardingConfigured()) return;
+  try {
+    const [p] = await db().select().from(persons).where(eq(persons.id, personId)); if (!p) return;
+    await ensureAccountForPerson(p, "payment");
+    await sendToPerson(personId, "Вам відкрито особистий кабінет: тести, персональні матеріали й «Щиро». Доступ діє, поки активна підписка. Посилання одноразове, діє 48 годин; нове можна отримати командою /cabinet.", { buttons: [{ text: "Відкрити кабінет", url: magicLinkFor(personId) }] });
+    await db().insert(events).values({ personId, type: "onboarding.cabinet_link_sent", source: "hub", payload: { via: "payment" } });
+  } catch { /* бот не запущений або кабінет не налаштовано */ }
+}
 
 // ---------- автосписання ----------
 async function extendAfterCharge(s: Sub, a: Attempt, name: string, pmId: number | null) {
@@ -206,7 +219,8 @@ async function onRenewalFailed(a: Attempt, reason: string) {
     const next = chargeTime(addDays(now, RETRY_DAYS[retry - 1]));
     await d.update(subscriptions).set({ status: "past_due", retryCount: retry, nextRetryAt: next, updatedAt: now }).where(eq(subscriptions.id, s.id));
     await d.insert(events).values({ personId: s.personId, type: "payment.retry_scheduled", source: "hub", payload: { subscriptionId: s.id, retry, next, reason } });
-    await notify(s.personId, `Не вдалося списати оплату за підписку (${reason}). Спробуємо ще раз ${next.toLocaleDateString("uk-UA")}. Щоб не втратити доступ, перевірте баланс або оновіть картку: ${link}`);
+    const st = await paymentSettings();
+    await notify(s.personId, `Не вдалося списати оплату за підписку (${reason}). Спробуємо ще раз ${next.toLocaleDateString("uk-UA")}. Доступ до клубу, «Щиро» і кабінету закриється через ${st.graceHours} год після кінця оплаченого періоду, якщо оплата не пройде; після оплати все повернеться само. Перевірте баланс або оновіть картку: ${link}`);
   }
 }
 

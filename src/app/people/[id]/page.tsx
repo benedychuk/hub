@@ -13,11 +13,13 @@ import { payLink } from "@/lib/payments";
 import { Alert } from "@/components/ui/layout";
 import { CreditCard, Pause, Play, XCircle, RefreshCw, Undo2 } from "lucide-react";
 import { date, dateTime, fullName, money } from "@/lib/format";
+import ShchyroPerson from "@/components/shchyro-person";
+import OnboardingPerson from "@/components/onboarding-person";
 import { addTag, removeTag, saveNotes, grantEntitlement, revokeEntitlement, replyToPerson, enrollToFunnel, resendInvite, stopFunnelEnrollment } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function Person({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ ok?: string; err?: string }> }) {
+export default async function Person({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ ok?: string; err?: string; link?: string }> }) {
   const { id } = await params; const sp = await searchParams;
   const [counts, d, res, fun, pay, prods] = await Promise.all([navCounts(), person(Number(id)), resourceList(), hubFunnels(), personPayments(Number(id)), productPicker()]);
   if (!d) notFound();
@@ -77,6 +79,8 @@ export default async function Person({ params, searchParams }: { params: Promise
           {res.length ? (<form action={grantEntitlement} style={{ marginTop: 12 }}><input type="hidden" name="personId" value={p.id} />
             <FormRow cols={3}><Field label="Ресурс"><select name="resourceKey">{prods.length > 0 && <optgroup label="Цифрові продукти">{prods.map((x) => <option key={"p" + x.id} value={`product:${x.id}`}>{x.name}</option>)}</optgroup>}<optgroup label="Канали, групи, функції">{res.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</optgroup></select></Field><Field label="На скільки днів"><input name="days" type="number" defaultValue={30} /></Field><div className="fld"><span className="fld-l">&nbsp;</span><button className="btn" type="submit"><KeyRound size={15} /> Видати доступ</button></div></FormRow></form>) : <p className="fld-h">Ресурсів ще немає: <Link href="/resources">Канали і групи</Link> або <Link href="/products">Цифрові продукти</Link>.</p>}
         </Section>
+        <ShchyroPerson personId={p.id} telegramUserId={p.telegramUserId} />
+        <OnboardingPerson personId={p.id} link={sp.link} />
         <Section title="Канали і групи">
           {memberships.length ? memberships.map((m) => <Row key={m.id} tone={m.status === "joined" ? "on" : m.status === "invited" ? "warn" : "off"} title={res.find((r) => r.key === m.resourceKey)?.name ?? m.resourceKey}
             sub={`${m.status === "joined" ? `у каналі з ${date(m.joinedAt)}` : m.status === "invited" ? `посилання надіслано ${dateTime(m.invitedAt)}, діє до ${dateTime(m.inviteExpiresAt)}` : m.status === "kicked" ? `виключено ${date(m.kickedAt)}` : m.status === "left" ? `вийшла ${date(m.leftAt)}` : m.status}${m.note ? ` · ${m.note}` : ""}`}

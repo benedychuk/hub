@@ -24,6 +24,9 @@ export default async function PaymentsTab({ link }: { link?: string }) {
               <Field label="Запрошувати на переїзд за, днів" hint="до дати списання в ZenEdu"><input name="migrationDays" type="number" min={1} defaultValue={st.migrationDays} /></Field>
               <Field label="Перевірочна сума картки, грн" hint="списується й повертається"><input name="verifyAmount" type="number" min={1} defaultValue={st.verifyAmount} /></Field>
             </FormRow>
+            <FormRow cols={3} >
+              <Field label="Доступ після кінця періоду, годин" hint="Скільки годин після кінця оплаченого періоду людина ще має доступ до каналів, «Щиро» і кабінету, якщо підписку скасовано або списання не пройшло. Потім усе закривається; після оплати повертається само. Пауза закриває одразу."><input name="graceHours" type="number" min={0} max={720} defaultValue={st.graceHours} /></Field>
+            </FormRow>
             <div style={{ marginTop: 14 }}><Switch name="enabled" defaultChecked={st.enabled} label="Оплати увімкнено для учасниць" hint="поки вимкнено, кнопки оплати в боті бачите лише ви, а посилання працюють лише для вашого акаунта" /></div>
             <div><Switch name="migrationAuto" defaultChecked={st.migrationAuto} label="Автоматичні запрошення на переїзд" hint="поки вимкнено, Hub нікому з учасниць не пише сам; запросити окрему людину можна вручну на сторінці «Міграція»" /></div>
             <Field label="Тестувальники: Telegram ID через кому" hint="Бачать кнопки оплати й оффери в боті, поки оплати вимкнені для учасниць. Свій ID можна дізнатись у боті @userinfobot."><input name="testers" defaultValue={st.testers.join(", ")} placeholder="123456789, 987654321" /></Field>
@@ -50,7 +53,7 @@ export default async function PaymentsTab({ link }: { link?: string }) {
           <KV items={[{ k: "Service URL", v: `${appUrl()}/api/payments/wayforpay`, mono: true }, { k: "Return URL", v: `${appUrl()}/pay/done`, mono: true }]} />
         </Section>
         <Section title="Як працює списання">
-          <p className="fld-h" style={{ margin: 0 }}>Перший платіж на сторінці WayForPay зберігає токен картки. Далі Hub сам списує о 10:00 за Києвом у день закінчення періоду. Якщо не вдалось: повтори через 1, 3 і 5 днів із повідомленнями в боті, після третьої невдачі доступ закривається, людина може оновити картку за посиланням і повернутись.</p>
+          <p className="fld-h" style={{ margin: 0 }}>Перший платіж на сторінці WayForPay зберігає токен картки. Далі Hub сам списує о 10:00 за Києвом у день закінчення періоду. Якщо не вдалось: повтори через 1, 3 і 5 днів із повідомленнями в боті. Доступ до каналів, «Щиро» і кабінету закривається через вказану кількість годин після кінця оплаченого періоду; успішне списання або оновлення картки повертає його автоматично.</p>
         </Section>
       </div>
     </div>
