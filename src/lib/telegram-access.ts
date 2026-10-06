@@ -2,11 +2,12 @@ import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { InlineKeyboard } from "grammy";
 import { db, schema } from "@/db";
 import { getBot, BOT_KEY } from "./bot";
+import { accessGraceHours, accessEnd, subscriptionAllows } from "./access-rule";
 
 const { resources, entitlements, memberships, identities, persons, events, subscriptions, plans, settings } = schema;
 
 export type ChannelConfig = {
-  chatId?: string; joinMode?: "invite" | "request"; inviteTtlHours?: number; graceDays?: number;
+  chatId?: string; joinMode?: "invite" | "request"; inviteTtlHours?: number; graceDays?: number; // graceDays застаріле: діє спільний грейс у годинах з Налаштування → Оплати
   inviteText?: string; kickText?: string; remindDays?: number; note?: string;
   enforce?: boolean; // автоматика доступу: посилання тим, хто має право, і виключення тих, хто не має. Вимкнено = лише спостереження
 };
@@ -43,18 +44,18 @@ export async function syncEntitlementsFromSubscriptions() {
   const d = db();
   const rows = await d.select({ s: subscriptions, ents: plans.entitlements }).from(subscriptions).innerJoin(plans, eq(plans.id, subscriptions.planId))
     .where(eq(subscriptions.source, "hub"));
-  const res = await d.select().from(resources);
-  const grace = (key: string) => Number(((res.find((r) => r.key === key)?.config ?? {}) as ChannelConfig).graceDays ?? 0);
+  const grace = await accessGraceHours(); const now = new Date();
   let granted = 0, closed = 0;
   for (const { s, ents } of rows) {
-    const active = ["active", "trialing", "past_due"].includes(s.status);
+    // єдине правило: активна підписка або грейс після кінця періоду; пауза закриває одразу
+    const allowed = subscriptionAllows(s, grace, now);
+    const until = accessEnd(s, grace);
     for (const key of Object.keys(ents ?? {})) {
-      const until = s.currentPeriodEnd ? new Date(s.currentPeriodEnd.getTime() + grace(key) * 86400000) : null;
       const [ex] = await d.select().from(entitlements).where(and(eq(entitlements.personId, s.personId), eq(entitlements.resourceKey, key), eq(entitlements.subscriptionId, s.id), isNull(entitlements.revokedAt)));
-      if (active) {
+      if (allowed) {
         if (!ex) { await d.insert(entitlements).values({ personId: s.personId, resourceKey: key, subscriptionId: s.id, grantedBy: "subscription", quota: ents?.[key] || null, validUntil: until }); granted++; }
         else if ((ex.validUntil?.getTime() ?? 0) !== (until?.getTime() ?? 0)) await d.update(entitlements).set({ validUntil: until }).where(eq(entitlements.id, ex.id));
-      } else if (ex && ex.validUntil && ex.validUntil < new Date()) { await d.update(entitlements).set({ revokedAt: new Date() }).where(eq(entitlements.id, ex.id)); closed++; }
+      } else if (ex) { await d.update(entitlements).set({ revokedAt: now }).where(eq(entitlements.id, ex.id)); closed++; }
     }
   }
   return { granted, closed };

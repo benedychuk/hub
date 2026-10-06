@@ -15,7 +15,7 @@ const ICON: Record<string, React.ReactNode> = {
 };
 const GROUPS: Group[] = [
   { key: "home", label: "Дашборд", icon: "home", href: "/" },
-  { key: "products", label: "Продукти", icon: "box", items: [{ href: "/products", label: "Цифрові продукти", cnt: "products" }, { href: "/resources", label: "Канали і групи" }, { href: "/resources?tab=digital", label: "Функції бота й посилання" }] },
+  { key: "products", label: "Продукти", icon: "box", items: [{ href: "/products", label: "Цифрові продукти", cnt: "products" }, { href: "/resources", label: "Канали і групи" }, { href: "/resources?tab=digital", label: "Функції бота й посилання" }, { href: "/shchyro", label: "Бот «Щиро»" }, { href: "/onboarding", label: "Онбординг" }] },
   { key: "marketing", label: "Маркетинг", icon: "trend", items: [{ href: "/funnels", label: "Воронки", cnt: "funnels" }, { href: "/broadcasts", label: "Розсилки" }, { href: "/automations", label: "Автоматизації" }, { href: "/library", label: "Бібліотека" }] },
   { key: "sales", label: "Продажі", icon: "dollar", items: [{ href: "/payments", label: "Платежі" }, { href: "/offers", label: "Оффери" }, { href: "/subscriptions", label: "Підписки", cnt: "subs" }] },
   { key: "audience", label: "Аудиторія", icon: "user", items: [{ href: "/people", label: "Люди", cnt: "people" }, { href: "/chats", label: "Чати", cnt: "chats" }] },

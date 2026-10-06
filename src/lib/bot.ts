@@ -9,6 +9,7 @@ import { grantByLink, priceLabel, accessLabel } from "./offers";
 import { coverFile, escapeHtml } from "./funnels";
 import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
+import { linkAccountToPerson, magicLinkFor, onboardingConfigured, ensureAccountForPerson } from "./onboarding";
 
 const { persons, identities, subscriptions, plans, events, bots, media } = schema;
 
@@ -52,6 +53,12 @@ export function getBot() {
     const payload = ctx.match?.toString() || "";
     await db().insert(events).values({ personId, type: "bot.start", source: "hub", payload: { payload } });
     if (/^o_\d+$/.test(payload)) { await sendOfferMessage(ctx.chat.id, personId, Number(payload.slice(2))); return; } // оффер у боті: оформлення + кнопка оплати
+    if (payload.startsWith("ob_")) { // підтвердження кабінету онбордингу: акаунт платформи прив'язується до Telegram
+      const r = await linkAccountToPerson(payload.slice(3), personId);
+      const kb = onboardingConfigured() ? new InlineKeyboard().url("Відкрити кабінет", magicLinkFor(personId)) : undefined;
+      await ctx.reply(r.ok ? `Готово, ${ctx.from.first_name ?? ""}! Особистий кабінет підключено до Telegram: тепер він відкривається з будь-якого пристрою, а результати тестів зберігаються.` : r.error === "linked_to_other" ? "Цей кабінет уже підключено до іншого Telegram-акаунта. Напишіть у підтримку, і ми розберемось." : "Посилання для підтвердження застаріло. Відкрийте кабінет і натисніть «Підтвердити через Telegram» ще раз.", { reply_markup: kb, link_preview_options: { is_disabled: true } });
+      return;
+    }
     if (payload.startsWith("g_")) { // посилання доступу до оффера без оплати
       const r = await grantByLink(payload.slice(2), personId);
       await ctx.reply(r.ok ? `Доступ до «${r.plan.name}» відкрито${r.until ? ` до ${r.until.toLocaleDateString("uk-UA")}` : ""}. Матеріали з'являться в цьому боті за хвилину.` : r.reason);
@@ -66,6 +73,7 @@ export function getBot() {
     const sub = await db().select().from(subscriptions).where(eq(subscriptions.personId, personId)).orderBy(desc(subscriptions.updatedAt)).limit(1);
     const active = sub[0] && ["active", "trialing", "past_due"].includes(sub[0].status);
     const kb = new InlineKeyboard().text("Мої підписки", "subs").row().text("Тарифи", "plans");
+    if (onboardingConfigured()) kb.row().text("Особистий кабінет", "cabinet");
     await ctx.reply(
       `Привіт, ${ctx.from.first_name ?? ""}! Це бот клубу Марії Кравчук.\n\n` +
       (active ? `Ваша підписка ${STATUS_UA[sub[0].status]}${sub[0].currentPeriodEnd ? `, наступне списання ${sub[0].currentPeriodEnd.toLocaleDateString("uk-UA")}` : ""}.` : "Підписки поки немає. Подивіться тарифи нижче."),
@@ -125,6 +133,18 @@ export function getBot() {
     await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці WayForPay. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });
   };
   bot.command("plans", (ctx) => showPlans(ctx as unknown as Ctx));
+  /** Особистий кабінет онбордингу: одноразове посилання з автологіном (ТЗ, розділ 4.1). */
+  const showCabinet = async (ctx: Ctx) => {
+    if (!ctx.from || !ctx.chat) return;
+    const personId = await upsertFrom(ctx.from, ctx.chat.id);
+    if (!onboardingConfigured()) { await ctx.reply("Особистий кабінет ще не підключено."); return; }
+    const [p] = await db().select().from(persons).where(eq(persons.id, personId));
+    if (p) await ensureAccountForPerson(p, "bot");
+    await db().insert(events).values({ personId, type: "onboarding.cabinet_link_sent", source: "hub", payload: { via: "bot" } });
+    await ctx.reply("Ваш особистий кабінет: тести, персональні матеріали й «Щиро». Посилання одноразове, діє 48 годин і відкриває кабінет без пароля.", { reply_markup: new InlineKeyboard().url("Відкрити кабінет", magicLinkFor(personId)), link_preview_options: { is_disabled: true } });
+  };
+  bot.command("cabinet", (ctx) => showCabinet(ctx as unknown as Ctx));
+  bot.callbackQuery("cabinet", async (ctx) => { await ctx.answerCallbackQuery(); await showCabinet(ctx as unknown as Ctx); });
   bot.callbackQuery("plans", async (ctx) => { await ctx.answerCallbackQuery(); await showPlans(ctx as unknown as Ctx); });
 
   bot.callbackQuery(/^bc(p?):(\d+):(\d+)$/, async (ctx) => {
@@ -228,6 +248,7 @@ export async function installWebhook() {
     { command: "start", description: "Почати" },
     { command: "subscriptions", description: "Мої підписки" },
     { command: "plans", description: "Тарифи" },
+    { command: "cabinet", description: "Особистий кабінет" },
   ]);
   const me = await bot.api.getMe();
   await db().insert(bots).values({ key: BOT_KEY, name: me.first_name, username: me.username, role: "club", webhookSetAt: new Date() })

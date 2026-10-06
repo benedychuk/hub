@@ -408,3 +408,20 @@ ol.stepper a:hover { color: var(--ink); }
 .tl-body { font-size: 13.5px; min-width: 0; }
 .tl-grp { margin-left: 8px; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
 .chip button { background: none; border: 0; padding: 0 0 0 6px; cursor: pointer; color: inherit; display: inline-flex; vertical-align: middle; }
+
+/* Звіт аналітики «Щиро» (Markdown із моделі, екранований) */
+.report { font-size: 13.5px; line-height: 1.6; color: var(--ink); max-width: 860px; }
+.report h2, .report h3, .report h4 { font-family: var(--sans); font-weight: 600; margin: 22px 0 8px; letter-spacing: -.01em; }
+.report h2 { font-size: 17px; } .report h3 { font-size: 15px; } .report h4 { font-size: 13.5px; color: var(--ink-2); }
+.report p { margin: 0 0 10px; } .report ul, .report ol { margin: 0 0 10px; padding-left: 22px; } .report li { margin: 2px 0; }
+.report hr { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
+.report blockquote { margin: 0 0 10px; padding: 8px 12px; border-left: 3px solid var(--moon); background: var(--moon-soft); border-radius: 0 8px 8px 0; }
+.report code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+.report pre { background: var(--surface-2); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+.report table { border-collapse: collapse; margin: 6px 0 14px; font-size: 12.5px; } .report th, .report td { border-bottom: 1px solid var(--line); padding: 5px 10px; text-align: left; vertical-align: top; }
+.report th { font-family: var(--mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; } .report td.num { text-align: right; font-family: var(--mono); }
+/* Репліки діалогу «Щиро» в картці людини */
+.msgs { display: grid; gap: 8px; max-height: 360px; overflow: auto; padding-right: 4px; }
+.msg { padding: 8px 12px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word; max-width: 92%; }
+.msg.user { background: var(--moon-soft); justify-self: start; } .msg.assistant { background: var(--surface-2); justify-self: end; }
+.msg small { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-top: 4px; }

@@ -1,6 +1,7 @@
 import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { createHash, randomBytes } from "crypto";
 import { db, schema } from "@/db";
+import { accessGraceHours, accessEnd, subscriptionAllows } from "./access-rule";
 
 const { persons, subscriptions, entitlements, resources, plans, bots, events } = schema;
 
@@ -33,12 +34,14 @@ export async function checkAccess(telegramUserId: number, resourceKey: string): 
   let quotaPerDay: number | null = ent?.quota ? Number(String(ent.quota).replace(/\D/g, "")) || null : null;
 
   if (!source) {
+    const grace = await accessGraceHours();
     const subs = await d.select({ s: subscriptions, planKey: plans.key, ents: plans.entitlements }).from(subscriptions).leftJoin(plans, eq(plans.id, subscriptions.planId))
-      .where(and(eq(subscriptions.personId, p.id), sql`${subscriptions.status} in ('active','trialing','past_due')`));
+      .where(eq(subscriptions.personId, p.id));
     for (const row of subs) {
+      if (!subscriptionAllows(row.s, grace, now)) continue; // активна або в межах грейсу після кінця періоду
       const has = row.ents && Object.prototype.hasOwnProperty.call(row.ents, resourceKey);
-      if (has) { source = "plan"; validUntil = row.s.currentPeriodEnd; planKey = row.planKey; const q = row.ents?.[resourceKey]; quotaPerDay = q ? Number(String(q).replace(/\D/g, "")) || null : null; break; }
-      if (row.s.source === "zenedu" && cfg.zenedu_grants) { source = "zenedu"; validUntil = row.s.currentPeriodEnd; planKey = "zenedu"; }
+      if (has) { source = "plan"; validUntil = accessEnd(row.s, grace); planKey = row.planKey; const q = row.ents?.[resourceKey]; quotaPerDay = q ? Number(String(q).replace(/\D/g, "")) || null : null; break; }
+      if (row.s.source === "zenedu" && cfg.zenedu_grants) { source = "zenedu"; validUntil = accessEnd(row.s, grace); planKey = "zenedu"; }
     }
     if (!source) {
       const anyExpired = await d.select({ id: subscriptions.id }).from(subscriptions).where(eq(subscriptions.personId, p.id)).limit(1);

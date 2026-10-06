@@ -6,6 +6,8 @@ import { db, schema } from "@/db";
 import { myTelegramId } from "./auth";
 import { installWebhook, sendToPerson, getBot, botToken } from "./bot";
 import { grantOffer, newLinkToken } from "./offers";
+import { magicLinkFor, onboardingConfigured, ensureAccountForPerson, hubChatFor } from "./onboarding";
+import { saveShchyroSettings as persistShchyroSettings, shchyroPushChanges, shchyroFullSync, shchyroCheck as runShchyroCheck, shchyroImport as runShchyroImport, shchyroStartAnalytics as runShchyroAnalytics, shchyroNotify, shchyroSettings as readShchyroSettings, DEFAULT_RESOURCE } from "./shchyro";
 
 const { plans, persons, events, broadcasts, entitlements, resources, subscriptions, identities, accessLinks } = schema;
 
@@ -153,12 +155,14 @@ export async function grantEntitlement(fd: FormData) {
   const id = Number(fd.get("personId")); const key = str(fd, "resourceKey"); const days = Number(fd.get("days") || 30);
   await db().insert(entitlements).values({ personId: id, resourceKey: key, grantedBy: "manual", validUntil: new Date(Date.now() + days * 86400000) });
   await db().insert(events).values({ personId: id, type: "entitlement.granted", source: "hub", payload: { key, days, by: "manual" } });
+  await shchyroPushChanges().catch(() => null); // нове право одразу доїжджає до «Щиро», якщо автоматика увімкнена
   revalidatePath(`/people/${id}`);
 }
 export async function revokeEntitlement(fd: FormData) {
   const id = Number(fd.get("personId")); const eid = Number(fd.get("id"));
   await db().update(entitlements).set({ revokedAt: new Date() }).where(eq(entitlements.id, eid));
   await db().insert(events).values({ personId: id, type: "entitlement.revoked", source: "hub", payload: { id: eid } });
+  await shchyroPushChanges().catch(() => null);
   revalidatePath(`/people/${id}`);
 }
 export async function replyToPerson(fd: FormData) {
@@ -645,6 +649,89 @@ export async function rotateBotKey(fd: FormData) {
   await db().update(botsT).set({ apiKeyHash: hashKey(apiKey), apiKeyPrefix: apiKey.slice(0, 12) }).where(eq(botsT.key, key));
   revalidatePath("/bots"); redirect(`/bots?newkey=${encodeURIComponent(apiKey)}&for=${key}`);
 }
+// ---------- «Щиро»: керування доступом із Hub ----------
+/** Перемикач автоматики й ресурс, за яким Hub вирішує, кому відкривати бота. Вимкнено за замовчуванням. */
+export async function saveShchyroSettings(fd: FormData) {
+  const enabled = fd.get("enabled") === "on";
+  await persistShchyroSettings({ enabled, resourceKey: str(fd, "resourceKey") || DEFAULT_RESOURCE });
+  revalidatePath("/bots");
+  redirect("/shchyro?tab=access&ok=" + encodeURIComponent(enabled ? "Автоматика доступу «Щиро» увімкнена: Hub керує списком доступу бота." : "Автоматика доступу «Щиро» вимкнена: Hub нічого не змінює в боті."));
+}
+/** Звірка списків: preview лише показує різницю; reconcile застосовує (force знімає ліміт масових відключень). */
+export async function shchyroSyncNow(fd: FormData) {
+  const preview = str(fd, "mode") !== "reconcile";
+  const r = await shchyroFullSync({ preview, force: fd.get("force") === "on", by: "admin" });
+  revalidatePath("/shchyro");
+  if (!r.ok) redirect("/shchyro?tab=access&err=" + encodeURIComponent(`Звірка не пройшла: ${r.error}${r.limit ? ` (ліміт ${r.limit})` : ""}`));
+  redirect("/shchyro?tab=access&ok=" + encodeURIComponent(preview ? `Перевірено без змін: увімкнулось би ${r.activated}, вимкнулось би ${r.deactivated}, захищених ${r.protected_untouched}.` : `Звірку застосовано: увімкнено ${r.activated}, вимкнено ${r.deactivated}, захищених ${r.protected_untouched}.`));
+}
+export async function shchyroCheck() {
+  const r = await runShchyroCheck();
+  revalidatePath("/bots");
+  revalidatePath("/shchyro");
+  redirect(r.ok ? "/shchyro?tab=access&ok=" + encodeURIComponent(`Зв'язок зі «Щиро» є: активних ${r.active_count}, кеш бота ${r.cache_ttl_seconds} с.`) : "/shchyro?tab=access&err=" + encodeURIComponent(`«Щиро» не відповідає: ${r.error}`));
+}
+/** Етап 2 ТЗ: усі, хто має доступ у «Щиро» зараз, отримують у Hub перехідне право на N днів. */
+export async function shchyroImport(fd: FormData) {
+  const days = Math.max(1, Math.min(365, Number(fd.get("days") || 30)));
+  const r = await runShchyroImport(days, "admin");
+  revalidatePath("/bots"); revalidatePath("/people");
+  revalidatePath("/shchyro");
+  if (!r.ok) redirect("/shchyro?tab=access&err=" + encodeURIComponent(`Імпорт не вдався: ${r.error}`));
+  redirect("/shchyro?tab=access&ok=" + encodeURIComponent(`Імпортовано зі «Щиро»: отримано ${r.received}, видано перехідних прав ${r.granted}, уже мали право ${r.already}, нових людей ${r.createdPersons}.`));
+}
+
+/** Швидка видача права на «Щиро» з вкладки «Доступ»: за Telegram ID або @username. */
+export async function shchyroQuickGrant(fd: FormData) {
+  const who = str(fd, "who").replace(/^@/, ""); const days = Math.max(1, Math.min(3650, Number(fd.get("days") || 30)));
+  const st = await readShchyroSettings();
+  const tg = /^\d{5,12}$/.test(who) ? Number(who) : 0;
+  let [p] = tg ? await db().select({ id: persons.id, name: persons.firstName }).from(persons).where(eq(persons.telegramUserId, tg)) : await db().select({ id: persons.id, name: persons.firstName }).from(persons).where(sql`lower(${persons.username}) = ${who.toLowerCase()}`);
+  if (!p && tg) { [p] = await db().insert(persons).values({ telegramUserId: tg }).returning({ id: persons.id, name: persons.firstName }); }
+  if (!p) redirect("/shchyro?tab=access&err=" + encodeURIComponent(`Людину «${who}» не знайдено в Hub. Вкажіть числовий Telegram ID: картку буде створено.`));
+  await db().insert(entitlements).values({ personId: p.id, resourceKey: st.resourceKey, grantedBy: "manual", validUntil: new Date(Date.now() + days * 86400000) });
+  await db().insert(events).values({ personId: p.id, type: "entitlement.granted", source: "hub", payload: { key: st.resourceKey, days, by: "manual" } });
+  await shchyroPushChanges().catch(() => null);
+  revalidatePath("/shchyro"); revalidatePath(`/people/${p.id}`);
+  redirect("/shchyro?tab=access&ok=" + encodeURIComponent(`Право на «Щиро» видано${p.name ? ` для ${p.name}` : ""} на ${days} дн.${st.enabled ? " Бот відкриється протягом хвилини." : " Автоматика вимкнена: у бот воно потрапить після увімкнення."}`));
+}
+/** Запуск аналітичного звіту «Щиро» з Hub. */
+export async function shchyroStartAnalytics() {
+  const r = await runShchyroAnalytics();
+  revalidatePath("/shchyro");
+  redirect(r.ok ? "/shchyro?tab=analytics&ok=" + encodeURIComponent("Звіт формується: кілька хвилин. Оновіть сторінку, щоб побачити результат.") : "/shchyro?tab=analytics&err=" + encodeURIComponent(r.status === 409 ? "Звіт уже формується, зачекайте." : `Не вдалося запустити: ${r.error}`));
+}
+/** Повідомлення людині від імені бота «Щиро» з картки людини. */
+export async function shchyroNotifyPerson(fd: FormData) {
+  const id = Number(fd.get("personId")); const text = str(fd, "text").slice(0, 4096);
+  if (!text) redirect(`/people/${id}`);
+  const [p] = await db().select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, id));
+  if (!p) redirect("/people");
+  const r = await shchyroNotify({ user_id: p.tg, message: text });
+  const ok = r.ok && (r.data as { success?: boolean }).success !== false;
+  const err = r.ok ? String((r.data as { error?: string }).error ?? "") : r.error;
+  await db().insert(events).values({ personId: id, type: ok ? "shchyro.notified" : "shchyro.notify_failed", source: "hub", payload: ok ? { text } : { text, error: err } });
+  revalidatePath(`/people/${id}`);
+  redirect(`/people/${id}?${ok ? "ok" : "err"}=${encodeURIComponent(ok ? "Повідомлення надіслано через бота «Щиро»." : `Не доставлено через «Щиро»: ${err}`)}`);
+}
+
+/** Посилання в кабінет онбордингу з картки людини: показати або надіслати в Hub-бот. */
+export async function cabinetLink(fd: FormData) {
+  const id = Number(fd.get("personId")); const send = fd.get("send") === "1";
+  if (!onboardingConfigured()) redirect(`/people/${id}?err=` + encodeURIComponent("ONBOARDING_URL не задано: платформу онбордингу не підключено."));
+  const [p] = await db().select().from(persons).where(eq(persons.id, id)); if (!p) redirect("/people");
+  await ensureAccountForPerson(p, "admin");
+  const link = magicLinkFor(id);
+  await db().insert(events).values({ personId: id, type: "onboarding.cabinet_link_sent", source: "hub", payload: { via: send ? "bot" : "admin" } });
+  if (send) {
+    const ok = (await hubChatFor(id)) ? await sendToPerson(id, "Ваш особистий кабінет онбордингу: тести, матеріали й «Щиро». Посилання одноразове і діє 48 годин.", { buttons: [{ text: "Відкрити кабінет", url: link }] }).catch(() => false) : false;
+    revalidatePath(`/people/${id}`);
+    redirect(`/people/${id}?${ok ? "ok" : "err"}=` + encodeURIComponent(ok ? "Посилання в кабінет надіслано в Hub-бот." : "Людина не запускала Hub-бот: скопіюйте посилання й передайте іншим каналом."));
+  }
+  revalidatePath(`/people/${id}`);
+  redirect(`/people/${id}?link=${encodeURIComponent(link)}`);
+}
+
 export async function toggleBot(fd: FormData) {
   const key = str(fd, "key"); const on = fd.get("on") === "1";
   await db().update(botsT).set({ isActive: on }).where(eq(botsT.key, key));
@@ -658,7 +745,7 @@ import { accessTick, reconcile as reconcileChannels, inviteNow } from "./telegra
 export async function saveChannelResource(fd: FormData) {
   const key = str(fd, "key"); if (!key) return;
   const [cur] = await db().select().from(resources).where(eq(resources.key, key));
-  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), graceDays: Number(fd.get("graceDays") || 0), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined, enforce: fd.get("enforce") === "on" };
+  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined, enforce: fd.get("enforce") === "on" };
   await db().update(resources).set({ name: str(fd, "name") || cur?.name || key, config }).where(eq(resources.key, key));
   revalidatePath("/resources"); revalidatePath(`/resources/${key}`);
   redirect(`/resources/${key}?saved=1`);
@@ -690,7 +777,7 @@ export async function connectChat(fd: FormData) {
   let info: Awaited<ReturnType<typeof fetchChatInfo>>;
   try { info = await fetchChatInfo(chatId); } catch (e) { redirect(`/resources?err=${encodeURIComponent("Telegram не віддає чат " + chatId + ": " + String(e).slice(0, 120) + ". Додайте Hub-бот у чат адміністратором.")}`); }
   const key = `tg.${chatId.replace(/^-100|^-/, "")}`;
-  const config = { chatId, cover: info.cover, memberCount: info.memberCount, username: info.username, joinMode: "invite", inviteTtlHours: 24, graceDays: 0, syncedAt: new Date().toISOString() };
+  const config = { chatId, cover: info.cover, memberCount: info.memberCount, username: info.username, joinMode: "invite", inviteTtlHours: 24, syncedAt: new Date().toISOString() };
   await db().insert(resources).values({ key, name: str(fd, "name") || info.title, kind: info.kind, config }).onConflictDoUpdate({ target: resources.key, set: { name: str(fd, "name") || info.title, kind: info.kind, config } });
   revalidatePath("/resources"); redirect(`/resources/${key}?new=1`);
 }
@@ -735,6 +822,7 @@ export async function savePaymentSettings(fd: FormData) {
   await setPaySetting("payments.trialVerifyAmount", Math.max(1, Number(fd.get("verifyAmount") || 1)));
   await setPaySetting("payments.migrationAuto", fd.get("migrationAuto") === "on");
   await setPaySetting("payments.enabled", fd.get("enabled") === "on");
+  await setPaySetting("access.graceHours", Math.max(0, Math.min(720, Number(fd.get("graceHours") ?? 24)))); // грейс після кінця періоду для каналів, «Щиро» і кабінету
   await setPaySetting("payments.testers", str(fd, "testers").split(/[\s,;]+/).map(Number).filter((n) => n > 0)); // Telegram ID тестувальників: бачать оплату, поки вона вимкнена для учасниць
   revalidatePath("/settings"); redirect("/settings?tab=payments&ok=" + encodeURIComponent(`Збережено. Режим: ${mode === "live" ? "бойовий" : "тестовий"}.`));
 }
