@@ -10,4 +10,4 @@ Next.js 15 + Drizzle + Neon Postgres + grammY. Деплой на Vercel.
 - Бот «Щиро»: розділ Продукти → Бот «Щиро» (`/shchyro`): доступ за підписками, люди, аналітика; API `SHCHYRO_API_URL`, `SHCHYRO_API_SECRET`; автоматика вимкнена за замовчуванням; деталі в `docs/integrations/shchyro/README.md`
 
 Змінні оточення — у `.env.example`. Міграції застосовуються під час збірки, якщо задано `DATABASE_URL`.
-Документи з аналізом і баченням — у репозиторії mkravchuk.com, тека `docs/community-platform/`.
+Контекст, архітектура, рішення, план переїзду, журнал — у `docs/` (почати з `docs/CONTEXT.md`). Історичні аналізи ZenEdu — у репозиторії mkravchuk.com, тека `docs/community-platform/`.

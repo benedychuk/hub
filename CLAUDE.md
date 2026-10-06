@@ -1,5 +1,11 @@
 # Hub — інструкції для роботи з кодом
 
+## Спершу прочитай
+- `docs/CONTEXT.md` (що це і навіщо), `docs/GUARDRAILS.md` (що не чіпати), `docs/ROADMAP.md` (що зроблено, у роботі, далі). Перед зміною логіки доступу чи оплат — `docs/ARCHITECTURE.md` і `docs/DECISIONS.md`.
+- Перед великим блоком робіт запиши його в `docs/ROADMAP.md` → «У роботі» з іменем. Після пушу в main допиши рядок у `docs/LOG.md` і онови ROADMAP. Нове архітектурне рішення — запис у `docs/DECISIONS.md` з причиною.
+
+## Правила коду
+
 - Перед будь-якою зміною інтерфейсу прочитай `docs/DESIGN.md` і виконай його чекліст. Це обов’язково, не рекомендація.
 - Нові екрани будуються з компонентів `src/components/ui` (PageHeader, Stepper, Section, Field, FormRow, Checkbox, Switch, Segmented, RadioCards, Kebab, Modal, Stat, EmptyState, Alert, RichText). Не створюй локальних варіантів цих компонентів у сторінках.
 - Іконки лише з `lucide-react`. Емодзі в інтерфейсі не використовуються.
