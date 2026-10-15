@@ -95,6 +95,7 @@ export default async function Person({ params, searchParams }: { params: Promise
         </Section>
         <Section title="Нотатки">
           <form action={saveNotes}><input type="hidden" name="personId" value={p.id} /><Field label="Для команди"><textarea name="notes" rows={4} defaultValue={p.notes ?? ""} placeholder="Що важливо пам’ятати про цю людину" /></Field><div className="row-actions" style={{ marginTop: 10 }}><button className="btn" type="submit">Зберегти</button></div></form>
+          {p.zenNotes?.trim() ? <div style={{ marginTop: 14 }}><KV items={[{ k: "Нотатки з ZenEdu", v: <span className="pre-wrap">{p.zenNotes}</span> }]} /><p className="fld-h">Лише для читання: оновлюються під час синхронізації з ZenEdu і не змінюють нотатки команди.</p></div> : null}
           {Object.keys(p.customFields ?? {}).length ? <div style={{ marginTop: 14 }}><KV items={Object.entries(p.customFields ?? {}).map(([k, v]) => ({ k, v: String(v) }))} /></div> : null}
           {p.utm?.length ? <p className="fld-h" style={{ marginTop: 10 }}>UTM: {p.utm.map((u) => Object.entries(u).map(([k, v]) => `${k}=${v}`).join(" ")).join("; ")}</p> : null}
         </Section>

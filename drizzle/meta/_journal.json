@@ -99,6 +99,13 @@
       "when": 1791267979299,
       "tag": "0013_onboarding_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792073660494,
+      "tag": "0014_persons_zen_snapshot",
+      "breakpoints": true
     }
   ]
 }
