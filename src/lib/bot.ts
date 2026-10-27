@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard, webhookCallback } from "grammy";
+import { Bot, InlineKeyboard, Keyboard, webhookCallback } from "grammy";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { db, schema } from "@/db";
@@ -10,7 +10,11 @@ import { coverFile, escapeHtml } from "./funnels";
 import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 import { linkAccountToPerson, magicLinkFor, onboardingConfigured, ensureAccountForPerson } from "./onboarding";
-import { mediaOf, saveMedia, startRecording, recordMessage } from "./funnel-recorder";
+import { mediaOf, saveMedia, startRecording, recordMessage, REC_KEYS, type RecKeyboard } from "./funnel-recorder";
+
+/** Клавіатура під полем вводу під час запису кроків воронки. */
+const recMarkup = (k?: RecKeyboard) => k === "rec" ? new Keyboard().text(REC_KEYS.ready).row().text(REC_KEYS.undo).text(REC_KEYS.done).resized().persistent()
+  : k === "remove" ? { remove_keyboard: true as const } : undefined;
 
 const { persons, identities, subscriptions, plans, events, bots } = schema;
 
@@ -56,7 +60,8 @@ export function getBot() {
     if (/^o_\d+$/.test(payload)) { await sendOfferMessage(ctx.chat.id, personId, Number(payload.slice(2))); return; } // оффер у боті: оформлення + кнопка оплати
     if (/^rec_\d+$/.test(payload)) { // запис кроків воронки пересиланням повідомлень: лише для команди
       if (!(await teamTelegramIds()).has(ctx.from.id)) { await ctx.reply("Запис кроків доступний лише команді Hub. Вкажіть свій Telegram ID у профілі панелі."); return; }
-      await ctx.reply(await startRecording(ctx.from.id, Number(payload.slice(4)), ctx.message?.message_id ?? 0));
+      const r = await startRecording(ctx.from.id, Number(payload.slice(4)), ctx.message?.message_id ?? 0);
+      await ctx.reply(r.reply, { reply_markup: recMarkup(r.keyboard) });
       return;
     }
     if (payload.startsWith("ob_")) { // підтвердження кабінету онбордингу: акаунт платформи прив'язується до Telegram
@@ -185,7 +190,7 @@ export function getBot() {
       const rec = await recordMessage(ctx.from.id, personId, m, appUrl());
       if (rec) {
         if (rec.react) await ctx.react("✍").catch(() => null);
-        if (rec.reply) await ctx.reply(rec.reply, { link_preview_options: { is_disabled: true } }).catch(() => null);
+        if (rec.reply) await ctx.reply(rec.reply, { link_preview_options: { is_disabled: true }, reply_markup: recMarkup(rec.keyboard) }).catch(() => null);
         return;
       }
     }
