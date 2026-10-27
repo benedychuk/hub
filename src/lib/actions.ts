@@ -870,6 +870,7 @@ export async function savePaymentSettings(fd: FormData) {
   await setPaySetting("payments.trialVerifyAmount", Math.max(1, Number(fd.get("verifyAmount") || 1)));
   await setPaySetting("payments.migrationAuto", fd.get("migrationAuto") === "on");
   await setPaySetting("payments.enabled", fd.get("enabled") === "on");
+  await setPaySetting("payments.newPeople", fd.get("newPeople") === "on"); // нові люди без чинної підписки в ZenEdu бачать оплату в боті
   await setPaySetting("access.graceHours", Math.max(0, Math.min(720, Number(fd.get("graceHours") ?? 24)))); // грейс після кінця періоду для каналів, «Щиро» і кабінету
   await setPaySetting("payments.testers", str(fd, "testers").split(/[\s,;]+/).map(Number).filter((n) => n > 0)); // Telegram ID тестувальників: бачать оплату, поки вона вимкнена для учасниць
   revalidatePath("/settings"); redirect("/settings?tab=payments&ok=" + encodeURIComponent(`Збережено. Режим: ${mode === "live" ? "бойовий" : "тестовий"}.`));

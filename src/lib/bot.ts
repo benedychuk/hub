@@ -4,7 +4,7 @@ import { createHash } from "crypto";
 import { db, schema } from "@/db";
 import { teamTelegramIds } from "./auth";
 import { onBroadcastButton } from "./broadcasts";
-import { payLink, cancelAtEnd, resumeSub, paymentsAllowedFor } from "./payments";
+import { payLink, cancelAtEnd, resumeSub, paymentsAllowedFor, paymentBlockedText } from "./payments";
 import { grantByLink, priceLabel, accessLabel } from "./offers";
 import { coverFile, escapeHtml } from "./funnels";
 import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
@@ -138,7 +138,7 @@ export function getBot() {
     if (!list.length) { await ctx.reply("Тарифи ще не налаштовані."); return; }
     const text = list.map((p) => `${p.isFeatured ? "⭐ " : ""}${p.name} — ${priceLabel(p)}${p.paymentType === "one_time" ? ` разово · доступ ${accessLabel(p)}` : ""}` + (p.paymentType !== "one_time" && p.trialDays ? `\n  пробний: ${p.trialDays} дн${p.trialPrice ? ` за ${money(p.trialPrice, p.currency)}` : ""}` : "")).join("\n\n");
     const allowed = await paymentsAllowedFor(personId);
-    if (!allowed) { await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата в цьому боті з'явиться після переїзду з ZenEdu."); return; }
+    if (!allowed) { await ctx.reply("Тарифи клубу:\n\n" + text + "\n\n" + await paymentBlockedText(personId)); return; }
     const kb = new InlineKeyboard();
     for (const p of list) kb.url(`${p.design?.buttonText || "Оплатити"}: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
     await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці WayForPay. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });
@@ -239,7 +239,7 @@ export async function sendOfferMessage(chatId: number, personId: number, planId:
   const d = pl.design ?? {};
   const title = d.titleMode === "custom" && d.title ? d.title : pl.name;
   const allowed = await paymentsAllowedFor(personId);
-  const text = `<b>${escapeHtml(title)}</b>` + (d.description ? "\n\n" + d.description : "") + `\n\n${escapeHtml(priceLabel(pl))}${pl.paymentType === "one_time" ? ` · доступ ${escapeHtml(accessLabel(pl))}` : ""}` + (allowed ? "" : "\n\nОплата в цьому боті з'явиться після переїзду з ZenEdu.");
+  const text = `<b>${escapeHtml(title)}</b>` + (d.description ? "\n\n" + d.description : "") + `\n\n${escapeHtml(priceLabel(pl))}${pl.paymentType === "one_time" ? ` · доступ ${escapeHtml(accessLabel(pl))}` : ""}` + (allowed ? "" : "\n\n" + escapeHtml(await paymentBlockedText(personId)));
   const kb = allowed ? new InlineKeyboard().url(d.buttonText || "Оплатити", payLink(personId, pl.key, "first")) : undefined;
   const photo = coverFile(d.image);
   if (photo && text.length <= 1024) await api.sendPhoto(chatId, photo, { caption: text, parse_mode: "HTML", reply_markup: kb });

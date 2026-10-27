@@ -1,8 +1,9 @@
 import { CreditCard, Link2 } from "lucide-react";
 import { Pill } from "@/components/ui";
-import { Section, Field, FormRow, KV, Alert, Row } from "@/components/ui/layout";
+import { Section, Field, FormRow, Alert, Row } from "@/components/ui/layout";
 import { RadioCards, Switch } from "@/components/ui/controls";
 import { CopyBox } from "./copy-box";
+import { CopyField } from "@/components/ui/copy-field";
 import { paymentSettings } from "@/lib/payments";
 import { liveConfigured, TEST_MERCHANT } from "@/lib/wayforpay";
 import { savePaymentSettings, makeTestPayLink, planKeys } from "@/lib/actions";
@@ -27,10 +28,12 @@ export default async function PaymentsTab({ link }: { link?: string }) {
             <FormRow cols={3} >
               <Field label="Доступ після кінця періоду, годин" hint="Скільки годин після кінця оплаченого періоду людина ще має доступ до каналів, «Щиро» і кабінету, якщо підписку скасовано або списання не пройшло. Потім усе закривається; після оплати повертається само. Пауза закриває одразу."><input name="graceHours" type="number" min={0} max={720} defaultValue={st.graceHours} /></Field>
             </FormRow>
-            <div style={{ marginTop: 14 }}><Switch name="enabled" defaultChecked={st.enabled} label="Оплати увімкнено для учасниць" hint="поки вимкнено, кнопки оплати в боті бачите лише ви, а посилання працюють лише для вашого акаунта" /></div>
+            <div style={{ marginTop: 14 }}><Switch name="newPeople" defaultChecked={st.newPeople} label="Оплати для нових людей" hint="оплату в боті бачать ті, у кого немає чинної підписки в ZenEdu; нинішні учасниці ZenEdu продовжують платити там і другої підписки не отримають" /></div>
+            <div><Switch name="enabled" defaultChecked={st.enabled} label="Оплати увімкнено для учасниць" hint="оплату бачать усі, зокрема учасниці з підпискою в ZenEdu: вмикайте, лише якщо вони переходять у Hub, інакше гроші спишуться двічі" /></div>
             <div><Switch name="migrationAuto" defaultChecked={st.migrationAuto} label="Автоматичні запрошення на переїзд" hint="поки вимкнено, Hub нікому з учасниць не пише сам; запросити окрему людину можна вручну на сторінці «Міграція»" /></div>
             <Field label="Тестувальники: Telegram ID через кому" hint="Бачать кнопки оплати й оффери в боті, поки оплати вимкнені для учасниць. Свій ID можна дізнатись у боті @userinfobot."><input name="testers" defaultValue={st.testers.join(", ")} placeholder="123456789, 987654321" /></Field>
-            {!st.enabled && <Alert tone="info">Режим тестування: жодна учасниця клубу не побачить оплату і не отримає повідомлень про підписку, поки ви не увімкнете «Оплати увімкнено для учасниць».</Alert>}
+            {!st.enabled && !st.newPeople && <Alert tone="info">Режим тестування: оплату в боті бачите лише ви й тестувальники. Щоб нові люди могли оплачувати через Hub, увімкніть «Оплати для нових людей».</Alert>}
+            {!st.enabled && st.newPeople && <Alert tone="ok">Нові люди оплачують через Hub. Учасниці з чинною підпискою в ZenEdu оплату в боті не бачать і далі платять у ZenEdu.</Alert>}
             {st.migrationAuto && <Alert tone="warn">Увімкнено: щодня Hub пише активним у ZenEdu, які запустили Hub-бот і в яких списання за {st.migrationDays} дн.</Alert>}
             <div className="row-actions" style={{ marginTop: 14 }}><button className="btn pri" type="submit">Зберегти</button></div>
           </Section>
@@ -50,7 +53,8 @@ export default async function PaymentsTab({ link }: { link?: string }) {
           <Row title="Зараз активний" sub={st.mode === "live" ? "бойовий мерчант" : "тестовий мерчант"} right={<Pill tone={st.mode === "live" ? "good" : "moon"}>{st.mode}</Pill>} />
         </Section>
         <Section title="Адреси для WayForPay" description="Hub передає їх у кожному запиті, у кабінеті нічого вказувати не треба.">
-          <KV items={[{ k: "Service URL", v: `${appUrl()}/api/payments/wayforpay`, mono: true }, { k: "Return URL", v: `${appUrl()}/pay/done`, mono: true }]} />
+          <Field label="Service URL"><CopyField value={`${appUrl()}/api/payments/wayforpay`} compact ariaLabel="Service URL" /></Field>
+          <Field label="Return URL"><CopyField value={`${appUrl()}/pay/done`} compact ariaLabel="Return URL" /></Field>
         </Section>
         <Section title="Як працює списання">
           <p className="fld-h" style={{ margin: 0 }}>Перший платіж на сторінці WayForPay зберігає токен картки. Далі Hub сам списує о 10:00 за Києвом у день закінчення періоду. Якщо не вдалось: повтори через 1, 3 і 5 днів із повідомленнями в боті. Доступ до каналів, «Щиро» і кабінету закривається через вказану кількість годин після кінця оплаченого періоду; успішне списання або оновлення картки повертає його автоматично.</p>
