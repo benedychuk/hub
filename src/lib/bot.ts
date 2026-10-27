@@ -10,8 +10,9 @@ import { coverFile, escapeHtml } from "./funnels";
 import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 import { linkAccountToPerson, magicLinkFor, onboardingConfigured, ensureAccountForPerson } from "./onboarding";
+import { mediaOf, saveMedia, startRecording, recordMessage } from "./funnel-recorder";
 
-const { persons, identities, subscriptions, plans, events, bots, media } = schema;
+const { persons, identities, subscriptions, plans, events, bots } = schema;
 
 export const BOT_KEY = "hub";
 
@@ -53,6 +54,11 @@ export function getBot() {
     const payload = ctx.match?.toString() || "";
     await db().insert(events).values({ personId, type: "bot.start", source: "hub", payload: { payload } });
     if (/^o_\d+$/.test(payload)) { await sendOfferMessage(ctx.chat.id, personId, Number(payload.slice(2))); return; } // оффер у боті: оформлення + кнопка оплати
+    if (/^rec_\d+$/.test(payload)) { // запис кроків воронки пересиланням повідомлень: лише для команди
+      if (!(await teamTelegramIds()).has(ctx.from.id)) { await ctx.reply("Запис кроків доступний лише команді Hub. Вкажіть свій Telegram ID у профілі панелі."); return; }
+      await ctx.reply(await startRecording(ctx.from.id, Number(payload.slice(4)), ctx.message?.message_id ?? 0));
+      return;
+    }
     if (payload.startsWith("ob_")) { // підтвердження кабінету онбордингу: акаунт платформи прив'язується до Telegram
       const r = await linkAccountToPerson(payload.slice(3), personId);
       const kb = onboardingConfigured() ? new InlineKeyboard().url("Відкрити кабінет", magicLinkFor(personId)) : undefined;
@@ -174,17 +180,18 @@ export function getBot() {
     const m = ctx.message;
     // Медіа від команди (власник і користувачі Hub із вказаним Telegram ID) потрапляє в бібліотеку для кроків воронок і розсилок.
     const team = await teamTelegramIds();
-    const med = m.video_note ? { kind: "video_note", f: m.video_note, w: m.video_note.length, h: m.video_note.length, d: m.video_note.duration }
-      : m.photo ? { kind: "photo", f: m.photo[m.photo.length - 1], w: m.photo[m.photo.length - 1].width, h: m.photo[m.photo.length - 1].height }
-      : m.video ? { kind: "video", f: m.video, w: m.video.width, h: m.video.height, d: m.video.duration, mime: m.video.mime_type }
-      : m.animation ? { kind: "animation", f: m.animation, w: m.animation.width, h: m.animation.height, d: m.animation.duration }
-      : m.voice ? { kind: "voice", f: m.voice, d: m.voice.duration } : m.audio ? { kind: "audio", f: m.audio, d: m.audio.duration, mime: m.audio.mime_type }
-      : m.document ? { kind: "document", f: m.document, mime: m.document.mime_type } : m.sticker ? { kind: "sticker", f: m.sticker } : null;
+    const med = mediaOf(m);
+    if (team.has(ctx.from.id)) { // запис кроків воронки: повідомлення команди стають кроками, звичайна обробка не потрібна
+      const rec = await recordMessage(ctx.from.id, personId, m, appUrl());
+      if (rec) {
+        if (rec.react) await ctx.react("✍").catch(() => null);
+        if (rec.reply) await ctx.reply(rec.reply, { link_preview_options: { is_disabled: true } }).catch(() => null);
+        return;
+      }
+    }
     await db().insert(events).values({ personId, type: "bot.message", source: "hub", payload: { text: m.text ?? m.caption ?? null, message_id: m.message_id, media: med ? { kind: med.kind, file_id: med.f.file_id } : null } });
     if (med && team.has(ctx.from.id)) {
-      const f = med.f as { file_id: string; file_unique_id: string; file_size?: number; file_name?: string };
-      const [row] = await db().insert(media).values({ kind: med.kind, fileId: f.file_id, fileUniqueId: f.file_unique_id, title: f.file_name ?? null, caption: m.caption ?? null, width: med.w ?? null, height: med.h ?? null, duration: med.d ?? null, fileSize: f.file_size ?? null, mimeType: med.mime ?? null, fromPersonId: personId })
-        .onConflictDoUpdate({ target: media.fileUniqueId, set: { fileId: f.file_id, caption: m.caption ?? null } }).returning({ id: media.id });
+      const row = { id: await saveMedia(med, m.caption ?? null, personId) };
       const label: Record<string, string> = { video_note: "кружечок", photo: "фото", video: "відео", animation: "GIF", voice: "голосове", audio: "аудіо", document: "файл", sticker: "стікер" };
       await ctx.reply(`Збережено в бібліотеку медіа: ${label[med.kind] ?? med.kind} #${row.id}${med.w ? ` · ${med.w}×${med.h}` : ""}${med.d ? ` · ${med.d} с` : ""}. Його можна вставити в крок воронки або розсилку.`);
       return;
