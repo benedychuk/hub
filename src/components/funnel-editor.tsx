@@ -11,6 +11,7 @@ import { StepIcon } from "@/components/step-icon";
 import { navCounts, funnelDetail, botList } from "@/lib/queries";
 import { saveFunnelSettings, deleteFunnel, setFunnelStatus, addStep, deleteStep, moveStep, toggleStep, duplicateStep, testFunnelOnMe, stopFunnelEnrollment, runTickNow, addModule, renameModule, deleteModule, moveModule, saveCommand, deleteCommand, createOfferForProduct, addProductToOffer, removeProductFromOffer, createFunnelLink, deleteFunnelLink } from "@/lib/actions";
 import { Modal } from "@/components/modal";
+import { CopyField } from "@/components/ui/copy-field";
 import { priceLabel, accessLabel } from "@/lib/offers";
 import { money } from "@/lib/format";
 import { dateTime, fullName } from "@/lib/format";
@@ -120,8 +121,8 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
         <div className="form">
           <Section title="Посилання на воронку" description="Одна воронка, багато джерел. Кожне іменоване посилання ставить людині свій тег і рахує переходи, тож не треба дублювати воронку під кожен ресурс." className="tbl">
             <table><thead><tr><th>Назва</th><th>Посилання</th><th>Тег</th><th className="num">Переходів</th><th></th></tr></thead><tbody>
-              <tr><td>Основне</td><td className="mono" style={{ userSelect: "all" }}>https://t.me/{botUser ?? "hub-бот"}?start=f_{f.id}</td><td className="muted">без тега</td><td className="num">{directJoins}</td><td></td></tr>
-              {links.map((l) => <tr key={l.id}><td>{l.name}</td><td className="mono" style={{ userSelect: "all" }}>https://t.me/{botUser ?? "hub-бот"}?start=f_{f.id}_{l.slug}</td><td>{l.tag ? <span className="tag">{l.tag}</span> : <span className="muted">без тега</span>}</td><td className="num">{l.joins}</td>
+              <tr><td>Основне</td><td style={{ minWidth: 320 }}>{botUser ? <CopyField value={`https://t.me/${botUser}?start=f_${f.id}`} compact ariaLabel="Основне посилання на воронку" /> : <span className="fld-h">підключіть Hub-бот</span>}</td><td className="muted">без тега</td><td className="num">{directJoins}</td><td></td></tr>
+              {links.map((l) => <tr key={l.id}><td>{l.name}</td><td style={{ minWidth: 320 }}>{botUser ? <CopyField value={`https://t.me/${botUser}?start=f_${f.id}_${l.slug}`} compact ariaLabel={`Посилання «${l.name}»`} /> : <span className="fld-h">підключіть Hub-бот</span>}</td><td>{l.tag ? <span className="tag">{l.tag}</span> : <span className="muted">без тега</span>}</td><td className="num">{l.joins}</td>
                 <td><Kebab><MenuSep /><MenuAction action={deleteFunnelLink} fields={{ id: l.id, funnelId: f.id }} icon={<Trash2 />} danger confirm={`Видалити посилання «${l.name}»? Теги в людей залишаться.`}>Видалити</MenuAction></Kebab></td></tr>)}
             </tbody></table>
             <p className="fld-h" style={{ marginTop: 10 }}>Переходи рахуються за новими входами у воронку. Хто прийшов за яким посиланням, видно за тегом у картці людини та у фільтрах розсилок.</p>

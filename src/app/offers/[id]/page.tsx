@@ -8,6 +8,7 @@ import { Kebab, MenuAction, MenuLink, MenuSep, Switch, Checkbox, AutoSubmitToggl
 import { Modal } from "@/components/modal";
 import { CoverInput, StepText } from "@/components/funnel-ui";
 import { OfferPaymentFields } from "@/components/offer-ui";
+import { CopyField } from "@/components/ui/copy-field";
 import { navCounts, offerDetail, productPicker, resourceList, botList, offerList } from "@/lib/queries";
 import { saveOffer, setOfferStatus, duplicateOffer, deleteOffer, createAccessLink, toggleAccessLink, deleteAccessLink } from "@/lib/actions";
 import { priceLabel, accessLabel, intervalLabel } from "@/lib/offers";
@@ -107,7 +108,7 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
           </Section>
         </div>
         <div className="form aside-sticky">
-          <Section title="Перегляд"><Row icon={<Eye size={14} />} title={<a href={`/pay/${encodeURIComponent(pl.key)}?preview=1`} target="_blank" rel="noreferrer" className="lnk">Сторінка оплати</a>} sub="відкриється в новій вкладці без оплати" /><Row icon={<Bot size={14} />} title="Повідомлення в боті" sub={botUser ? `t.me/${botUser}?start=o_${pl.id}` : "спершу підключіть Hub-бот"} /></Section>
+          <Section title="Перегляд"><Row icon={<Eye size={14} />} title={<a href={`/pay/${encodeURIComponent(pl.key)}?preview=1`} target="_blank" rel="noreferrer" className="lnk">Сторінка оплати</a>} sub="відкриється в новій вкладці без оплати" /><Row icon={<Bot size={14} />} title="Повідомлення в боті" sub={botUser ? "посилання нижче відкриває оффер у Hub-боті" : "спершу підключіть Hub-бот"} />{botUser && <CopyField value={`https://t.me/${botUser}?start=o_${pl.id}`} open compact ariaLabel="Посилання на оффер у боті" />}</Section>
           <Section><div className="form"><button className="btn pri" type="submit">Зберегти</button></div></Section>
         </div>
       </form>}
@@ -141,13 +142,16 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
 
       {tab === "links" && pl && <div className="grid g21">
         <div className="form">
-          <Section title="Оплата" description="Посилання на оплату персональне: бот підставляє його для кожної людини, тому в розсилках і кроках воронок обирайте оффер у кнопці «Оплата», а не вставляйте адресу.">
-            <KV items={[
-              { k: "Оффер у боті", v: botUser ? <span style={{ userSelect: "all" }}>https://t.me/{botUser}?start=o_{pl.id}</span> : "підключіть Hub-бот", mono: true },
-              { k: "Сторінка оплати", v: <span className="mono">{appUrl()}/pay/{pl.key}?u=…</span> },
-              { k: "Перевірити на собі", v: <Link href="/settings?tab=payments" className="lnk">Налаштування → Оплати → Перевірити оплату</Link> },
-            ]} />
-            {!pl.showInBot && <p className="fld-h" style={{ marginTop: 8 }}>Оффер не показується за /plans: люди побачать його лише за цим посиланням або кнопками.</p>}
+          <Section title="Посилання на оффер" description="Ділитися потрібно цими посиланнями. Сторінка оплати для кожної людини персональна: бот сам підставляє її в кнопку «Оплатити», тому вручну її не копіюють.">
+            <Field label="У Telegram-бот" hint="Рекомендовано: людина відкриває бот і бачить опис оффера з кнопкою оплати. Підходить для сторіз, розсилок, сайту.">
+              {botUser ? <CopyField value={`https://t.me/${botUser}?start=o_${pl.id}`} open ariaLabel="Посилання на оффер у боті" /> : <p className="fld-h">Спершу підключіть Hub-бот: Система → Боти й меню.</p>}
+            </Field>
+            <Field label="Вебсторінка оффера" hint="Для сайту чи Instagram, де краще звичайна адреса: сторінка показує опис і ціну, кнопка веде в бот до оплати.">
+              <CopyField value={`${appUrl()}/pay/${encodeURIComponent(pl.key)}`} open ariaLabel="Вебсторінка оффера" />
+            </Field>
+            {!pl.isActive && <Alert tone="warn">Оффер зупинено: за посиланнями його не можна купити, бот відповість, що оффер недоступний.</Alert>}
+            {!pl.showInBot && <p className="fld-h" style={{ margin: 0 }}>Оффер не показується за /plans: люди побачать його лише за цими посиланнями або кнопками.</p>}
+            <p className="fld-h" style={{ margin: 0 }}>Перевірити оплату на собі: <Link href="/settings?tab=payments" className="lnk">Налаштування → Оплати → Перевірити оплату</Link>.</p>
           </Section>
           <Section title="Посилання доступу без оплати" description="Людина переходить за посиланням у бот і одразу отримує все, що дає оффер, за його правилами тривалості. Можна обмежити кількість людей і строк." className="tbl"
             actions={<Modal title="Нове посилання доступу" width={460} trigger={<button type="button" className="btn pri"><Plus size={15} /> Посилання</button>}>
@@ -159,7 +163,7 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
               </form></Modal>}>
             <table><thead><tr><th>Посилання</th><th className="num">Перейшли</th><th>Діє до</th><th>Статус</th><th></th></tr></thead><tbody>
               {d!.links.map((l) => <tr key={l.id}>
-                <td><div>{l.name || "Без назви"}{l.markAsPayment && <Pill tone="moon">як оплата</Pill>}</div><div className="fld-h mono" style={{ userSelect: "all" }}>{botUser ? `https://t.me/${botUser}?start=g_${l.token}` : `?start=g_${l.token}`}</div></td>
+                <td style={{ minWidth: 320 }}><div className="row-actions" style={{ marginBottom: 6 }}>{l.name || "Без назви"}{l.markAsPayment && <Pill tone="moon">як оплата</Pill>}</div>{botUser ? <CopyField value={`https://t.me/${botUser}?start=g_${l.token}`} compact ariaLabel={`Посилання доступу ${l.name ?? ""}`} /> : <span className="fld-h">підключіть Hub-бот</span>}</td>
                 <td className="num">{l.usedCount}{l.maxUses ? ` / ${l.maxUses}` : ""}</td>
                 <td>{l.expiresAt ? date(l.expiresAt) : "безстроково"}</td>
                 <td><form action={toggleAccessLink}><input type="hidden" name="id" value={l.id} /><input type="hidden" name="planId" value={pl.id} /><AutoSubmitToggleClient checked={l.isActive} label={l.isActive ? "Активне" : "Вимкнене"} /></form></td>
