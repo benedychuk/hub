@@ -648,3 +648,19 @@ td.num { white-space: nowrap; }
 .auto-n { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--orange-soft); color: var(--orange-ink); font-weight: 600; font-size: 13px; margin-top: 26px; }
 .auto-body { display: grid; gap: 12px; min-width: 0; }
 .auto-act > .btn { margin-top: 28px; }
+
+/* поле з посиланням або кодом і копіюванням */
+.copyfield { position: relative; display: flex; align-items: center; gap: 4px; height: 40px; padding: 0 4px 0 0; background: var(--canvas); border: 1px solid var(--line-2); border-radius: 10px; transition: border-color .15s, box-shadow .15s, background .15s; min-width: 0; }
+.copyfield:hover { border-color: var(--moon); background: #fff; }
+.copyfield:focus-within { border-color: var(--orange); box-shadow: 0 0 0 3px rgba(238,108,41,.14); background: #fff; }
+.copyfield.ok { border-color: var(--good); box-shadow: 0 0 0 3px rgba(62,142,90,.14); }
+.copyfield input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; padding: 0 12px; font-family: var(--mono); font-size: 12.5px; color: var(--ink); outline: none; cursor: copy; text-overflow: ellipsis; }
+.copyfield-b { display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2); cursor: pointer; transition: background .12s, color .12s, transform .08s; }
+.copyfield-b:hover { background: var(--peach); color: var(--orange-ink); }
+.copyfield-b:active { transform: scale(.92); }
+.copyfield.ok .copyfield-b:first-of-type { color: var(--good); }
+.copyfield-ok { position: absolute; right: 44px; top: 50%; transform: translateY(-50%); font-size: 12px; font-weight: 500; color: var(--good); background: var(--good-soft); padding: 2px 8px; border-radius: 999px; pointer-events: none; }
+.copyfield.sm { height: 34px; }
+.copyfield.sm input { font-size: 12px; padding: 0 10px; }
+.copyfield.sm .copyfield-b { width: 28px; height: 28px; }
+.copyfield:has(a.copyfield-b) .copyfield-ok { right: 80px; }

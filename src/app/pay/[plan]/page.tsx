@@ -18,6 +18,10 @@ export default async function PayPage({ params, searchParams }: { params: Promis
   const st = hasDb() ? await paymentSettings() : { mode: "test" as const, verifyAmount: 1 };
   const av = pl ? await offerAvailability(pl) : { ok: false as const, reason: "Оффер не знайдено" };
   const ok = pl && (preview || p);
+  // відкрито без персонального підпису (сайт, Instagram, переслане посилання): показуємо оффер і ведемо в бот, де буде особисте посилання на оплату
+  const [hubBot] = hasDb() && !ok && pl && kind === "first" ? await db().select({ username: schema.bots.username }).from(schema.bots).where(eq(schema.bots.key, "hub")) : [];
+  const publicView = !ok && pl && kind === "first" && Boolean(hubBot?.username);
+  const botHref = hubBot?.username && pl ? `https://t.me/${hubBot.username}?start=o_${pl.id}` : "#";
   const oneTime = pl?.paymentType === "one_time";
   const trial = kind === "first" && pl && !oneTime && pl.trialDays > 0;
   const amount = kind === "first" ? (trial ? Number(pl!.trialPrice ?? 0) : Number(pl?.price ?? 0)) : st.verifyAmount;
@@ -28,10 +32,22 @@ export default async function PayPage({ params, searchParams }: { params: Promis
   return (
     <div className="landing">
       <div className="card">
-        {ok && d.image && kind === "first" && <div className="cover-prev" style={{ backgroundImage: `url(${d.image})`, height: 200, borderRadius: "12px 12px 0 0" }} aria-hidden />}
+        {(ok || publicView) && d.image && kind === "first" && <div className="cover-prev" style={{ backgroundImage: `url(${d.image})`, height: 200, borderRadius: "12px 12px 0 0" }} aria-hidden />}
         <div className="in">
           <div className="brand" style={{ color: "var(--ink)", padding: 0 }}><i /><span>Hub</span> <small>клуб Марії</small></div>
-          {!ok ? <><h1>Посилання недійсне</h1><p className="desc">Відкрийте оплату ще раз із Hub-бота: команда /plans.</p></> : <>
+          {!ok && publicView ? <>
+            <h1>{title}</h1>
+            {d.description && <div className="desc" dangerouslySetInnerHTML={{ __html: telegramHtmlToSafe(d.description) }} />}
+            <div className="summary">
+              <div><dt>{oneTime ? "Разова оплата" : "Підписка"}</dt><dd>{priceLabel(pl!)}</dd></div>
+              {oneTime ? <div><dt>Доступ</dt><dd>{accessLabel(pl!)}</dd></div> : <div><dt>Списання</dt><dd>кожні {intervalLabel(pl!)}, скасувати можна будь-коли</dd></div>}
+              {trial && <div><dt>Пробний період</dt><dd>{pl!.trialDays} дн за {money(pl!.trialPrice ?? 0, pl!.currency)}, далі {money(pl!.price, pl!.currency)}</dd></div>}
+            </div>
+            {sp.u && <div className="alert">Персональне посилання на оплату застаріло або пошкоджене. Натисніть кнопку: бот надішле нове.</div>}
+            {!pl!.isActive ? <div className="alert bad">Цей оффер зараз недоступний.</div> : !av.ok ? <div className="alert bad">{av.reason}.</div> : null}
+            <a className="btn pri" href={botHref} style={{ justifyContent: "center", fontSize: 15, padding: "12px 18px" }} aria-disabled={!pl!.isActive || !av.ok}>{btn} в Telegram</a>
+            <p className="note" style={{ textAlign: "center", margin: 0 }}>Оплата проходить через Hub-бот клубу: так доступ і матеріали одразу прийдуть вам у Telegram. Сама оплата — на захищеній сторінці WayForPay.</p>
+          </> : !ok ? <><h1>Посилання недійсне</h1><p className="desc">Відкрийте оплату ще раз із Hub-бота: команда /plans.</p></> : <>
             <h1>{kind === "first" ? title : kind === "migrate" ? "Переїзд у Hub" : "Оновити картку"}</h1>
             {kind === "first" && d.description && <div className="desc" dangerouslySetInnerHTML={{ __html: telegramHtmlToSafe(d.description) }} />}
             <div className="summary">
