@@ -641,3 +641,10 @@ dialog.modal::backdrop { background: rgba(40,43,43,.40); backdrop-filter: blur(4
 p.sec-t { padding-left: 0; font-size: 13.5px; color: var(--ink-2); }
 p.sec-t::before { display: none; }
 td.num { white-space: nowrap; }
+
+/* конструктор дій автоматизації */
+.auto-acts { display: grid; gap: 10px; }
+.auto-act { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fcfcfb; }
+.auto-n { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--orange-soft); color: var(--orange-ink); font-weight: 600; font-size: 13px; margin-top: 26px; }
+.auto-body { display: grid; gap: 12px; min-width: 0; }
+.auto-act > .btn { margin-top: 28px; }

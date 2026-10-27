@@ -89,6 +89,11 @@ export async function addTag(personId: number, tag: string, source = "funnel", p
   await db().insert(events).values({ personId, type: "tag.added", source, payload: { tag, ...payload } });
 }
 
+/** Подія «воронку завершено»: тригер автоматизацій і рядок в історії людини. */
+async function finishedEvent(personId: number, funnelId: number, name?: string) {
+  await db().insert(events).values({ personId, type: "funnel.finished", source: "hub", payload: { funnelId, name: name ?? null } });
+}
+
 async function activeSteps(funnelId: number) {
   return db().select().from(funnelSteps).where(and(eq(funnelSteps.funnelId, funnelId), eq(funnelSteps.isActive, true))).orderBy(asc(funnelSteps.position), asc(funnelSteps.id));
 }
@@ -116,6 +121,7 @@ export async function enroll(funnelId: number, personId: number, reason = "manua
   const product = f.kind === "product"; // продукт: доступ триває, поки є право, навіть без автоматичних кроків
   const [e] = await d.insert(funnelEnrollments).values({ funnelId, personId, nextPosition: first?.step.position ?? 0, nextAt, status: first || product ? "active" : "done", lastStepAt: now, finishedAt: first || product ? null : now }).returning();
   await d.insert(events).values({ personId, type: "funnel.enrolled", source: "hub", payload: { funnelId, name: f.name, reason, linkId: opts.linkId ?? null } });
+  if (e.status === "done") await finishedEvent(personId, funnelId, f.name); // воронка без автоматичних кроків завершується одразу
   if (opts.linkId) await d.update(funnelLinks).set({ joins: sql`${funnelLinks.joins} + 1` }).where(eq(funnelLinks.id, opts.linkId));
   await d.update(funnels).set({ subscribersCount: sql`(select count(distinct person_id)::int from funnel_enrollments where funnel_id = ${funnelId})` }).where(eq(funnels.id, funnelId));
   await applyMenu(personId);
@@ -271,7 +277,7 @@ async function afterSend(e: typeof funnelEnrollments.$inferSelect, step: typeof 
   const awaiting = ["assignment", "question", "survey", "quiz"].includes(step.type) ? step.id : null;
   const next = nextAuto(steps, idx);
   const now = new Date();
-  if (!next) { await d.update(funnelEnrollments).set({ status: "done", finishedAt: now, nextAt: null, lastStepAt: now, awaitingStepId: awaiting }).where(eq(funnelEnrollments.id, e.id)); return "done"; }
+  if (!next) { await d.update(funnelEnrollments).set({ status: "done", finishedAt: now, nextAt: null, lastStepAt: now, awaitingStepId: awaiting }).where(eq(funnelEnrollments.id, e.id)); await finishedEvent(e.personId, e.funnelId, f.name); return "done"; }
   await d.update(funnelEnrollments).set({ nextPosition: next.step.position, nextAt: scheduleFor((next.step.config ?? {}) as StepConfig, now, fs.quietHours), lastStepAt: now, awaitingStepId: awaiting }).where(eq(funnelEnrollments.id, e.id));
   return "next";
 }
@@ -296,7 +302,7 @@ export async function processDue(limit = 100) {
     if (!f?.isActive) { await d.update(funnelEnrollments).set({ nextAt: null }).where(eq(funnelEnrollments.id, e.id)); continue; } // воронку зупинено: чекаємо
     const steps = await activeSteps(e.funnelId);
     const idx = steps.findIndex((s) => s.position >= e.nextPosition);
-    if (idx < 0) { await d.update(funnelEnrollments).set({ status: "done", finishedAt: new Date(), nextAt: null }).where(eq(funnelEnrollments.id, e.id)); finished++; continue; }
+    if (idx < 0) { await d.update(funnelEnrollments).set({ status: "done", finishedAt: new Date(), nextAt: null }).where(eq(funnelEnrollments.id, e.id)); await finishedEvent(e.personId, e.funnelId, f.name); finished++; continue; }
     const step = steps[idx];
     try {
       const ok = await deliver(e, step, (f.settings ?? {}) as FunnelSettings);
