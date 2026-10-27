@@ -524,6 +524,9 @@ th.num { font-family: var(--sans); }
 .btn.ghost:active { background: rgba(40,43,43,.09); }
 .btn.danger:hover { background: var(--crit-soft); border-color: #f2c4c4; }
 .btn.danger-solid:active { filter: brightness(.92); }
+/* кольорові кнопки зберігають свій фон при наведенні, натисканні й фокусі (загальні .btn:hover/:active вище задають білий або сірий) */
+.btn.pri:hover, .btn.pri:active, .btn.pri:focus-visible { background: linear-gradient(135deg, var(--orange), var(--orange-2)); color: #fff; border-color: transparent; }
+.btn.danger-solid:hover, .btn.danger-solid:active, .btn.danger-solid:focus-visible { background: var(--crit); color: #fff; border-color: transparent; }
 .btn.sm { height: 30px; padding: 0 11px; font-size: 12.5px; border-radius: 9px; }
 .btn[disabled], .btn[disabled]:hover, .btn[disabled]:active { opacity: .5; transform: none; box-shadow: none; filter: none; }
 .lnk { color: var(--orange-ink); font-weight: 500; }
@@ -664,3 +667,6 @@ td.num { white-space: nowrap; }
 .copyfield.sm input { font-size: 12px; padding: 0 10px; }
 .copyfield.sm .copyfield-b { width: 28px; height: 28px; }
 .copyfield:has(a.copyfield-b) .copyfield-ok { right: 80px; }
+/* усередині Field загальний стиль input не має малювати другу рамку в полі копіювання */
+.fld .copyfield input:not([type=checkbox]):not([type=radio]), .copyfield input:not([type=checkbox]):not([type=radio]) { height: 100%; border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0 12px; font-family: var(--mono); font-size: 12.5px; }
+.fld .copyfield.sm input:not([type=checkbox]):not([type=radio]), .copyfield.sm input:not([type=checkbox]):not([type=radio]) { font-size: 12px; padding: 0 10px; }

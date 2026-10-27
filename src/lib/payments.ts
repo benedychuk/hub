@@ -18,9 +18,9 @@ const RETRY_DAYS = [1, 3, 5];
 
 // ---------- налаштування ----------
 export async function paymentSettings() {
-  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled", "payments.testers", "access.graceHours"]));
+  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled", "payments.newPeople", "payments.testers", "access.graceHours"]));
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true, testers: (Array.isArray(m["payments.testers"]) ? m["payments.testers"] as number[] : []), graceHours: Number.isFinite(Number(m["access.graceHours"])) && m["access.graceHours"] != null ? Number(m["access.graceHours"]) : DEFAULT_GRACE_HOURS };
+  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true, newPeople: m["payments.newPeople"] === true, testers: (Array.isArray(m["payments.testers"]) ? m["payments.testers"] as number[] : []), graceHours: Number.isFinite(Number(m["access.graceHours"])) && m["access.graceHours"] != null ? Number(m["access.graceHours"]) : DEFAULT_GRACE_HOURS };
 }
 export async function setSetting(key: string, value: unknown) {
   await db().insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
@@ -52,11 +52,27 @@ async function hubSubFor(personId: number, planId: number | null | undefined) {
 }
 
 // ---------- початок оплати ----------
-/** Поки оплати не увімкнені власником, ними можуть користуватись лише адміністратор (ADMIN_TELEGRAM_ID) і тестувальники зі списку в Налаштування → Оплати. */
+/** Чи є в людини чинна підписка в ZenEdu: такі учасниці платять там, щоб не було подвійних списань. */
+export async function hasActiveZenSub(personId: number) {
+  const [s] = await db().select({ id: subscriptions.id }).from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu"), inArray(subscriptions.status, ["active", "trialing", "past_due"]))).limit(1);
+  return Boolean(s);
+}
+/**
+ * Хто бачить оплату в боті. Обидва перемикачі вмикає лише власник (Налаштування → Оплати):
+ * «Оплати увімкнено для учасниць» — усі; «Оплати для нових людей» — ті, у кого немає чинної підписки в ZenEdu.
+ * Адміністратор (ADMIN_TELEGRAM_ID) і тестувальники бачать оплату завжди.
+ */
 export async function paymentsAllowedFor(personId: number) {
   const st = await paymentSettings(); if (st.enabled) return true;
   const [p] = await db().select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, personId));
-  return Boolean(p && (p.tg === adminTelegramId() || st.testers.includes(p.tg)));
+  if (p && (p.tg === adminTelegramId() || st.testers.includes(p.tg))) return true;
+  return st.newPeople && !(await hasActiveZenSub(personId));
+}
+/** Що сказати людині, якій оплата в боті зараз недоступна. */
+export async function paymentBlockedText(personId: number) {
+  return (await hasActiveZenSub(personId))
+    ? "Ваша підписка оформлена в ZenEdu: оплата й продовження лишаються там, нічого робити не потрібно."
+    : "Оплата в боті зараз недоступна. Напишіть нам у цей чат, і команда допоможе оформити доступ.";
 }
 export async function beginPayment(personId: number, planKey: string, kind: "first" | "card" | "migrate") {
   const d = db();
