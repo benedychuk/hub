@@ -7,6 +7,7 @@ import * as RTooltip from "@radix-ui/react-tooltip";
 import { Check, MoreVertical } from "lucide-react";
 import { startTransition, useRef, useState } from "react";
 import { useConfirm } from "./confirm";
+import { markBusy } from "./pending";
 
 /** Чекбокс, сумісний із формами: у FormData йде name=value, коли увімкнено. */
 export function Checkbox({ name, value = "on", defaultChecked, label, hint, disabled }: { name: string; value?: string; defaultChecked?: boolean; label: React.ReactNode; hint?: React.ReactNode; disabled?: boolean }) {
@@ -68,7 +69,7 @@ export function MenuAction({ action, fields = {}, icon, children, confirm, dange
         e.preventDefault();
         // меню закриється і форма зникне з DOM раніше, ніж спрацює submit, тому копіюємо поля й викликаємо дію напряму
         const fd = new FormData(formRef.current ?? undefined);
-        const run = () => startTransition(() => { void action(fd); });
+        const run = () => { markBusy(); startTransition(() => { void action(fd); }); };
         if (!confirm) { run(); return; }
         ask({ message: confirm, danger, confirmLabel: typeof children === "string" ? children : undefined, onConfirm: run });
       }}>{icon}{children}</button></RMenu.Item>
