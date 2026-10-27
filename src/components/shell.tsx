@@ -3,9 +3,13 @@ import { Search } from "lucide-react";
 import { Suspense } from "react";
 import NavLinks from "./nav-links";
 import { ConfirmProvider } from "./ui/confirm";
+import { PendingIndicator } from "./ui/pending";
 import { hasDb } from "@/db";
 import { currentUser, ROLE_LABEL } from "@/lib/auth";
 import { logout } from "@/lib/users";
+
+/** Мітка рендеру: нова при кожному оновленні сторінки сервером, щоб знімати індикатор виконання. */
+const renderStamp = () => new Date().toISOString();
 
 export default async function Shell({ title, children, counts }: { title: string; children: React.ReactNode; counts?: Record<string, number> }) {
   const ready = hasDb() && Boolean(process.env.ZENEDU_API_TOKEN);
@@ -24,6 +28,7 @@ export default async function Shell({ title, children, counts }: { title: string
           {!ready && <Link href="/settings" className="badge">Налаштування не завершено</Link>}
         </div>
         <div className="page"><ConfirmProvider>{children}</ConfirmProvider></div>
+        <Suspense fallback={null}><PendingIndicator stamp={renderStamp()} /></Suspense>
       </div>
     </div>
   );

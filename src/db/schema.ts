@@ -18,6 +18,10 @@ export const persons = pgTable("persons", {
   zenIsBlocked: boolean("zen_is_blocked"),
   utm: jsonb("utm").$type<Record<string, string>[]>().default([]),
   customFields: jsonb("custom_fields").$type<Record<string, unknown>>().default({}),
+  // знімок того, що востаннє прийшло з ZenEdu: синхронізація прибирає лише своє і не затирає дані Hub
+  zenTags: jsonb("zen_tags").$type<string[]>().notNull().default([]),
+  zenNotes: text("zen_notes"), // нотатки з ZenEdu, лише для читання; persons.notes — нотатки команди Hub
+  zenCustomFields: jsonb("zen_custom_fields").$type<Record<string, unknown>>().notNull().default({}),
   lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
   zenCreatedAt: timestamp("zen_created_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

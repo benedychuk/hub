@@ -29,31 +29,66 @@ const normList = (v: unknown): Record<string, string>[] => Array.isArray(v) ? v 
 const normObj = (v: unknown): Record<string, unknown> => Array.isArray(v) ? Object.assign({}, ...v.filter((x) => x && typeof x === "object")) : v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 const splitTags = (t: string | null | undefined) => (t ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 
-function personRow(s: ZenSubscriber) {
+type ZenPrev = { zenTags: string[]; zenNotes: string | null; zenCustomFields: Record<string, unknown>; customFields: Record<string, unknown> | null };
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Додаткові поля: значення з ZenEdu, крім змінених у Hub (поточне ≠ останнє з ZenEdu);
+ * поле, яке ZenEdu прибрав, зникає лише якщо Hub його не змінював. Відповіді воронок Hub лишаються.
+ */
+function mergeCustomFields(cur: Record<string, unknown>, prev: Record<string, unknown>, inc: Record<string, unknown>) {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(cur)) {
+    const hubChanged = !(k in prev) || !same(v, prev[k]);
+    if (k in inc) out[k] = hubChanged ? v : inc[k];
+    else if (hubChanged) out[k] = v; // поле Hub або змінене в Hub; незмінене поле, яке ZenEdu прибрав, зникає
+  }
+  for (const [k, v] of Object.entries(inc)) if (!(k in cur)) out[k] = v;
+  return out;
+}
+
+/** Рядок людини з ZenEdu. Поля, яких немає у відповіді (напр. підписник у замовленні), беруться з попереднього знімка. */
+function personRow(s: ZenSubscriber, prev?: ZenPrev) {
+  const zenTags = s.tags !== undefined ? splitTags(s.tags) : prev?.zenTags ?? [];
+  const zenNotes = s.notes !== undefined ? s.notes : prev?.zenNotes ?? null;
+  const zenCustomFields = s.custom_fields !== undefined ? normObj(s.custom_fields) : prev?.zenCustomFields ?? {};
   return {
     telegramUserId: s.user_id,
     firstName: s.first_name, lastName: s.last_name, username: s.username, phone: s.phone, email: s.email,
-    tags: splitTags(s.tags), notes: s.notes, zenSubscriberId: s.id, zenIsActive: s.is_active, zenIsBlocked: s.is_blocked,
-    utm: normList(s.utm_tags), customFields: normObj(s.custom_fields),
+    // tags для нової людини; для наявної зливаються в onConflict з excluded.zen_tags
+    tags: zenTags, zenTags, zenNotes, zenSubscriberId: s.id, zenIsActive: s.is_active, zenIsBlocked: s.is_blocked,
+    utm: normList(s.utm_tags),
+    customFields: prev ? mergeCustomFields(prev.customFields ?? {}, prev.zenCustomFields ?? {}, zenCustomFields) : zenCustomFields, zenCustomFields,
     lastActiveAt: parseDate(s.last_active_at), zenCreatedAt: parseDate(s.created_at), updatedAt: new Date(),
   };
 }
 
-/** Масовий upsert людей однією командою; повертає map telegram_user_id → person.id */
+/**
+ * Масовий upsert людей однією командою; повертає map telegram_user_id → person.id.
+ * Дані Hub не затираються: теги = (поточні − попередні з ZenEdu) ∪ нові з ZenEdu; notes не чіпаються
+ * (нотатки ZenEdu йдуть у zen_notes); додаткові поля зливаються по ключах (mergeCustomFields).
+ */
 async function upsertPersons(list: ZenSubscriber[]): Promise<Map<number, number>> {
   const map = new Map<number, number>();
   const uniq = new Map<number, ZenSubscriber>();
   list.forEach((s) => uniq.set(s.user_id, s));
   if (!uniq.size) return map;
-  const rows = [...uniq.values()].map(personRow);
+  const prev = new Map<number, ZenPrev>();
+  (await db().select({ tg: persons.telegramUserId, zenTags: persons.zenTags, zenNotes: persons.zenNotes, zenCustomFields: persons.zenCustomFields, customFields: persons.customFields })
+    .from(persons).where(inArray(persons.telegramUserId, [...uniq.keys()]))).forEach(({ tg, ...p }) => prev.set(tg, p));
+  const rows = [...uniq.values()].map((s) => personRow(s, prev.get(s.user_id)));
   const r = await db().insert(persons).values(rows).onConflictDoUpdate({
     target: persons.telegramUserId,
     set: {
       firstName: sql`excluded.first_name`, lastName: sql`excluded.last_name`, username: sql`excluded.username`,
       phone: sql`coalesce(excluded.phone, ${persons.phone})`, email: sql`coalesce(excluded.email, ${persons.email})`,
-      tags: sql`excluded.tags`, notes: sql`excluded.notes`, zenSubscriberId: sql`excluded.zen_subscriber_id`,
+      tags: sql`(select coalesce(jsonb_agg(distinct t), '[]'::jsonb) from (
+        (select jsonb_array_elements_text(persons.tags) t except select jsonb_array_elements_text(persons.zen_tags))
+        union select jsonb_array_elements_text(excluded.zen_tags)) x)`,
+      zenTags: sql`excluded.zen_tags`, zenNotes: sql`excluded.zen_notes`, zenSubscriberId: sql`excluded.zen_subscriber_id`,
       zenIsActive: sql`excluded.zen_is_active`, zenIsBlocked: sql`excluded.zen_is_blocked`, utm: sql`excluded.utm`,
-      customFields: sql`excluded.custom_fields`, lastActiveAt: sql`excluded.last_active_at`, zenCreatedAt: sql`excluded.zen_created_at`, updatedAt: new Date(),
+      customFields: sql`excluded.custom_fields`, zenCustomFields: sql`excluded.zen_custom_fields`,
+      lastActiveAt: sql`excluded.last_active_at`, zenCreatedAt: sql`excluded.zen_created_at`, updatedAt: new Date(),
     },
   }).returning({ id: persons.id, tg: persons.telegramUserId });
   r.forEach((x) => map.set(x.tg, x.id));

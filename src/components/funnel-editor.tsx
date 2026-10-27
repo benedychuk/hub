@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Eye, Play, Pause, Send, RefreshCw, Trash2, Pencil, Copy, ArrowUp, ArrowDown, Plus, GitBranch, Users, MessageSquareText, Package, Tag, Link2, DollarSign, Repeat } from "lucide-react";
+import { Eye, Play, Pause, Send, RefreshCw, Trash2, Pencil, Copy, ArrowUp, ArrowDown, Plus, GitBranch, Users, MessageSquareText, Package, Tag, Link2, DollarSign, Repeat, Forward } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { PageHeader, Section, Field, FormRow, Stat, Row, EmptyState, Alert, KV } from "@/components/ui/layout";
@@ -86,7 +86,18 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
           <Stat label="Завершили" value={summary.finished} hint={`${pct(summary.finished)}%`} />
         </div>
         <Section title="Кроки" description={product ? "Порядок у списку = порядок надсилання після відкриття доступу. Кроки з часом «Ні» доступні лише за кнопками й командами меню." : "Порядок у списку = порядок надсилання. Час кожного кроку рахується від попереднього. Кроки можна додавати й міняти місцями у воронці, яку вже проходять: розклад перераховується."} className="tbl"
-          actions={<Modal title="Новий крок" width={640} trigger={<button type="button" className="btn"><Plus size={15} /> Додати крок</button>}><AddStep /></Modal>}>
+          actions={<>
+            <Modal title="Записати кроки з Telegram" width={560} trigger={<button type="button" className="btn"><Forward size={15} /> Записати з Telegram</button>}>
+              <ol className="steps-how">
+                <li>Відкрийте Hub-бот кнопкою нижче: почнеться запис у {product ? "цей продукт" : "цю воронку"}.</li>
+                <li>Перешліть у бот повідомлення по порядку, наприклад із чату з ботом ZenEdu: текст із форматуванням, фото, відео, кружечки, голосові, файли, альбоми. Можна виділити кілька повідомлень і переслати разом.</li>
+                <li>Кожне повідомлення стане кроком, альбом — одним кроком. Надішліть /done, щоб завершити, або /undo, щоб прибрати останній крок.</li>
+              </ol>
+              <Alert tone="info">Нові кроки мають час «Ні» і самі не надсилаються: затримки виставте тут після запису. Кнопки-дії («Далі», перехід до кроку) Telegram при пересиланні не передає, їх треба додати в кроці; кнопки оплати ZenEdu замініть на оффер Hub. Записувати можуть лише члени команди з Telegram ID у профілі.</Alert>
+              <div className="modal-f">{botUser ? <a className="btn pri" href={`https://t.me/${botUser}?start=rec_${f.id}`} target="_blank" rel="noreferrer"><Send size={15} /> Відкрити Hub-бот і почати запис</a> : <span className="fld-h">Hub-бот ще не підключено: Система → Боти й меню.</span>}</div>
+            </Modal>
+            <Modal title="Новий крок" width={640} trigger={<button type="button" className="btn"><Plus size={15} /> Додати крок</button>}><AddStep /></Modal>
+          </>}>
           <table><thead><tr><th>Крок</th><th className="num">Отримали</th><th className="num">Чекають</th><th className="num">Дійшли</th><th>Час надсилання</th><th>Статус</th><th></th></tr></thead><tbody>
             {groups.map((g) => <Fragment key={g.mod?.id ?? "none"}>
               {g.mod && <tr className="modhead"><td colSpan={7}>{g.mod.name} <span className="muted" style={{ fontWeight: 400 }}>· {g.items.length} кроків</span></td></tr>}

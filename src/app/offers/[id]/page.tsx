@@ -21,7 +21,7 @@ const toDateInput = (d: Date | null | undefined) => d ? new Date(d.getTime() - d
 const toDateTimeInput = (d: Date | null | undefined) => d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
 
 /** Редактор оффера: вкладки як у ZenEdu (General / Design / Settings) плюс «Посилання» (оплата в боті, доступ без оплати). */
-export default async function OfferEditor({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; saved?: string }> }) {
+export default async function OfferEditor({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; saved?: string; from?: string }> }) {
   const { id } = await params; const sp = await searchParams;
   const isNew = id === "new";
   const [counts, d, prods, res, bl, zen] = await Promise.all([navCounts(), isNew ? Promise.resolve(null) : offerDetail(Number(id)), productPicker(), resourceList(), botList(), offerList()]);
@@ -47,6 +47,18 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
           </Kebab>
         </> : undefined} />
       {sp.saved && <Alert tone="ok">Збережено.</Alert>}
+      {pl && sp.from === "zen" && <Alert tone="info">
+        <b>Оффер створено з ZenEdu.</b> ZenEdu через API не віддає частину налаштувань, тому перевірте вручну:
+        <ul className="alert-list">
+          <li>права: які канали, групи й «Щиро» дає оффер (галочки нижче, у «Що дає оффер»);</li>
+          <li>цифрові продукти;</li>
+          <li>період і ціну: їх вгадано за назвою оффера;</li>
+          {pl.paymentType === "one_time" && <li>тривалість доступу для разової оплати;</li>}
+          <li>пробний період, текст оплати й оформлення на вкладці «Дизайн»;</li>
+          <li>статус: оффер зупинений і схований у боті, увімкніть його після перевірки.</li>
+        </ul>
+        Підписки ZenEdu на цей оффер лишаються в ZenEdu і вже враховуються у звітах і фільтрах разом із цим оффером Hub.
+      </Alert>}
       {pl && !pl.isActive && <Alert tone="warn">Оффер зупинено: купити його не можна, посилання доступу не працюють. Чинні підписки не змінюються.</Alert>}
       {pl && pl.isActive && !products.length && !Object.keys(ents).length && <Alert tone="info">Оффер нічого не дає: додайте цифровий продукт або канал у розділі «Що дає оффер».</Alert>}
       {!isNew && <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`/offers/${pl!.id}?tab=${k}`} className={tab === k ? "on" : ""}>{l}{k === "links" ? ` · ${d!.links.length}` : ""}</Link>)}</div>}

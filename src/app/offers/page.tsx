@@ -1,29 +1,35 @@
 import Link from "next/link";
-import { Plus, Pencil, Copy, Trash2, Tag, Link2, Eye, Play, Pause, DollarSign, Repeat } from "lucide-react";
+import { Plus, Pencil, Copy, Trash2, Tag, Link2, Eye, Play, Pause, DollarSign, Repeat, CopyPlus, ExternalLink } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { Toolbar, EmptyState, Chips } from "@/components/ui/layout";
+import { Toolbar, EmptyState, Chips, Alert } from "@/components/ui/layout";
 import { Kebab, MenuAction, MenuLink, MenuSep } from "@/components/ui/controls";
+import { ConfirmSubmitButton } from "@/components/ui/confirm";
 import { navCounts, hubOfferList, offerList } from "@/lib/queries";
-import { setOfferStatus, duplicateOffer, deleteOffer } from "@/lib/actions";
+import { setOfferStatus, duplicateOffer, deleteOffer, createOfferFromZen, createOffersFromZenAll } from "@/lib/actions";
 import { money } from "@/lib/format";
 import { priceLabel, accessLabel } from "@/lib/offers";
 
 export const dynamic = "force-dynamic";
-type SP = { src?: string; q?: string; status?: string };
+type SP = { src?: string; q?: string; status?: string; ok?: string; err?: string };
 
 /** Оффери (ZenEdu Sales → Offers): що продається, за яку ціну і що дає. Hub-оффери редагуються; ZenEdu — імпорт для довідки й фільтрів. */
 export default async function Offers({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
   const [counts, hub, zen] = await Promise.all([navCounts(), hubOfferList(), offerList()]);
   const src = sp.src === "zen" ? "zen" : "hub"; const q = (sp.q ?? "").trim().toLowerCase(); const status = sp.status ?? "";
-  const link = (p: Partial<SP>) => { const u = new URLSearchParams(); const all = { ...sp, ...p }; for (const [k, v] of Object.entries(all)) if (v) u.set(k, String(v)); const s = u.toString(); return "/offers" + (s ? "?" + s : ""); };
+  const link = (p: Partial<SP>) => { const u = new URLSearchParams(); const all = { ...sp, ok: "", err: "", ...p }; for (const [k, v] of Object.entries(all)) if (v) u.set(k, String(v)); const s = u.toString(); return "/offers" + (s ? "?" + s : ""); };
   const hubRows = hub.filter((r) => (!q || r.pl.name.toLowerCase().includes(q)) && (!status || (status === "active" ? r.pl.isActive : !r.pl.isActive)));
+  const planName = new Map(hub.map((r) => [r.pl.id, r.pl.name]));
+  const unlinked = zen.filter((r) => r.o.isActive && !r.o.planId).map((r) => r.o.name);
   const zenRows = zen.filter((r) => (!q || r.o.name.toLowerCase().includes(q)) && (!status || (status === "active" ? r.o.isActive : !r.o.isActive)));
   return (
     <Shell title="Оффери" counts={counts}>
       <div className="tabs"><Link href={link({ src: "" })} className={src === "hub" ? "on" : ""}>Hub · {hub.length}</Link><Link href={link({ src: "zen" })} className={src === "zen" ? "on" : ""}>ZenEdu · {zen.length}</Link></div>
-      <Toolbar actions={src === "hub" ? <Link className="btn pri" href="/offers/new"><Plus size={15} /> Оффер</Link> : undefined}>
+      {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}
+      {sp.err && <Alert tone="bad">{sp.err}</Alert>}
+      <Toolbar actions={src === "hub" ? <Link className="btn pri" href="/offers/new"><Plus size={15} /> Оффер</Link> : unlinked.length ? <form action={createOffersFromZenAll}><ConfirmSubmitButton className="btn" title="Створити оффери Hub" confirmLabel="Створити зупинені оффери"
+        message={`Буде створено зупинені оффери Hub для активних офферів ZenEdu без привʼязки: ${unlinked.map((n) => `«${n}»`).join(", ")}. Вони нічого не продають і не показуються в боті, поки ви їх не перевірите й не увімкнете.`}><CopyPlus size={15} /> Створити оффери Hub для всіх активних без привʼязки</ConfirmSubmitButton></form> : undefined}>
         <form className="search" method="get"><input name="q" defaultValue={sp.q ?? ""} placeholder="Пошук оффера" />{sp.src && <input type="hidden" name="src" value={sp.src} />}{sp.status && <input type="hidden" name="status" value={sp.status} />}</form>
         <Chips items={[{ href: link({ status: "" }), label: "Усі", on: !status }, { href: link({ status: "active" }), label: "Активні", on: status === "active" }, { href: link({ status: "stopped" }), label: "Зупинені", on: status === "stopped" }]} />
       </Toolbar>
@@ -50,9 +56,13 @@ export default async function Offers({ searchParams }: { searchParams: Promise<S
         </tbody></table>
       </div>}
       {src === "zen" && <div className="card tbl">
-        <table><thead><tr><th>Оффер</th><th className="num">Ціна</th><th className="num">Активних підписок</th><th className="num">Продажів</th><th>Стан</th><th>Посилання</th></tr></thead><tbody>
-          {zenRows.map(({ o, active, sales }) => <tr key={o.id}><td><div className="row-actions" style={{ flexWrap: "nowrap" }}>{o.isSubscription ? <Repeat size={14} className="muted" /> : <DollarSign size={14} className="muted" />}<div>{o.name}<div className="fld-h">{o.isSubscription ? "підписка" : "разово"} · ZenEdu</div></div></div></td><td className="num">{money(o.price, o.currency)}</td><td className="num">{active}</td><td className="num">{sales}</td><td><Pill tone={o.isActive ? "good" : "mute"}>{o.isActive ? "активний" : "зупинений"}</Pill></td><td>{o.link ? <a href={o.link} target="_blank" rel="noreferrer" className="lnk">оплата</a> : "—"}{o.landingLink ? <> · <a href={o.landingLink} target="_blank" rel="noreferrer" className="lnk">лендінг</a></> : null}</td></tr>)}
-          {!zenRows.length && <tr><td colSpan={6}><EmptyState title="Ще не імпортовано" text="Запустіть імпорт у Налаштуваннях. Оффери ZenEdu лише для читання: вони використовуються у фільтрах розсилок і кнопках." /></td></tr>}
+        <table><thead><tr><th>Оффер</th><th className="num">Ціна</th><th className="num">Активних підписок</th><th className="num">Продажів</th><th>Стан</th><th>Посилання</th><th>Оффер Hub</th><th></th></tr></thead><tbody>
+          {zenRows.map(({ o, active, sales }) => <tr key={o.id}><td><div className="row-actions" style={{ flexWrap: "nowrap" }}>{o.isSubscription ? <Repeat size={14} className="muted" /> : <DollarSign size={14} className="muted" />}<div>{o.name}<div className="fld-h">{o.isSubscription ? "підписка" : "разово"} · ZenEdu</div></div></div></td><td className="num">{money(o.price, o.currency)}</td><td className="num">{active}</td><td className="num">{sales}</td><td><Pill tone={o.isActive ? "good" : "mute"}>{o.isActive ? "активний" : "зупинений"}</Pill></td><td>{o.link ? <a href={o.link} target="_blank" rel="noreferrer" className="lnk">оплата</a> : "—"}{o.landingLink ? <> · <a href={o.landingLink} target="_blank" rel="noreferrer" className="lnk">лендінг</a></> : null}</td>
+            <td>{o.planId ? <Link href={`/offers/${o.planId}`} className="lnk">{planName.get(o.planId) ?? `оффер #${o.planId}`}</Link> : <span className="muted">не привʼязано</span>}</td>
+            <td><Kebab>{o.planId
+              ? <MenuLink href={`/offers/${o.planId}`} icon={<ExternalLink />}>Відкрити оффер Hub</MenuLink>
+              : <MenuAction action={createOfferFromZen} fields={{ zenOfferRowId: o.id }} icon={<CopyPlus />}>Створити оффер Hub</MenuAction>}</Kebab></td></tr>)}
+          {!zenRows.length && <tr><td colSpan={8}><EmptyState title="Ще не імпортовано" text="Запустіть імпорт у Налаштуваннях. Оффери ZenEdu лише для читання: вони використовуються у фільтрах розсилок і кнопках, а з кожного можна створити оффер Hub." /></td></tr>}
         </tbody></table>
       </div>}
     </Shell>

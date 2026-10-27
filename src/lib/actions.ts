@@ -1,9 +1,10 @@
 "use server";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
-import { myTelegramId } from "./auth";
+import { myTelegramId, currentUser } from "./auth";
+import { periodDaysFromOfferName } from "./zenedu";
 import { installWebhook, sendToPerson, getBot, botToken } from "./bot";
 import { grantOffer, newLinkToken } from "./offers";
 import { magicLinkFor, onboardingConfigured, ensureAccountForPerson, hubChatFor } from "./onboarding";
@@ -77,6 +78,53 @@ export async function duplicateOffer(fd: FormData) {
   if (!p) return;
   const [n] = await db().insert(plans).values({ ...p, id: undefined, key: p.key + "_copy_" + Date.now().toString(36), name: p.name + " (копія)", isFeatured: false, isActive: false, createdAt: undefined, updatedAt: undefined }).returning({ id: plans.id });
   revalidatePath("/offers"); redirect(`/offers/${n.id}`);
+}
+
+// ---------- оффер Hub з оффера ZenEdu ----------
+/** Період за назвою оффера ZenEdu (API не віддає поля періоду): рік, 3 місяці, 2 тижні, інакше місяць. */
+function zenPeriod(name: string): { period: string; intervalCount: number } {
+  const days = periodDaysFromOfferName(name, "subscription_start");
+  return days === 366 ? { period: "year", intervalCount: 1 } : days === 92 ? { period: "quarter", intervalCount: 1 } : days === 14 ? { period: "week", intervalCount: 2 } : { period: "month", intervalCount: 1 };
+}
+type ZenOfferRow = typeof schema.offers.$inferSelect;
+/**
+ * Створює зупинений і схований у боті оффер Hub і привʼязує до нього оффер ZenEdu.
+ * Повертає id оффера Hub; якщо оффер ZenEdu вже привʼязаний (зокрема паралельно), новий не лишається.
+ */
+async function offerFromZen(o: ZenOfferRow, by: string | null): Promise<{ planId: number; created: boolean }> {
+  if (o.planId) return { planId: o.planId, created: false };
+  const raw = (o.raw ?? {}) as { description?: string | null };
+  const [n] = await db().insert(plans).values({
+    key: `${slugKey(o.name)}_${Date.now().toString(36)}`, name: o.name, price: o.price ?? "0", currency: o.currency || "UAH",
+    paymentType: o.isSubscription ? "subscription" : "one_time", ...zenPeriod(o.name), accessMode: "forever",
+    design: raw.description ? { description: raw.description } : {}, entitlements: {}, products: [], settings: {},
+    isActive: false, showInBot: false, isFeatured: false,
+  }).returning({ id: plans.id });
+  const [linked] = await db().update(schema.offers).set({ planId: n.id }).where(and(eq(schema.offers.id, o.id), isNull(schema.offers.planId))).returning({ id: schema.offers.id });
+  if (!linked) { // хтось привʼязав одночасно: прибираємо щойно створений дубль
+    await db().delete(plans).where(eq(plans.id, n.id));
+    const [cur] = await db().select({ planId: schema.offers.planId }).from(schema.offers).where(eq(schema.offers.id, o.id));
+    return { planId: cur?.planId ?? 0, created: false };
+  }
+  await db().insert(events).values({ personId: null, type: "offer.created_from_zen", source: "hub", payload: { zenOfferId: o.zenOfferId, offerRowId: o.id, planId: n.id, name: o.name, by } });
+  return { planId: n.id, created: true };
+}
+export async function createOfferFromZen(fd: FormData) {
+  const id = Number(fd.get("zenOfferRowId"));
+  const [o] = id ? await db().select().from(schema.offers).where(eq(schema.offers.id, id)) : [];
+  if (!o) redirect("/offers?src=zen&err=" + encodeURIComponent("Оффер ZenEdu не знайдено. Оновіть сторінку."));
+  if (o.planId) redirect(`/offers/${o.planId}`);
+  const r = await offerFromZen(o, (await currentUser())?.email ?? null);
+  revalidatePath("/offers");
+  redirect(r.created ? `/offers/${r.planId}?tab=general&from=zen` : r.planId ? `/offers/${r.planId}` : "/offers?src=zen");
+}
+/** Масово: по зупиненому офферу Hub для кожного активного неприв'язаного оффера ZenEdu. */
+export async function createOffersFromZenAll() {
+  const list = await db().select().from(schema.offers).where(and(eq(schema.offers.source, "zenedu"), eq(schema.offers.isActive, true), isNull(schema.offers.planId)));
+  const by = (await currentUser())?.email ?? null; let created = 0;
+  for (const o of list) if ((await offerFromZen(o, by)).created) created++;
+  revalidatePath("/offers");
+  redirect("/offers?src=zen&ok=" + encodeURIComponent(created ? `Створено офферів Hub: ${created}. Усі зупинені й сховані в боті: перевірте права, продукти й ціну, потім увімкніть.` : "Немає активних офферів ZenEdu без привʼязки."));
 }
 /** Продукт ⇄ оффер із вкладки «Оффери» продукту. */
 export async function addProductToOffer(fd: FormData) {
