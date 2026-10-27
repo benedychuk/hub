@@ -19,6 +19,10 @@ export function describeEvent(e: EventRow, n: Names): Described {
     case "bot.blocked": return { title: "Заблокувала Hub-бот", group: "bot", tone: "crit" };
     case "bot.unblocked": return { title: "Розблокувала Hub-бот", group: "bot", tone: "good" };
     case "funnel.enrolled": return { title: `${p.resumed ? "Повернулась у" : "Додано до"} ${f?.kind === "product" ? "продукту" : "воронки"} «${fName}»`, detail: reasonLabel(String(p.reason ?? "")), href: fHref, group: "funnel", tone: "moon" };
+    case "funnel.finished": return { title: `Завершила ${f?.kind === "product" ? "продукт" : "воронку"} «${fName}»`, href: fHref, group: "funnel", tone: "good" };
+    case "automation.fired": { const res = (p.results ?? []) as { ok: boolean; note?: string }[]; const bad = res.filter((r) => !r.ok); return { title: `Спрацювала автоматизація «${String(p.name ?? `#${String(p.ruleId ?? "")}`)}»`, detail: `${res.length} дій${bad.length ? ` · не виконано: ${bad.map((r) => r.note ?? "помилка").join("; ")}` : ""}`, href: "/automations", group: "admin", tone: bad.length ? "warn" : "acc" }; }
+    case "automation.scheduled": return { title: `Заплановано автоматизацію «${String(p.name ?? "")}»`, detail: p.dueAt ? `спрацює ${new Date(String(p.dueAt)).toLocaleString("uk-UA")}` : undefined, href: "/automations", group: "admin", tone: "mute" };
+    case "automation.skipped": return { title: "Автоматизацію пропущено", detail: String(p.reason ?? ""), href: "/automations", group: "admin", tone: "warn" };
     case "funnel.intro": return { title: `Побачила вступ воронки «${fName}»`, href: fHref, group: "funnel" };
     case "funnel.answer": return { title: `Відповіла на крок${n.steps[Number(p.stepId)] ? ` «${n.steps[Number(p.stepId)]}»` : ""}`, detail: `${String(p.answer ?? "").slice(0, 160)}${p.correct === true ? " · правильно" : p.correct === false ? " · неправильно" : ""}`, group: "funnel" };
     case "funnel.assignment": return { title: `Надіслала завдання${n.steps[Number(p.stepId)] ? ` до кроку «${n.steps[Number(p.stepId)]}»` : ""}`, detail: String(p.answer ?? "").slice(0, 160), group: "funnel", tone: "good" };
@@ -83,7 +87,7 @@ export function describeEvent(e: EventRow, n: Names): Described {
 function reasonLabel(r: string) {
   if (!r) return undefined;
   if (r.startsWith("start:")) return `за посиланням ?start=${r.slice(6)}`;
-  return ({ manual: "додано вручну", test: "тест", intro: "натиснула «Отримати доступ»", keyword: "за ключовим словом", direct: "після запуску бота", broadcast: "з розсилки", offer: "за оффером", button: "з кнопки кроку" } as Record<string, string>)[r] ?? r;
+  return ({ manual: "додано вручну", test: "тест", intro: "натиснула «Отримати доступ»", keyword: "за ключовим словом", direct: "після запуску бота", broadcast: "з розсилки", offer: "за оффером", button: "з кнопки кроку", automation: "автоматизація" } as Record<string, string>)[r] ?? r;
 }
 function labelMedia(k?: string) { return ({ video_note: "кружечок", photo: "фото", video: "відео", animation: "GIF", voice: "голосове", audio: "аудіо", document: "файл", sticker: "стікер" } as Record<string, string>)[k ?? ""] ?? "медіа"; }
 function resourceLabel(key: string, n: Names) { const m = key.match(/^product:(\d+)$/); if (m) return `продукт «${n.funnels[Number(m[1])]?.name ?? key}»`; return `«${key}»`; }

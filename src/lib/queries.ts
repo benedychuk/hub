@@ -407,3 +407,10 @@ export async function personPayments(personId: number) {
     return { hubSubs, cards, attempts, offers: offersL, primaryCard };
   }, { hubSubs: [] as { s: typeof subscriptions.$inferSelect; plan: typeof plans.$inferSelect | null }[], cards: [] as (typeof schema.paymentMethods.$inferSelect)[], attempts: [] as (typeof schema.paymentAttempts.$inferSelect)[], offers: [] as { id: number; name: string; paymentType: string }[], primaryCard: null as number | null });
 }
+/** Для редактора автоматизацій: оффери Hub і воронки та продукти Hub (з позначкою стану). */
+export async function automationPickers() {
+  return safe(async () => ({
+    plans: await db().select({ id: plans.id, name: plans.name, isActive: plans.isActive }).from(plans).orderBy(plans.name),
+    funnels: await db().select({ id: funnels.id, name: funnels.name, kind: funnels.kind, isActive: funnels.isActive }).from(funnels).where(eq(funnels.source, "hub")).orderBy(funnels.kind, funnels.name),
+  }), { plans: [] as { id: number; name: string; isActive: boolean }[], funnels: [] as { id: number; name: string; kind: string; isActive: boolean }[] });
+}

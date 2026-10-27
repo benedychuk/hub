@@ -908,3 +908,52 @@ export async function markZenCancelled(fd: FormData) {
   revalidatePath("/migration"); redirect("/migration");
 }
 export async function planKeys(subscriptionOnly = false) { return db().select({ key: plansT.key, name: plansT.name }).from(plansT).where(subscriptionOnly ? and(eq(plansT.isActive, true), eq(plansT.paymentType, "subscription")) : eq(plansT.isActive, true)).orderBy(plansT.sortOrder); }
+
+// ---------- автоматизації ----------
+import { setAutomationsEnabled, TRIGGERS, ACTIONS, type RuleAction, type ActionKey, type TriggerKey } from "./automations";
+const automationsT = schema.automations;
+/** Загальний вимикач автоматизацій. Вимкнено за замовчуванням: поки вимкнено, жодне правило не виконується. */
+export async function saveAutomationsSwitch(fd: FormData) {
+  const on = fd.get("enabled") === "on";
+  await setAutomationsEnabled(on);
+  revalidatePath("/automations");
+  redirect("/automations?ok=" + encodeURIComponent(on ? "Автоматизації увімкнено: активні правила спрацьовуватимуть на нові події, старі події не обробляються." : "Автоматизації вимкнено: жодне правило не виконується."));
+}
+export async function saveAutomation(fd: FormData) {
+  const id = num(fd, "id");
+  const trigger = str(fd, "trigger") as TriggerKey;
+  const t = TRIGGERS.find((x) => x.key === trigger);
+  if (!t) redirect(`/automations/${id || "new"}?err=` + encodeURIComponent("Оберіть тригер."));
+  let parsed: RuleAction[] = [];
+  try { parsed = JSON.parse(str(fd, "actions") || "[]") as RuleAction[]; } catch { parsed = []; }
+  const actions: RuleAction[] = parsed.filter((a) => ACTIONS.some((x) => x.key === a.type)).map((a) => {
+    const kind = ACTIONS.find((x) => x.key === a.type)!.param;
+    return kind === "funnel" ? { type: a.type as ActionKey, funnelId: Number(a.funnelId) || undefined } : kind === "tag" ? { type: a.type as ActionKey, tag: String(a.tag ?? "").trim() } : { type: a.type as ActionKey, text: String(a.text ?? "").replace(/\r\n?/g, "\n").trim().slice(0, 4000) };
+  }).filter((a) => a.funnelId || a.tag || a.text);
+  if (!actions.length) redirect(`/automations/${id || "new"}?err=` + encodeURIComponent("Додайте хоча б одну дію й заповніть її: воронку, тег або текст."));
+  const condition: Record<string, unknown> = {};
+  if (t!.filter === "offer" && num(fd, "planId")) condition.planId = num(fd, "planId");
+  if (t!.filter === "funnel" && num(fd, "funnelId")) condition.funnelId = num(fd, "funnelId");
+  if (t!.filter === "tag") { const tag = str(fd, "tag"); if (!tag) redirect(`/automations/${id || "new"}?err=` + encodeURIComponent("Для тригера «Додано тег» вкажіть тег.")); condition.tag = tag; }
+  const unit = str(fd, "delayUnit"); const dv = Math.max(0, Math.min(10_000, num(fd, "delayValue")));
+  const delayMinutes = dv * (unit === "days" ? 1440 : unit === "hours" ? 60 : 1);
+  const values = { name: str(fd, "name") || t!.label, trigger, condition, delayMinutes, action: { actions }, isActive: fd.get("isActive") === "on", oncePerPerson: fd.get("oncePerPerson") === "on" };
+  if (id) await db().update(automationsT).set(values).where(eq(automationsT.id, id));
+  else await db().insert(automationsT).values(values);
+  revalidatePath("/automations");
+  redirect("/automations?ok=" + encodeURIComponent(`Правило «${values.name}» збережено${values.isActive ? "" : " вимкненим"}.`));
+}
+export async function toggleAutomation(fd: FormData) {
+  const id = num(fd, "id"); const [r] = await db().select({ a: automationsT.isActive }).from(automationsT).where(eq(automationsT.id, id));
+  if (r) await db().update(automationsT).set({ isActive: !r.a }).where(eq(automationsT.id, id));
+  revalidatePath("/automations");
+}
+export async function duplicateAutomation(fd: FormData) {
+  const [r] = await db().select().from(automationsT).where(eq(automationsT.id, num(fd, "id"))); if (!r) return;
+  const [n] = await db().insert(automationsT).values({ name: `${r.name} (копія)`, trigger: r.trigger, condition: r.condition, delayMinutes: r.delayMinutes, action: r.action, isActive: false, oncePerPerson: r.oncePerPerson }).returning({ id: automationsT.id });
+  revalidatePath("/automations"); redirect(`/automations/${n.id}`);
+}
+export async function deleteAutomation(fd: FormData) {
+  await db().delete(automationsT).where(eq(automationsT.id, num(fd, "id")));
+  revalidatePath("/automations"); redirect("/automations?ok=" + encodeURIComponent("Правило видалено."));
+}
