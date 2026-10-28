@@ -5,6 +5,6 @@ export const dateTime = (d: Date | string | null | undefined) => d ? new Date(d)
 export const fullName = (p: { firstName?: string | null; lastName?: string | null; username?: string | null; telegramUserId?: number }) =>
   [p.firstName, p.lastName].filter(Boolean).join(" ") || (p.username ? "@" + p.username : `tg ${p.telegramUserId}`);
 export const STATUS: Record<string, [string, string]> = {
-  trialing: ["Trial", "moon"], active: ["Active", "good"], past_due: ["Past due", "warn"], paused: ["Paused", ""], cancelled: ["Cancelled", "mute"], expired: ["Expired", "mute"], none: ["Без підписки", "mute"],
+  trialing: ["Trial", "moon"], active: ["Active", "good"], past_due: ["Past due", "warn"], paused: ["Paused", ""], cancelled: ["Cancelled", "mute"], expired: ["Expired", "mute"], refunded: ["Refunded", "moon"], none: ["Без підписки", "mute"],
 };
 export const PERIOD: Record<string, string> = { month: "міс", quarter: "3 міс", year: "рік" };

@@ -31,13 +31,14 @@ export function describeEvent(e: EventRow, n: Names): Described {
     case "payment.started": return { title: `Відкрила оплату${planName ? ` «${planName}»` : ""}`, detail: `${money(p.amount, p.currency)}${p.mode === "test" ? " · тест" : ""}`, href: planId ? `/offers/${planId}` : undefined, group: "payment" };
     case "payment.approved": return { title: p.kind === "renewal" ? "Автосписання пройшло" : `Оплата пройшла${planName ? `: «${planName}»` : ""}`, detail: `${money(p.amount, p.currency)}${p.until ? ` · доступ до ${dt(p.until)}` : ""}`, href: planId ? `/offers/${planId}` : undefined, group: "payment", tone: "good" };
     case "payment.declined": return { title: "Оплата не пройшла", detail: `${String(p.reason ?? "")} ${p.code ? `(${String(p.code)})` : ""}`.trim(), group: "payment", tone: "crit" };
-    case "payment.refunded": return { title: "Повернення коштів", detail: money(p.amount, "UAH"), group: "payment", tone: "warn" };
+    case "payment.refunded": return { title: "Повернення коштів", detail: money(p.amount, "UAH") + (p.revoke === false ? " · доступ лишено" : ""), group: "payment", tone: "warn" };
     case "payment.card_linked": return { title: p.migrate ? "Привʼязала картку для переїзду в Hub" : "Оновила картку", detail: p.nextChargeAt ? `наступне списання ${dt(p.nextChargeAt)}` : undefined, group: "payment", tone: "good" };
     case "payment.retry_scheduled": return { title: `Списання не пройшло, спроба ${String(p.retry ?? "")}`, detail: `наступна ${dt(p.next)} · ${String(p.reason ?? "")}`, group: "payment", tone: "warn" };
     case "payment.migrate_invite": return { title: "Надіслано запрошення на переїзд у Hub", detail: p.periodEnd ? `списання в ZenEdu ${dt(p.periodEnd)}` : undefined, group: "payment" };
     case "payment.bad_signature": return { title: "Відхилено зворотний виклик WayForPay (підпис)", group: "payment", tone: "crit" };
     case "subscription.cancel_scheduled": return { title: "Вимкнула продовження підписки", detail: p.until ? `доступ до ${dt(p.until)}` : undefined, group: "payment", tone: "warn" };
     case "subscription.resumed": return { title: "Відновила підписку", group: "payment", tone: "good" };
+    case "subscription.refunded": return { title: "Доступ закрито після повернення коштів", group: "payment", tone: "warn" };
     case "subscription.paused": return { title: "Підписку поставлено на паузу", group: "payment", tone: "warn" };
     case "subscription.expired": return { title: "Підписка завершилась", detail: String(p.reason ?? ""), group: "payment", tone: "mute" };
     case "access.granted": return { title: `Відкрито доступ за оффером «${planName || String(p.plan ?? "")}»`, detail: `${p.until ? `до ${dt(p.until)}` : "безстроково"}${e.source === "access_link" ? " · за посиланням доступу" : e.source === "admin" ? " · вручну" : ""}`, href: planId ? `/offers/${planId}` : undefined, group: "access", tone: "good" };

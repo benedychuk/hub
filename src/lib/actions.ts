@@ -885,8 +885,8 @@ export async function makeTestPayLink(fd: FormData) {
 }
 export async function refundPayment(fd: FormData) {
   const id = Number(fd.get("id")); const back = str(fd, "back") || "/payments?tab=hub";
-  const r = await refundAttempt(id, str(fd, "comment") || "Повернення з Hub");
-  revalidatePath("/payments"); redirect(`${back}${back.includes("?") ? "&" : "?"}${r.ok ? "ok=" + encodeURIComponent("Повернення виконано") : "err=" + encodeURIComponent("Повернення не пройшло: " + r.reason)}`);
+  const r = await refundAttempt(id, str(fd, "comment") || "Повернення з Hub", str(fd, "revoke") !== "0");
+  revalidatePath("/payments"); redirect(`${back}${back.includes("?") ? "&" : "?"}${r.ok ? "ok=" + encodeURIComponent(r.revoked ? "Кошти повернено, доступ закрито" : "Кошти повернено") : "err=" + encodeURIComponent("Повернення не пройшло: " + r.reason)}`);
 }
 export async function subscriptionAction(fd: FormData) {
   const id = Number(fd.get("id")); const personId = Number(fd.get("personId")); const act = str(fd, "act");

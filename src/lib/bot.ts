@@ -35,7 +35,7 @@ export function appUrl() {
 }
 
 const money = (p: string | number, cur: string) => `${Number(p).toLocaleString("uk-UA")} ${cur === "USD" ? "$" : cur === "EUR" ? "€" : "грн"}`;
-const STATUS_UA: Record<string, string> = { trialing: "пробний період", active: "активна", past_due: "очікує оплати", paused: "на паузі", cancelled: "скасована", expired: "завершена" };
+const STATUS_UA: Record<string, string> = { trialing: "пробний період", active: "активна", past_due: "очікує оплати", paused: "на паузі", cancelled: "скасована", expired: "завершена", refunded: "повернено кошти" };
 
 async function upsertFrom(from: { id: number; first_name?: string; last_name?: string; username?: string }, chatId: number) {
   const d = db();
