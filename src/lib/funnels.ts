@@ -3,6 +3,7 @@ import { InlineKeyboard, InputFile, InputMediaBuilder } from "grammy";
 import { db, schema } from "@/db";
 import { getBot, BOT_KEY } from "./bot";
 import { payLink } from "./payments";
+import { onboardingConfigured, ensureAccountForPerson, magicLinkFor } from "./onboarding";
 
 const { funnels, funnelSteps, funnelEnrollments, funnelDeliveries, funnelCommands, funnelLinks, identities, events, persons, media } = schema;
 
@@ -20,7 +21,7 @@ export const STEP_ICON: Record<string, string> = { message: "✉", lesson: "🎓
 
 export type SendTime = { mode: "no" | "immediately" | "after" | "exact" | "after_action"; value?: number; unit?: "minutes" | "hours" | "days"; day?: number; time?: string };
 export type AutoDelete = { mode: "never" | "in"; value?: number; unit?: "seconds" | "minutes" | "hours" };
-export type StepButton = { text: string; kind: "url" | "step" | "next" | "funnel" | "offer" | "tag" | "option"; target?: string; tag?: string; correct?: boolean };
+export type StepButton = { text: string; kind: "url" | "step" | "next" | "funnel" | "offer" | "tag" | "option" | "cabinet"; target?: string; tag?: string; correct?: boolean };
 export type StepConfig = {
   sendTime?: SendTime;
   autodelete?: AutoDelete;
@@ -211,6 +212,7 @@ function keyboardFor(step: typeof funnelSteps.$inferSelect, c: StepConfig, perso
   if (!c.buttons?.length) return undefined;
   const kb = new InlineKeyboard();
   c.buttons.forEach((b, i) => {
+    if (b.kind === "cabinet") { if (onboardingConfigured()) kb.url(b.text, magicLinkFor(personId)).row(); return; } // особистий кабінет: одноразове посилання саме цієї людини
     if (b.kind === "offer" && b.target?.startsWith("hub:")) kb.url(b.text, payLink(personId, b.target.slice(4), "first")).row(); // оффер Hub: персональне посилання на оплату
     else if ((b.kind === "url" || b.kind === "offer") && b.target) kb.url(b.text, b.target).row();
     else kb.text(b.text, `fs:${step.id}:${i}`).row();
@@ -224,6 +226,9 @@ export async function sendStep(personId: number, step: typeof funnelSteps.$infer
   const [idn] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
   if (!idn?.chatId || idn.blockedAt) return null;
   const api = getBot().api; const chat = idn.chatId;
+  if (c.buttons?.some((b) => b.kind === "cabinet") && onboardingConfigured()) { // кабінет створюється, якщо його ще немає, щоб посилання відкривало саме його
+    const [p] = await db().select().from(persons).where(eq(persons.id, personId)); if (p) await ensureAccountForPerson(p, "funnel").catch(() => null);
+  }
   const kb = keyboardFor(step, c, personId);
   const protect = Boolean(c.protect || funnelProtect);
   const [f] = await db().select({ settings: funnels.settings }).from(funnels).where(eq(funnels.id, step.funnelId));

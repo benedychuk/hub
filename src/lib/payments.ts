@@ -2,13 +2,13 @@ import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { createHmac } from "crypto";
 import { db, schema } from "@/db";
 import { appUrl, botToken, sendToPerson } from "./bot";
-import { accessTick } from "./telegram-access";
+import { accessTick, syncEntitlementsFromSubscriptions, enforcedChannelKeys, inviteAfterPayment } from "./telegram-access";
 import { creds, charge as wfpCharge, refund as wfpRefund, purchaseForm, verifyResponse, type Creds, type WfpResponse } from "./wayforpay";
 import { money } from "./format";
 import { adminTelegramId } from "./auth";
 import { periodDaysOf, accessEndFor, offerAvailability, syncProductAccess, expireOneTime } from "./offers";
 import { DEFAULT_GRACE_HOURS } from "./access-rule";
-import { onboardingConfigured, ensureAccountForPerson, magicLinkFor } from "./onboarding";
+import { onboardingConfigured, ensureAccountForPerson } from "./onboarding";
 
 const { persons, plans, subscriptions, orders, events, settings, paymentMethods, paymentAttempts, identities } = schema;
 export type Attempt = typeof paymentAttempts.$inferSelect;
@@ -160,11 +160,14 @@ async function onApproved(a: Attempt, r: WfpResponse, c: Creds) {
     await recordOrder(a, s, pl?.name ?? "Підписка Hub", oneTime ? "one_time" : hubSub && hubSub.paymentsCount > 0 ? "subscription_renew" : "subscription_start");
     await d.update(paymentAttempts).set({ subscriptionId: s.id }).where(eq(paymentAttempts.id, a.id));
     await d.insert(events).values({ personId: a.personId, type: "payment.approved", source: "wayforpay", payload: { attemptId: a.id, kind: a.kind, amount: a.amount, plan: pl?.key, until: end } });
-    const what = pl?.products?.length && !Object.keys(pl.entitlements ?? {}).length ? "Матеріали з'являться в цьому боті за хвилину." : "Посилання на канал прийде за хвилину.";
-    await notify(a.personId, `Оплату отримано: ${money(a.amount, a.currency)}. Доступ до «${pl?.name ?? "клубу"}» ${end ? `діє до ${end.toLocaleDateString("uk-UA")}` : "безстроковий"}${pl?.accessMode === "none" && oneTime ? "" : `. ${what}`}`);
+    // порядок повідомлень: підтвердження → одразу посилання в клуб (канал) → текст після покупки; кабінет створюється мовчки, посилання на нього дає воронка
+    const channels = await enforcedChannelKeys(Object.keys(pl?.entitlements ?? {})).catch(() => [] as string[]);
+    const what = channels.length ? "Нижче посилання для входу в клуб." : pl?.products?.length ? "Матеріали з'являться в цьому боті за хвилину." : "";
+    await notify(a.personId, `Оплату отримано: ${money(a.amount, a.currency)}. Доступ до «${pl?.name ?? "клубу"}» ${end ? `діє до ${end.toLocaleDateString("uk-UA")}` : "безстроковий"}.${pl?.accessMode === "none" && oneTime ? "" : what ? ` ${what}` : ""}`);
+    if (channels.length) { await syncEntitlementsFromSubscriptions().catch(() => null); await inviteAfterPayment(a.personId, channels).catch(() => null); }
     const pp = pl?.settings?.postPurchaseText?.trim();
     if (pp) { try { await sendToPerson(a.personId, pp, { html: true }); } catch { /* бот не запущений */ } }
-    await sendCabinetAccess(a.personId); // доступ до особистого кабінету онбордингу разом з оплатою
+    await createCabinetQuietly(a.personId);
   } else if (a.kind === "renewal") {
     if (hubSub) await extendAfterCharge(hubSub, a, pl?.name ?? "Підписка Hub", pm?.id ?? null);
   } else if (a.kind === "card" || a.kind === "migrate") {
@@ -198,15 +201,13 @@ async function recordOrder(a: Attempt, s: Sub, name: string, type: string) {
   return o;
 }
 async function notify(personId: number, text: string) { try { await sendToPerson(personId, text); } catch { /* бот не запущений */ } }
-/** Після оплати: кабінет платформи створюється для людини, у бот іде кнопка з одноразовим посиланням без пароля. */
-async function sendCabinetAccess(personId: number) {
+/** Після оплати кабінет платформи створюється мовчки: посилання на нього людина отримує у воронці (кнопка «Особистий кабінет») або командою /cabinet. */
+async function createCabinetQuietly(personId: number) {
   if (!onboardingConfigured()) return;
   try {
     const [p] = await db().select().from(persons).where(eq(persons.id, personId)); if (!p) return;
     await ensureAccountForPerson(p, "payment");
-    await sendToPerson(personId, "Вам відкрито особистий кабінет: тести, персональні матеріали й «Щиро». Доступ діє, поки активна підписка. Посилання одноразове, діє 48 годин; нове можна отримати командою /cabinet.", { buttons: [{ text: "Відкрити кабінет", url: magicLinkFor(personId) }] });
-    await db().insert(events).values({ personId, type: "onboarding.cabinet_link_sent", source: "hub", payload: { via: "payment" } });
-  } catch { /* бот не запущений або кабінет не налаштовано */ }
+  } catch { /* кабінет не налаштовано */ }
 }
 
 // ---------- автосписання ----------

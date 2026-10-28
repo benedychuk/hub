@@ -115,6 +115,7 @@ const KINDS: { k: StepButton["kind"]; label: string; hint: string }[] = [
   { k: "step", label: "Перейти до кроку", hint: "" },
   { k: "funnel", label: "Запустити воронку", hint: "" },
   { k: "offer", label: "Оффер / оплата", hint: "" },
+  { k: "cabinet", label: "Особистий кабінет", hint: "" },
   { k: "tag", label: "Лише поставити тег", hint: "" },
   { k: "option", label: "Варіант відповіді", hint: "" },
 ];
@@ -137,6 +138,7 @@ export function ButtonsEditor({ initial, steps, funnels, offers, stepType }: { i
           {b.kind === "step" && <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value })}><option value="">Оберіть крок</option>{steps.map((s, n) => <option key={s.id} value={s.id}>{n + 1}. {s.title ?? "Крок"}</option>)}</select>}
           {b.kind === "funnel" && <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value })}><option value="">Оберіть воронку</option>{funnels.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>}
           {b.kind === "offer" && <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value })}><option value="">Оберіть оффер</option>{offers.filter((o) => o.url).map((o) => <option key={o.id} value={o.url!}>{o.name}</option>)}</select>}
+          {b.kind === "cabinet" && <span className="fld-h">особисте одноразове посилання кожної людини; кабінет створиться, якщо його ще немає</span>}
           {(b.kind === "next" || b.kind === "tag" || b.kind === "option") && <input value={b.tag ?? ""} onChange={(e) => upd(i, { tag: e.target.value })} placeholder="тег за клік (порожньо = автотег)" />}
           {stepType === "quiz" && b.kind === "option" ? <label className="ck" title="Правильна відповідь"><input type="checkbox" checked={Boolean(b.correct)} onChange={(e) => upd(i, { correct: e.target.checked })} /> правильна</label> : <span />}
           <span className="row-actions">
