@@ -99,7 +99,7 @@ export function RichText({ name, defaultValue, max = 4096, minHeight = 180, plac
         <B title="Цитата" icon={I.quote} onClick={() => { const q = selectionIn("blockquote"); if (q) cmd("formatBlock", "div"); else cmd("formatBlock", "blockquote"); }} />
         <span className="rte-sep" />
         <B title="Прибрати форматування" icon={I.clear} onClick={() => { cmd("removeFormat"); cmd("unlink"); }} />
-        {variables?.length ? <span style={{ position: "relative" }}><B title="Вставити змінну" icon={I.var} onClick={() => setShowVars((v) => !v)} />{showVars && <div className="dd" style={{ left: 0, right: "auto", top: 34, position: "absolute", zIndex: 30 }}>{variables.map((v) => <button key={v.key} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertVar(v.key)}><code style={{ fontSize: 12 }}>{`{${v.key}}`}</code><span className="muted" style={{ fontSize: 12 }}>{v.label}</span></button>)}</div>}</span> : null}
+        {variables?.length ? <span style={{ position: "relative" }}><B title="Вставити змінну" icon={I.var} onClick={() => setShowVars((v) => !v)} />{showVars && <div className="dd rx" style={{ left: 0, right: "auto", top: 34, position: "absolute", zIndex: 30 }}>{variables.map((v) => <button key={v.key} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertVar(v.key)}><code style={{ fontSize: 12 }}>{`{${v.key}}`}</code><span className="muted" style={{ fontSize: 12 }}>{v.label}</span></button>)}</div>}</span> : null}
         <span className={`rte-cnt ${len > max ? "over" : ""}`}>{len} / {max}</span>
       </div>
       <div ref={ed} className="rte-ed" contentEditable suppressContentEditableWarning data-placeholder={placeholder} style={{ minHeight }}

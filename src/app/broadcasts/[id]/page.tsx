@@ -13,12 +13,12 @@ import { navCounts, broadcastDetail } from "@/lib/queries";
 import { saveBroadcastContent, saveBroadcastAudience, sendBroadcast, cancelBroadcast, deleteBroadcastFromSubscribers, deleteBroadcast, duplicateBroadcast, previewBroadcast, runBroadcastsNow } from "@/lib/actions";
 import { countAudience, previewAudience, SUB_STATUSES, STATUS_UA } from "@/lib/broadcasts";
 import { dateTime, fullName } from "@/lib/format";
+import { STANDARD_VARS as VARS } from "@/lib/vars";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 const RSTATUS: Record<string, [string, string]> = { pending: ["чекає", "mute"], sending: ["надсилається", "warn"], sent: ["отримала", "good"], failed: ["не доставлено", "crit"], deleted: ["видалено", "mute"] };
 const STEPS = ["Зміст", "Отримувачі", "Надсилання"];
-const VARS = [{ key: "first_name", label: "ім’я" }, { key: "last_name", label: "прізвище" }, { key: "name", label: "ім’я та прізвище" }, { key: "username", label: "@username" }];
 
 export default async function BroadcastEditor({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ step?: string; sent?: string; err?: string }> }) {
   const { id } = await params; const sp = await searchParams;

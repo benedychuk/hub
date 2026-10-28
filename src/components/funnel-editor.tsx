@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { STANDARD_VARS } from "@/lib/vars";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Eye, Play, Pause, Send, RefreshCw, Trash2, Pencil, Copy, ArrowUp, ArrowDown, Plus, GitBranch, Users, MessageSquareText, Package, Tag, Link2, DollarSign, Repeat, Forward } from "lucide-react";
@@ -197,7 +198,7 @@ export async function FunnelEditorView({ id, sp, kind }: { id: string; sp: Edito
         <div className="form">
           <Section title="Основне">
             <Field label="Назва"><input name="name" defaultValue={f.name} required maxLength={120} /></Field>
-            <Field label="Опис" hint={product ? "Для себе й для сторінки оффера." : "Показується у вступному повідомленні перед кнопкою."}><StepText name="description" defaultValue={f.description ?? ""} max={3000} minHeight={120} placeholder="Про що ця воронка й що отримає людина" /></Field>
+            <Field label="Опис" hint={product ? "Для себе й для сторінки оффера." : "Показується у вступному повідомленні перед кнопкою."}><StepText name="description" defaultValue={f.description ?? ""} max={3000} minHeight={120} placeholder="Про що ця воронка й що отримає людина" variables={STANDARD_VARS} /></Field>
             {!product && <Field label="Текст кнопки"><input name="buttonText" defaultValue={f.buttonText ?? "Отримати доступ"} maxLength={64} /></Field>}
             <Field label="Обкладинка"><CoverInput current={f.cover} /></Field>
           </Section>

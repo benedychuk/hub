@@ -10,6 +10,7 @@ import { coverFile, escapeHtml } from "./funnels";
 import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 import { linkAccountToPerson, magicLinkFor, onboardingConfigured, ensureAccountForPerson } from "./onboarding";
+import { fillVars, hasVars } from "./vars";
 import { mediaOf, saveMedia, startRecording, recordMessage, REC_KEYS, type RecKeyboard } from "./funnel-recorder";
 
 /** Клавіатура під полем вводу під час запису кроків воронки. */
@@ -239,7 +240,8 @@ export async function sendOfferMessage(chatId: number, personId: number, planId:
   const d = pl.design ?? {};
   const title = d.titleMode === "custom" && d.title ? d.title : pl.name;
   const allowed = await paymentsAllowedFor(personId);
-  const text = `<b>${escapeHtml(title)}</b>` + (d.description ? "\n\n" + d.description : "") + `\n\n${escapeHtml(priceLabel(pl))}${pl.paymentType === "one_time" ? ` · доступ ${escapeHtml(accessLabel(pl))}` : ""}` + (allowed ? "" : "\n\n" + escapeHtml(await paymentBlockedText(personId)));
+  const [who] = hasVars(d.description) ? await db().select().from(persons).where(eq(persons.id, personId)) : [];
+  const text = `<b>${escapeHtml(title)}</b>` + (d.description ? "\n\n" + fillVars(d.description, who, { html: true }) : "") + `\n\n${escapeHtml(priceLabel(pl))}${pl.paymentType === "one_time" ? ` · доступ ${escapeHtml(accessLabel(pl))}` : ""}` + (allowed ? "" : "\n\n" + escapeHtml(await paymentBlockedText(personId)));
   const kb = allowed ? new InlineKeyboard().url(d.buttonText || "Оплатити", payLink(personId, pl.key, "first")) : undefined;
   const photo = coverFile(d.image);
   if (photo && text.length <= 1024) await api.sendPhoto(chatId, photo, { caption: text, parse_mode: "HTML", reply_markup: kb });
@@ -275,6 +277,8 @@ export async function webhookInfo() {
 export async function sendToPerson(personId: number, text: string, opts: { buttons?: { text: string; url: string }[]; protect?: boolean; disablePreview?: boolean; html?: boolean } = {}) {
   const idn = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
   if (!idn[0]?.chatId || idn[0].blockedAt) return false;
+  // змінні людини ({first_name}, {{name}}, поля картки) у будь-якому тексті, що Hub надсилає людині
+  if (hasVars(text)) { const [p] = await db().select().from(persons).where(eq(persons.id, personId)); text = fillVars(text, p, { html: opts.html }); }
   const kb = opts.buttons?.length ? new InlineKeyboard() : undefined;
   opts.buttons?.forEach((b) => kb!.url(b.text, b.url).row());
   await getBot().api.sendMessage(idn[0].chatId, text, { reply_markup: kb, protect_content: opts.protect, parse_mode: opts.html ? "HTML" : undefined, link_preview_options: { is_disabled: opts.disablePreview ?? true } });
