@@ -258,6 +258,8 @@ export async function profilePayload(acc: Account) {
   const subs = acc.personId ? await d.select({ s: schema.subscriptions, planName: schema.plans.name }).from(schema.subscriptions).leftJoin(schema.plans, eq(schema.plans.id, schema.subscriptions.planId)).where(eq(schema.subscriptions.personId, acc.personId)).orderBy(desc(schema.subscriptions.updatedAt)) : [];
   const sub = subs.find((x) => subscriptionAllows(x.s, grace)) ?? subs[0];
   const live = Boolean(sub && subscriptionAllows(sub.s, grace));
+  // повернення коштів скасовує і тріал кабінету, створеного після оплати: доступ закривається повністю
+  const refunded = !live && subs.some((x) => x.s.status === "refunded");
   const subEnd = sub ? accessEnd(sub.s, grace) : null;
   const now = Date.now(); const ends = acc.trialEndsAt.getTime();
   const botUser = (await d.select({ u: schema.bots.username }).from(schema.bots).where(eq(schema.bots.key, "hub")))[0]?.u ?? null;
@@ -268,10 +270,10 @@ export async function profilePayload(acc: Account) {
     // доступ до кабінету: за підпискою безстроково (поки вона діє, з грейсом), інакше тріал 14 + 7 днів; колишня учасниця без тріалу бачить «доступ завершено»
     access_mode: live ? "subscription" : sub ? "subscription_ended" : "trial",
     access_until: live ? (sub!.s.currentPeriodEnd ? subEnd!.toISOString() : null) : acc.trialEndsAt.toISOString(),
-    access_active: live || ends > now,
+    access_active: live || (!refunded && ends > now),
     subscription_ended_at: !live && sub ? (subEnd ?? sub.s.currentPeriodEnd)?.toISOString() ?? null : null,
     registered_at: acc.registeredAt.toISOString(), registration_time: acc.registeredAt.getTime(), trial_expires_at: acc.trialEndsAt.toISOString(), extended_end_time: ends, extension_count: acc.extensionCount,
-    trial_state: live ? "subscription" : ends > now ? (ends - now < 72 * 3600_000 ? "expiring_soon" : "active") : acc.extensionCount > 0 ? "fully_expired" : "expired_14",
+    trial_state: live ? "subscription" : refunded ? "fully_expired" : ends > now ? (ends - now < 72 * 3600_000 ? "expiring_soon" : "active") : acc.extensionCount > 0 ? "fully_expired" : "expired_14",
     quiz_completed: Boolean(acc.quizCompletedAt), quiz_result_id: acc.quizResultId, quiz_scenario: acc.quizScenario, quiz: acc.quiz ?? {}, deep_quiz: acc.deepQuiz ?? {}, diagnostic_completed: Boolean(acc.diagnosticCompletedAt),
     feedback_completed: Boolean(acc.feedbackAt), feedback: acc.feedback ?? null, feedback_at: acc.feedbackAt?.toISOString() ?? null, tags: acc.tags ?? [],
     shchyro_url: "https://t.me/m_kravchuk_ai_bot",
