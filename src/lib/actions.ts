@@ -793,7 +793,9 @@ import { accessTick, reconcile as reconcileChannels, inviteNow } from "./telegra
 export async function saveChannelResource(fd: FormData) {
   const key = str(fd, "key"); if (!key) return;
   const [cur] = await db().select().from(resources).where(eq(resources.key, key));
-  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined, enforce: fd.get("enforce") === "on" };
+  const config = { ...((cur?.config ?? {}) as Record<string, unknown>), chatId: str(fd, "chatId") || undefined, joinMode: str(fd, "joinMode") || "invite", inviteTtlHours: Number(fd.get("inviteTtlHours") || 24), inviteText: str(fd, "inviteText") || undefined, kickText: str(fd, "kickText") || undefined, note: str(fd, "note") || undefined, enforce: fd.get("enforce") === "on",
+    // захищені учасниці ZenEdu: Telegram ID з будь-якого тексту чи CSV (числа 5–15 цифр), без дублів
+    protectedTgIds: [...new Set((str(fd, "protectedIds").match(/\d{5,15}/g) ?? []).map(Number))], protectZenActive: fd.get("protectZenActive") === "on" };
   await db().update(resources).set({ name: str(fd, "name") || cur?.name || key, config }).where(eq(resources.key, key));
   revalidatePath("/resources"); revalidatePath(`/resources/${key}`);
   redirect(`/resources/${key}?saved=1`);
