@@ -11,7 +11,7 @@ import { db, schema } from "@/db";
  * «доступ завершено».
  */
 export const DEFAULT_GRACE_HOURS = 24;
-const CLOSED = new Set(["paused"]);
+const CLOSED = new Set(["paused", "refunded"]); // пауза й повернення коштів закривають доступ одразу, без грейсу
 
 export async function accessGraceHours(): Promise<number> {
   try {
@@ -34,6 +34,6 @@ export function subscriptionAllows(s: SubLike, graceHours: number, now = new Dat
 }
 /** SQL-умова тієї самої логіки для таблиці підписок з псевдонімом alias. */
 export function subscriptionAllowsSql(alias: string, graceHours: number) {
-  return `(${alias}.status <> 'paused' and (case when ${alias}.current_period_end is null then ${alias}.status in ('active','trialing') else ${alias}.current_period_end + (${Math.max(0, Math.round(graceHours))} * interval '1 hour') > now() end))`;
+  return `(${alias}.status not in ('paused','refunded') and (case when ${alias}.current_period_end is null then ${alias}.status in ('active','trialing') else ${alias}.current_period_end + (${Math.max(0, Math.round(graceHours))} * interval '1 hour') > now() end))`;
 }
 export { inArray };

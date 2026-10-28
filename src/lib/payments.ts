@@ -350,7 +350,11 @@ export async function pauseSub(subId: number, by: string) {
   if (s) { await d.insert(events).values({ personId: s.personId, type: "subscription.paused", source: by, payload: { subscriptionId: subId } }); await notify(s.personId, "Підписку поставлено на паузу: списань і доступу до закритих матеріалів не буде, поки її не відновити (/subscriptions)."); await accessTick().catch(() => null); }
   return s;
 }
-export async function refundAttempt(attemptId: number, comment = "Повернення з Hub") {
+/**
+ * Повернення коштів через API WayForPay (без входу в кабінет WFP). revoke: скасувати дію платежу — підписка чи разовий доступ,
+ * які він дав, закриваються одразу (статус refunded, без грейсу й автосписань), права на канали, продукти й «Щиро» забираються.
+ */
+export async function refundAttempt(attemptId: number, comment = "Повернення з Hub", revoke = true) {
   const d = db(); const [a] = await d.select().from(paymentAttempts).where(eq(paymentAttempts.id, attemptId));
   if (!a || a.status !== "approved") return { ok: false, reason: "немає успішного платежу" };
   const c = creds(a.mode as "test" | "live");
@@ -359,8 +363,17 @@ export async function refundAttempt(attemptId: number, comment = "Поверне
   if (ok) {
     await d.update(paymentAttempts).set({ status: "refunded", raw: r as Record<string, unknown>, processedAt: new Date() }).where(eq(paymentAttempts.id, a.id));
     if (a.orderId) await d.update(orders).set({ status: "refunded" }).where(eq(orders.id, a.orderId));
-    await d.insert(events).values({ personId: a.personId, type: "payment.refunded", source: "wayforpay", payload: { attemptId: a.id, amount: a.amount } });
+    await d.insert(events).values({ personId: a.personId, type: "payment.refunded", source: "wayforpay", payload: { attemptId: a.id, amount: a.amount, revoke } });
+    if (revoke && a.subscriptionId) await revokeSubscription(a.subscriptionId, a.id);
   }
-  return { ok, reason: String(r.reason ?? r.transactionStatus ?? "") };
+  return { ok, reason: String(r.reason ?? r.transactionStatus ?? ""), revoked: ok && revoke && Boolean(a.subscriptionId) };
+}
+async function revokeSubscription(subId: number, attemptId: number) {
+  const d = db(); const now = new Date();
+  const [s] = await d.update(subscriptions).set({ status: "refunded", currentPeriodEnd: now, nextChargeAt: null, nextRetryAt: null, cancelAtPeriodEnd: false, cancelledAt: now, updatedAt: now }).where(eq(subscriptions.id, subId)).returning();
+  if (!s) return;
+  await d.insert(events).values({ personId: s.personId, type: "subscription.refunded", source: "hub", payload: { subscriptionId: s.id, attemptId, plan: s.planId } });
+  await accessTick().catch(() => null); // права на канали; виключення з каналу — лише якщо на ньому увімкнено автоматику доступу
+  await syncProductAccess(s.personId).catch(() => null);
 }
 export async function hubIdentity(personId: number) { const [i] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, "hub"))); return i ?? null; }
