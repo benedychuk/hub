@@ -14,6 +14,9 @@ export function domainName() { try { return new URL(appUrl()).host; } catch { re
 
 export const hmacMd5 = (secret: string, parts: (string | number)[]) => createHmac("md5", secret).update(parts.join(";"), "utf8").digest("hex");
 export const money2 = (n: number | string) => Number(n).toFixed(2);
+/** Сума так, як її запише JSON-число (500, 500.5): для запитів API підпис рахується з того самого запису, що й у тілі запиту. */
+export const moneyNum = (n: number | string) => String(Number(Number(n).toFixed(2)));
+const badSignature = (r: WfpResponse) => /signature/i.test(String(r.reason ?? "")) || String(r.reasonCode ?? "") === "1113";
 
 export type Product = { name: string; price: number; count?: number };
 type Base = { orderReference: string; amount: number; currency: string; products: Product[]; orderDate?: number };
@@ -40,22 +43,37 @@ export function purchaseForm(c: Creds, o: Base & { client?: { firstName?: string
 /** Автосписання за токеном картки (Charge, host-to-host). */
 export async function charge(c: Creds, o: Base & { recToken: string; client: { firstName?: string; lastName?: string; email?: string; phone?: string }; serviceUrl: string }) {
   const orderDate = o.orderDate ?? Math.floor(Date.now() / 1000);
-  const names = o.products.map((p) => p.name), counts = o.products.map((p) => p.count ?? 1), prices = o.products.map((p) => money2(p.price));
-  const amount = money2(o.amount);
-  const body = {
+  // формат суми: спершу як JSON-число (500), а якщо WayForPay не прийме підпис — рядком із копійками ("500.00");
+  // запит з невірним підписом WayForPay не виконує, тож повтор безпечний
+  let r: WfpResponse = {};
+  for (const fmt of [moneyNum, money2]) {
+    r = await api(c, chargeBody(c, o, orderDate, fmt));
+    if (!badSignature(r)) break;
+  }
+  return r;
+}
+function chargeBody(c: Creds, o: Base & { recToken: string; client: { firstName?: string; lastName?: string; email?: string; phone?: string }; serviceUrl: string }, orderDate: number, fmt: (n: number | string) => string) {
+  const names = o.products.map((p) => p.name), counts = o.products.map((p) => p.count ?? 1), prices = o.products.map((p) => fmt(p.price));
+  const amount = fmt(o.amount); const asNum = fmt === moneyNum;
+  return {
     transactionType: "CHARGE", merchantAccount: c.account, merchantAuthType: "SimpleSignature", merchantDomainName: domainName(),
     merchantSignature: hmacMd5(c.secret, [c.account, domainName(), o.orderReference, orderDate, amount, o.currency, ...names, ...counts, ...prices]),
-    apiVersion: 1, orderReference: o.orderReference, orderDate, amount: Number(amount), currency: o.currency,
-    productName: names, productPrice: prices.map(Number), productCount: counts,
+    apiVersion: 1, orderReference: o.orderReference, orderDate, amount: asNum ? Number(amount) : amount, currency: o.currency,
+    productName: names, productPrice: asNum ? prices.map(Number) : prices, productCount: counts,
     recToken: o.recToken, clientFirstName: o.client.firstName ?? "Client", clientLastName: o.client.lastName ?? "Hub", clientEmail: o.client.email ?? undefined, clientPhone: o.client.phone ?? undefined,
     serviceUrl: o.serviceUrl,
   };
-  return api(c, body);
 }
 
 export async function refund(c: Creds, o: { orderReference: string; amount: number; currency: string; comment: string }) {
-  const amount = money2(o.amount);
-  return api(c, { transactionType: "REFUND", merchantAccount: c.account, orderReference: o.orderReference, amount: Number(amount), currency: o.currency, comment: o.comment, merchantSignature: hmacMd5(c.secret, [c.account, o.orderReference, amount, o.currency]), apiVersion: 1 });
+  // підпис з того самого запису суми, що в тілі запиту; при «Invalid signature» — другий формат (див. charge)
+  let r: WfpResponse = {};
+  for (const fmt of [moneyNum, money2]) {
+    const amount = fmt(o.amount);
+    r = await api(c, { transactionType: "REFUND", merchantAccount: c.account, orderReference: o.orderReference, amount: fmt === moneyNum ? Number(amount) : amount, currency: o.currency, comment: o.comment, merchantSignature: hmacMd5(c.secret, [c.account, o.orderReference, amount, o.currency]), apiVersion: 1 });
+    if (!badSignature(r)) break;
+  }
+  return r;
 }
 export async function checkStatus(c: Creds, orderReference: string) {
   return api(c, { transactionType: "CHECK_STATUS", merchantAccount: c.account, orderReference, merchantSignature: hmacMd5(c.secret, [c.account, orderReference]), apiVersion: 1 });
