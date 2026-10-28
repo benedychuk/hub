@@ -103,6 +103,20 @@ async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, p
     return null;
   }
 }
+/** Канали з увімкненою автоматикою доступу серед ресурсів оффера: саме туди Hub сам надсилає посилання. */
+export async function enforcedChannelKeys(keys: string[]) {
+  return (await enforcedResources()).filter((x) => keys.includes(x.r.key)).map((x) => x.r.key);
+}
+/** Одразу після оплати: посилання в канали оффера (лише з увімкненою автоматикою), якщо людина ще не в каналі. */
+export async function inviteAfterPayment(personId: number, keys: string[]) {
+  let sent = 0;
+  for (const { r, cfg } of (await enforcedResources()).filter((x) => keys.includes(x.r.key))) {
+    const [m] = await db().select({ status: memberships.status }).from(memberships).where(and(eq(memberships.personId, personId), eq(memberships.resourceKey, r.key)));
+    if (m?.status === "joined" || !(await hasEntitlement(personId, r.key))) continue;
+    if (await inviteOne(r, cfg, personId)) sent++;
+  }
+  return sent;
+}
 /** Запрошення вручну з картки людини: працює і без увімкненої автоматики, бо це явна дія адміністратора; людина має мати право на ресурс. */
 export async function inviteNow(personId: number, resourceKey: string) {
   const res = (await channelResources()).find((x) => x.r.key === resourceKey);

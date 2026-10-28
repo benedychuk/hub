@@ -32,6 +32,16 @@ async function sessionValid(token: string | undefined) {
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  // WayForPay повертає людину на returnUrl POST-запитом із результатом платежу; сторінка приймає лише GET,
+  // тому відповідаємо 303 на ту саму адресу (номер платежу з адреси або з тіла запиту)
+  if (req.method === "POST" && pathname === "/pay/done") {
+    const url = req.nextUrl.clone();
+    if (!url.searchParams.get("ref")) {
+      const ref = await req.formData().then((f) => String(f.get("orderReference") ?? "")).catch(() => "");
+      if (ref) url.searchParams.set("ref", ref);
+    }
+    return NextResponse.redirect(url, 303);
+  }
   if (PUBLIC.includes(pathname) || PUBLIC_PREFIX.some((p) => pathname.startsWith(p))) return NextResponse.next();
   if (await sessionValid(req.cookies.get(COOKIE)?.value)) return NextResponse.next();
   const url = req.nextUrl.clone(); url.pathname = "/login"; url.search = ""; url.searchParams.set("next", pathname + (req.nextUrl.search || ""));
