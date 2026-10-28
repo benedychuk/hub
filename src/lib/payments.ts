@@ -9,6 +9,7 @@ import { adminTelegramId } from "./auth";
 import { periodDaysOf, accessEndFor, offerAvailability, syncProductAccess, expireOneTime } from "./offers";
 import { DEFAULT_GRACE_HOURS } from "./access-rule";
 import { onboardingConfigured, ensureAccountForPerson } from "./onboarding";
+import { shchyroPushChanges } from "./shchyro";
 
 const { persons, plans, subscriptions, orders, events, settings, paymentMethods, paymentAttempts, identities } = schema;
 export type Attempt = typeof paymentAttempts.$inferSelect;
@@ -375,5 +376,6 @@ async function revokeSubscription(subId: number, attemptId: number) {
   await d.insert(events).values({ personId: s.personId, type: "subscription.refunded", source: "hub", payload: { subscriptionId: s.id, attemptId, plan: s.planId } });
   await accessTick().catch(() => null); // права на канали; виключення з каналу — лише якщо на ньому увімкнено автоматику доступу
   await syncProductAccess(s.personId).catch(() => null);
+  await shchyroPushChanges().catch(() => null); // «Щиро»: revoke одразу, не чекаючи тіку (лише коли інтеграцію увімкнено)
 }
 export async function hubIdentity(personId: number) { const [i] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, "hub"))); return i ?? null; }

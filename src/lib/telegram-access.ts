@@ -147,23 +147,43 @@ export async function processGrants(limit = 30) {
   return { invited, skipped, failed };
 }
 
-/** Виключає з каналу тих, хто в ньому, але права більше не має. Людина може повернутись за новим посиланням. */
+const NO_RIGHT = sql`not exists (select 1 from entitlements e where e.person_id = m.person_id and e.resource_key = m.resource_key and e.revoked_at is null and (e.valid_until is null or e.valid_until > now()))`;
+/** Відкликає посилання-запрошення в Telegram: ним більше ніхто не зайде. Помилку (посилання вже недійсне) ігноруємо. */
+async function revokeLink(chatId: string, link: string | null | undefined) {
+  if (!link) return;
+  await getBot().api.revokeChatInviteLink(chatId, link).catch(() => null);
+}
+
+/**
+ * Виключає з каналу тих, хто в ньому, але права більше не має, і відкликає видані їм посилання
+ * (посилання з member_limit: 1 знову спрацьовує, щойно людина вийшла, тож без відкликання вона повернулась би ним самим).
+ * Людина може повернутись за новим посиланням, коли знову матиме право.
+ */
 export async function processRevocations(limit = 30) {
   const d = db();
   const bot = getBot();
-  let kicked = 0, failed = 0;
+  let kicked = 0, failed = 0, linksRevoked = 0;
   for (const { r, cfg } of await enforcedResources()) {
+    const links = await d.execute(sql`
+      select m.id, m.invite_link from memberships m
+      where m.resource_key = ${r.key} and m.invite_link is not null and m.status <> 'joined' and ${NO_RIGHT}
+      limit ${limit}`);
+    for (const row of links.rows as { id: number; invite_link: string }[]) {
+      await revokeLink(cfg.chatId!, row.invite_link);
+      await d.update(memberships).set({ inviteLink: null, inviteExpiresAt: null, status: sql`case when ${memberships.status} = 'invited' then 'none' else ${memberships.status} end`, updatedAt: new Date() }).where(eq(memberships.id, row.id));
+      linksRevoked++;
+    }
     const due = await d.execute(sql`
-      select m.person_id, p.telegram_user_id from memberships m join persons p on p.id = m.person_id
-      where m.resource_key = ${r.key} and m.status = 'joined'
-        and not exists (select 1 from entitlements e where e.person_id = m.person_id and e.resource_key = m.resource_key and e.revoked_at is null and (e.valid_until is null or e.valid_until > now()))
+      select m.person_id, p.telegram_user_id, m.invite_link from memberships m join persons p on p.id = m.person_id
+      where m.resource_key = ${r.key} and m.status = 'joined' and ${NO_RIGHT}
         ${notProtectedSql(cfg)}
       limit ${limit}`);
-    for (const row of due.rows as { person_id: number; telegram_user_id: number }[]) {
+    for (const row of due.rows as { person_id: number; telegram_user_id: number; invite_link: string | null }[]) {
       try {
+        await revokeLink(cfg.chatId!, row.invite_link); // спершу посилання, щоб ним не можна було одразу зайти знову
         await bot.api.banChatMember(cfg.chatId!, row.telegram_user_id);
         await bot.api.unbanChatMember(cfg.chatId!, row.telegram_user_id, { only_if_banned: true });
-        await d.update(memberships).set({ status: "kicked", kickedAt: new Date(), updatedAt: new Date() }).where(and(eq(memberships.personId, row.person_id), eq(memberships.resourceKey, r.key)));
+        await d.update(memberships).set({ status: "kicked", kickedAt: new Date(), inviteLink: null, inviteExpiresAt: null, updatedAt: new Date() }).where(and(eq(memberships.personId, row.person_id), eq(memberships.resourceKey, r.key)));
         await d.insert(events).values({ personId: row.person_id, type: "channel.kicked", source: "hub", payload: { resource: r.key } });
         await sendTo(row.person_id, cfg.kickText || `Термін доступу до «${r.name}» завершився. Щоб повернутись, поновіть підписку: /plans`).catch(() => null);
         kicked++;
@@ -174,7 +194,7 @@ export async function processRevocations(limit = 30) {
       await new Promise((res) => setTimeout(res, 60));
     }
   }
-  return { kicked, failed };
+  return { kicked, failed, linksRevoked };
 }
 
 /** Звірка: питаємо Telegram про кожного, хто за нашими даними в каналі. */
@@ -213,12 +233,28 @@ export async function onChatMember(chatId: number, user: { id: number; first_nam
   const expectedPid = inviteName?.match(/^p(\d+)$/)?.[1];
   const note = expectedPid && Number(expectedPid) !== p.id ? `посилання видавалось людині #${expectedPid}` : null;
   const status = inChat ? "joined" : newStatus === "kicked" ? "kicked" : "left";
+  // особисте посилання одноразове: щойно ним зайшли, відкликаємо (інакше після виходу чи виключення воно спрацювало б знову)
+  if (inChat && expectedPid && hit.cfg.joinMode !== "request") {
+    const [m] = await d.select({ id: memberships.id, link: memberships.inviteLink }).from(memberships).where(and(eq(memberships.personId, Number(expectedPid)), eq(memberships.resourceKey, hit.r.key)));
+    if (m?.link) { await revokeLink(hit.cfg.chatId!, m.link); await d.update(memberships).set({ inviteLink: null, updatedAt: new Date() }).where(eq(memberships.id, m.id)); }
+  }
   await d.insert(memberships).values({ personId: p.id, resourceKey: hit.r.key, status, joinedAt: inChat ? new Date() : null, leftAt: inChat ? null : new Date(), note, updatedAt: new Date() })
     .onConflictDoUpdate({ target: [memberships.personId, memberships.resourceKey], set: { status, joinedAt: inChat ? new Date() : sql`${memberships.joinedAt}`, leftAt: inChat ? null : new Date(), note, updatedAt: new Date() } });
   await d.insert(events).values({ personId: p.id, type: inChat ? "channel.joined" : "channel.left", source: "hub", payload: { resource: hit.r.key, via: inviteName ?? null, note } });
   if (inChat && !(await hasEntitlement(p.id, hit.r.key)) && hit.cfg.joinMode !== "request" && !(await isProtected(hit.cfg, p.id, user.id))) {
-    // зайшов без права (переслане посилання чи чужий інвайт) — виключаємо на наступному тіку
+    // зайшов без права (переслане посилання, чужий інвайт, право забрано після повернення коштів):
+    // з увімкненою автоматикою доступу виключаємо одразу, інакше лише записуємо подію
     await d.insert(events).values({ personId: p.id, type: "channel.joined_without_access", source: "hub", payload: { resource: hit.r.key } });
+    if (hit.cfg.enforce === true) {
+      try {
+        await getBot().api.banChatMember(hit.cfg.chatId!, user.id);
+        await getBot().api.unbanChatMember(hit.cfg.chatId!, user.id, { only_if_banned: true });
+        await d.update(memberships).set({ status: "kicked", kickedAt: new Date(), updatedAt: new Date() }).where(and(eq(memberships.personId, p.id), eq(memberships.resourceKey, hit.r.key)));
+        await d.insert(events).values({ personId: p.id, type: "channel.kicked", source: "hub", payload: { resource: hit.r.key, reason: "joined_without_access" } });
+      } catch (e) {
+        await d.insert(events).values({ personId: p.id, type: "channel.kick_failed", source: "hub", payload: { resource: hit.r.key, error: String(e).slice(0, 200) } });
+      }
+    }
   }
 }
 
