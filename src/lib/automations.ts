@@ -3,6 +3,7 @@ import { db, schema } from "@/db";
 import { adminTelegramId } from "./auth";
 import { enroll, addTag, stopEnrollment } from "./funnels";
 import { getBot, sendToPerson } from "./bot";
+import { fillVars } from "./vars";
 
 /**
  * Автоматизації «тригер → дії». Тригери — події з журналу `events` (оплата, підписка, воронка, тег, бот),
@@ -128,7 +129,7 @@ async function fill(text: string, ctx: Ctx, appUrl: string) {
   const [pl] = ctx.planId ? await db().select({ name: plans.name }).from(plans).where(eq(plans.id, ctx.planId)) : [];
   const [f] = ctx.funnelId ? await db().select({ name: funnels.name }).from(funnels).where(eq(funnels.id, ctx.funnelId)) : [];
   const name = [p?.firstName, p?.lastName].filter(Boolean).join(" ") || (p?.username ? `@${p.username}` : `людина #${ctx.personId}`);
-  return text.replace(/\{\{\s*name\s*\}\}/g, name).replace(/\{\{\s*offer\s*\}\}/g, pl?.name ?? "").replace(/\{\{\s*funnel\s*\}\}/g, f?.name ?? "").replace(/\{\{\s*link\s*\}\}/g, `${appUrl}/people/${ctx.personId}`);
+  return fillVars(text.replace(/\{\{\s*name\s*\}\}/g, name).replace(/\{\{\s*offer\s*\}\}/g, pl?.name ?? "").replace(/\{\{\s*funnel\s*\}\}/g, f?.name ?? "").replace(/\{\{\s*link\s*\}\}/g, `${appUrl}/people/${ctx.personId}`), p);
 }
 
 export async function runActions(rule: Rule, ctx: Ctx, appUrl: string) {

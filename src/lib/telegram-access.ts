@@ -2,6 +2,7 @@ import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { InlineKeyboard } from "grammy";
 import { db, schema } from "@/db";
 import { getBot, BOT_KEY } from "./bot";
+import { fillVars, hasVars } from "./vars";
 import { accessGraceHours, accessEnd, subscriptionAllows } from "./access-rule";
 
 const { resources, entitlements, memberships, identities, persons, events, subscriptions, plans, settings } = schema;
@@ -45,6 +46,7 @@ async function enforcedResources() { return (await channelResources()).filter((x
 async function sendTo(personId: number, text: string, kb?: InlineKeyboard) {
   const [idn] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
   if (!idn?.chatId || idn.blockedAt) return false;
+  if (hasVars(text)) { const [p] = await db().select().from(persons).where(eq(persons.id, personId)); text = fillVars(text, p); }
   await getBot().api.sendMessage(idn.chatId, text, { reply_markup: kb, link_preview_options: { is_disabled: true } });
   return true;
 }

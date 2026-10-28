@@ -4,6 +4,7 @@ import { db, schema } from "@/db";
 import { getBot, BOT_KEY } from "./bot";
 import { payLink } from "./payments";
 import { onboardingConfigured, ensureAccountForPerson, magicLinkFor } from "./onboarding";
+import { fillVars, hasVars } from "./vars";
 
 const { funnels, funnelSteps, funnelEnrollments, funnelDeliveries, funnelCommands, funnelLinks, identities, events, persons, media } = schema;
 
@@ -208,10 +209,16 @@ export async function stopAllForPerson(personId: number, reason: string) {
   return rows.length;
 }
 
-function keyboardFor(step: typeof funnelSteps.$inferSelect, c: StepConfig, personId: number) {
+type Who = typeof persons.$inferSelect | null;
+/** Людина для підстановки змінних, лише якщо в текстах є змінні. */
+async function whoFor(personId: number, ...texts: (string | null | undefined)[]): Promise<Who> {
+  if (!texts.some((t) => hasVars(t))) return null;
+  const [p] = await db().select().from(persons).where(eq(persons.id, personId)); return p ?? null;
+}
+function keyboardFor(step: typeof funnelSteps.$inferSelect, c: StepConfig, personId: number, who: Who = null) {
   if (!c.buttons?.length) return undefined;
   const kb = new InlineKeyboard();
-  c.buttons.forEach((b, i) => {
+  c.buttons.map((b) => ({ ...b, text: fillVars(b.text, who) })).forEach((b, i) => {
     if (b.kind === "cabinet") { if (onboardingConfigured()) kb.url(b.text, magicLinkFor(personId)).row(); return; } // особистий кабінет: одноразове посилання саме цієї людини
     if (b.kind === "offer" && b.target?.startsWith("hub:")) kb.url(b.text, payLink(personId, b.target.slice(4), "first")).row(); // оффер Hub: персональне посилання на оплату
     else if ((b.kind === "url" || b.kind === "offer") && b.target) kb.url(b.text, b.target).row();
@@ -229,11 +236,12 @@ export async function sendStep(personId: number, step: typeof funnelSteps.$infer
   if (c.buttons?.some((b) => b.kind === "cabinet") && onboardingConfigured()) { // кабінет створюється, якщо його ще немає, щоб посилання відкривало саме його
     const [p] = await db().select().from(persons).where(eq(persons.id, personId)); if (p) await ensureAccountForPerson(p, "funnel").catch(() => null);
   }
-  const kb = keyboardFor(step, c, personId);
+  const who = await whoFor(personId, step.body, step.title, ...(c.buttons ?? []).map((b) => b.text));
+  const kb = keyboardFor(step, c, personId, who);
   const protect = Boolean(c.protect || funnelProtect);
   const [f] = await db().select({ settings: funnels.settings }).from(funnels).where(eq(funnels.id, step.funnelId));
   const lessonTitles = Boolean(((f?.settings ?? {}) as FunnelSettings).lessonTitles);
-  const body = (step.type === "lesson" && lessonTitles && step.title ? `<b>${step.title}</b>\n\n` : "") + (step.body ?? "");
+  const body = fillVars((step.type === "lesson" && lessonTitles && step.title ? `<b>${step.title}</b>\n\n` : "") + (step.body ?? ""), who, { html: true });
   const ids: number[] = [];
   const meds = c.attachments?.length ? await db().select().from(media).where(inArray(media.id, c.attachments)) : [];
   const ordered = (c.attachments ?? []).map((id) => meds.find((m) => m.id === id)).filter(Boolean) as typeof meds;
@@ -404,7 +412,7 @@ export async function onButtonClick(stepId: number, btnIdx: number, personId: nu
     if (c.saveTo) await d.update(persons).set({ customFields: sql`coalesce(${persons.customFields}, '{}'::jsonb) || ${JSON.stringify({ [c.saveTo]: b.text })}::jsonb` }).where(eq(persons.id, personId));
     await d.update(funnelEnrollments).set({ awaitingStepId: null }).where(and(eq(funnelEnrollments.funnelId, step.funnelId), eq(funnelEnrollments.personId, personId)));
     await triggerAfterAction(step.funnelId, step.id, personId);
-    if (step.type === "quiz") return b.correct ? (c.correctText || "✅ Правильно!") : (c.wrongText || "❌ Не зовсім. Спробуй ще раз або рухаймося далі.");
+    if (step.type === "quiz") { const t = b.correct ? (c.correctText || "✅ Правильно!") : (c.wrongText || "❌ Не зовсім. Спробуй ще раз або рухаймося далі."); return fillVars(t, await whoFor(personId, t)); }
     return null;
   }
   if (b.kind === "tag") await triggerAfterAction(step.funnelId, step.id, personId);
@@ -462,7 +470,7 @@ export async function sendIntro(funnelId: number, personId: number, linkSlug?: s
   if (!idn?.chatId) return false;
   const api = getBot().api;
   const kb = new InlineKeyboard().text(f.buttonText || "Отримати доступ", `fstart:${f.id}${linkSlug ? ":" + linkSlug : ""}`);
-  const text = `<b>${escapeHtml(f.name)}</b>${f.description ? "\n\n" + f.description : ""}`;
+  const text = `<b>${escapeHtml(f.name)}</b>${f.description ? "\n\n" + fillVars(f.description, await whoFor(personId, f.description), { html: true }) : ""}`;
   const photo = coverFile(f.cover);
   if (photo && text.length <= 1024) await api.sendPhoto(idn.chatId, photo, { caption: text, parse_mode: "HTML", reply_markup: kb });
   else { if (photo) await api.sendPhoto(idn.chatId, photo); await api.sendMessage(idn.chatId, text, { parse_mode: "HTML", reply_markup: kb, link_preview_options: { is_disabled: true } }); }

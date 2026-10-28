@@ -6,7 +6,8 @@ import { payLink } from "./payments";
 import type { BroadcastAudience, BroadcastButton } from "@/db/schema";
 import { getBot, BOT_KEY, appUrl, botToken } from "./bot";
 import { adminTelegramId } from "./auth";
-import { addTag, enroll, processDue, onCommand, stopEnrollment, escapeHtml } from "./funnels";
+import { addTag, enroll, processDue, onCommand, stopEnrollment } from "./funnels";
+import { fillVars } from "./vars";
 
 const { broadcasts, broadcastRecipients, broadcastClicks, persons, identities, media, events, funnelEnrollments, offers } = schema;
 
@@ -78,14 +79,8 @@ export async function snapshotRecipients(id: number) {
 
 // ---------- зміст ----------
 type Person = typeof persons.$inferSelect;
-/** Змінні в тексті: {first_name} {last_name} {name} {username} {telegram_id}. Значення екрануються для HTML. */
-export function renderText(text: string, p: Person) {
-  const v: Record<string, string> = {
-    first_name: p.firstName ?? "", last_name: p.lastName ?? "", name: [p.firstName, p.lastName].filter(Boolean).join(" ") || p.username || "",
-    username: p.username ? "@" + p.username : "", telegram_id: String(p.telegramUserId),
-  };
-  return text.replace(/\{(first_name|last_name|name|username|telegram_id)\}/g, (_, k) => escapeHtml(v[k] ?? ""));
-}
+/** Змінні в тексті розсилки: спільний набір із lib/vars ({first_name}, {{name}}, {first_name|друже}, поля картки). */
+export function renderText(text: string, p: Person) { return fillVars(text, p, { html: true }); }
 
 function sign(payload: string) { return createHmac("sha256", process.env.SESSION_SECRET ?? botToken()).update("bc:" + payload).digest("hex").slice(0, 16); }
 /** Токен редиректу для кнопки-посилання: r<recipientId> або p<broadcastId> (перегляд), номер кнопки, підпис. */

@@ -12,7 +12,7 @@ import { navCounts, stepDetail } from "@/lib/queries";
 import { saveStep, deleteStep, addStep, sendStepToPeople } from "@/lib/actions";
 import { STEP_TYPES, sendTimeLabel, type StepConfig, type FunnelSettings } from "@/lib/funnels";
 
-const VARS = [{ key: "first_name", label: "ім’я" }, { key: "name", label: "ім’я та прізвище" }, { key: "username", label: "@username" }];
+import { STANDARD_VARS as VARS } from "@/lib/vars";
 
 export type StepSP = { saved?: string; sent?: string; sentTo?: string; failed?: string };
 export async function StepEditorView({ id, sid, sp, kind }: { id: string; sid: string; sp: StepSP; kind: "funnel" | "product" }) {

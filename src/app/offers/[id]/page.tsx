@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { STANDARD_VARS } from "@/lib/vars";
 import { notFound } from "next/navigation";
 import { Eye, Play, Pause, Copy, Trash2, Tag, Plus, Link2, Bot, Users } from "lucide-react";
 import Shell from "@/components/shell";
@@ -102,7 +103,7 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
           <Section title="Сторінка оплати й повідомлення в боті" description="Те саме оформлення бачать на сторінці оплати і в повідомленні бота за посиланням оффера.">
             <Field label="Заголовок" hint="Порожньо = назва оффера."><input name="title" defaultValue={design.titleMode === "custom" ? design.title ?? "" : ""} maxLength={120} placeholder={pl.name} /></Field>
             <input type="hidden" name="titleMode" value="custom" />
-            <Field label="Опис" hint="Що отримає людина. Форматування як у Telegram."><StepText name="description" defaultValue={design.description ?? ""} max={4000} minHeight={140} placeholder="Опишіть, що входить в оффер і для кого він" /></Field>
+            <Field label="Опис" hint="Що отримає людина. Форматування як у Telegram."><StepText name="description" defaultValue={design.description ?? ""} max={4000} minHeight={140} placeholder="Опишіть, що входить в оффер і для кого він" variables={STANDARD_VARS} /></Field>
             <Field label="Текст кнопки"><input name="buttonText" defaultValue={design.buttonText ?? ""} maxLength={64} placeholder="Оплатити" /></Field>
             <Field label="Зображення"><CoverInput current={design.image ?? null} /></Field>
           </Section>
@@ -122,7 +123,7 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
             <Switch name="removeContentOnEnd" defaultChecked={Boolean(st.removeContentOnEnd)} label="Прибрати надіслані кроки з бота, коли доступ закінчиться" hint="повідомлення продуктів видаляються в чаті з ботом; канали закриваються за правилами каналу" />
           </Section>
           <Section title="Після покупки" description="Надсилається в боті одразу після успішної оплати, після стандартного підтвердження.">
-            <Field label="Повідомлення в боті"><StepText name="postPurchaseText" defaultValue={st.postPurchaseText ?? ""} max={4000} minHeight={120} placeholder="Дякую за покупку! Ось що робити далі…" /></Field>
+            <Field label="Повідомлення в боті"><StepText name="postPurchaseText" defaultValue={st.postPurchaseText ?? ""} max={4000} minHeight={120} placeholder="Дякую за покупку! Ось що робити далі…" variables={STANDARD_VARS} /></Field>
           </Section>
           {pl.paymentType === "subscription" && <Section title="Відновлення оплат підписки">
             <Switch name="retries" defaultChecked={st.retries !== false} label="Повторні списання" hint="1, 3 і 5 днів після невдалого списання; доступ зберігається (past due)" />
@@ -131,7 +132,7 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
           {pl.paymentType === "one_time" && pl.accessMode !== "forever" && pl.accessMode !== "none" && <Section title="Нагадування про закінчення доступу">
             <Switch name="expiryReminder" defaultChecked={Boolean(st.expiryReminder)} label="Нагадувати, що доступ закінчується" />
             <FormRow><Field label="За скільки днів"><input name="expiryDays" type="number" min={1} defaultValue={st.expiryDays ?? 3} /></Field><Field label="Оффер для продовження" hint="кнопка з оплатою в нагадуванні"><select name="renewalOfferId" defaultValue={st.renewalOfferId ?? ""}><option value="">без кнопки</option>{d!.others.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}<option value={pl.id}>цей самий оффер</option></select></Field></FormRow>
-            <Field label="Текст" hint="Змінні: {{days}} — днів лишилось, {{offer_name}} — назва оффера."><textarea name="expiryText" rows={3} defaultValue={st.expiryText ?? ""} placeholder="Доступ до «{{offer_name}}» закінчується через {{days}} дн." /></Field>
+            <Field label="Текст" hint="Змінні: {{days}} — днів лишилось, {{offer_name}} — назва оффера, а також {first_name}, {name} та інші змінні людини."><textarea name="expiryText" rows={3} defaultValue={st.expiryText ?? ""} placeholder="Доступ до «{{offer_name}}» закінчується через {{days}} дн." /></Field>
           </Section>}
           <Section title="Збір контактів">
             <Switch name="collectEmail" defaultChecked={Boolean(st.collectEmail)} label="Просити email на сторінці оплати" hint="зберігається в картці людини; ім’я й Telegram є завжди" />
