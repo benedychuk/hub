@@ -34,13 +34,13 @@ export default async function ResourcePage({ params, searchParams }: { params: P
       {sp.new && <Alert tone="ok">{chat ? "Канал підключено. Перевірте режим вступу й тексти, а право доступу додайте в тарифі." : "Продукт створено. Додайте його до тарифу, щоб видавати доступ."}</Alert>}
       {sp.saved && <Alert tone="ok">Збережено.</Alert>}
       {isShchyro && <Alert tone="info">Це право відкриває бота «Щиро». Люди, доступ, аналітика й керування автоматикою — на сторінці <Link href="/shchyro">Бот «Щиро»</Link>; тут лише назва, квота й посилання на оффер.</Alert>}
-      {chat && c.enforce !== true && <Alert tone="info">Автоматика доступу для цього чату вимкнена: Hub нікого не запрошує й не виключає. Увімкніть перемикач у налаштуваннях нижче, коли будете готові (для бойового каналу лише після тестів).</Alert>}
+      {chat && c.enforce !== true && <Alert tone="info">Автоматика доступу для цього чату вимкнена: Hub нікого не запрошує й не виключає. Увімкніть перемикач у налаштуваннях нижче, коли будете готові (для бойового каналу лише після тестів). Учасниць ZenEdu автоматика не чіпатиме: {c.protectZenActive !== false ? "усі з чинною підпискою ZenEdu" : "лише"}{(c.protectedTgIds ?? []).length ? ` і ${(c.protectedTgIds ?? []).length} зі списку захищених` : c.protectZenActive !== false ? "" : " люди зі списку захищених (зараз порожній)"}.</Alert>}
       {chat && rights && !rights.ok && <Alert tone="bad">Hub-бот не має потрібних прав у цьому чаті: {(rights as { error?: string }).error ?? `статус ${(rights as { status?: string }).status}`}. Зробіть бота адміністратором із правами «Додавати учасників» і «Блокувати користувачів».</Alert>}
       {chat && s && <div className="grid g4" style={{ marginBottom: 16 }}>
         <Stat label="З правом" value={s.withRight} hint="за тарифом чи вручну" />
-        <Stat label="У чаті" value={s.joined} hint={c.memberCount != null ? `усього в Telegram ${c.memberCount}` : undefined} tone="good" />
+        <Stat label="У чаті" value={s.joined} hint={`${c.memberCount != null ? `усього в Telegram ${c.memberCount}` : "за даними Hub"}${s.protectedInChat ? ` · захищених ZenEdu ${s.protectedInChat}` : ""}`} tone="good" />
         <Stat label="Запрошені" value={s.invited} hint="отримали посилання, ще не зайшли" />
-        <Stat label="Без права в чаті" value={s.withoutRight} hint="виключить найближчий тік" tone={s.withoutRight ? "crit" : undefined} />
+        <Stat label="Без права в чаті" value={s.withoutRight} hint={c.enforce === true ? "виключить найближчий тік; захищені ZenEdu не рахуються" : "автоматика вимкнена: нікого не виключає"} tone={s.withoutRight && c.enforce === true ? "crit" : undefined} />
       </div>}
       <div className="grid g21">
         {chat ? (
@@ -52,6 +52,12 @@ export default async function ResourcePage({ params, searchParams }: { params: P
               <Field label="Нотатка"><input name="note" defaultValue={c.note ?? ""} /></Field>
               <Field label="Текст із посиланням"><textarea name="inviteText" rows={2} defaultValue={c.inviteText ?? ""} placeholder={`Доступ відкрито: ${r.name}. Посилання одноразове і діє 24 год.`} /></Field>
               <Field label="Текст при виключенні"><textarea name="kickText" rows={2} defaultValue={c.kickText ?? ""} placeholder={`Термін доступу до «${r.name}» завершився. Щоб повернутись, поновіть підписку: /plans`} /></Field>
+            </Section>
+            <Section title="Захищені від автоматики" description="Учасниці, якими керує ZenEdu. Hub їх ніколи не виключає з чату, схвалює їхні заявки на вступ і не надсилає їм текст при виключенні. Додавати й виключати їх може лише ZenEdu. Рештою (тими, хто прийшов через Hub) автоматика керує сама.">
+              <Switch name="protectZenActive" defaultChecked={c.protectZenActive !== false} label="Не чіпати всіх із чинною підпискою ZenEdu" hint="за даними імпорту ZenEdu; захищає й тих, хто оформить підписку в ZenEdu пізніше і кого немає в списку нижче" />
+              <Field label="Telegram ID захищених" hint={`У списку: ${(c.protectedTgIds ?? []).length}. Вставте ID через кому, пробіл чи з нового рядка, або весь вміст CSV-файлу: Hub сам вибере номери й прибере дублі.`}>
+                <textarea name="protectedIds" rows={6} defaultValue={(c.protectedTgIds ?? []).join(", ")} placeholder="1854534422, 390859158, 586561745" className="mono" />
+              </Field>
               <div className="row-actions" style={{ marginTop: 14 }}><button className="btn pri" type="submit"><Save size={15} /> Зберегти</button></div>
             </Section>
           </form>

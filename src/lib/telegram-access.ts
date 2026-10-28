@@ -10,7 +10,28 @@ export type ChannelConfig = {
   chatId?: string; joinMode?: "invite" | "request"; inviteTtlHours?: number; graceDays?: number; // graceDays застаріле: діє спільний грейс у годинах з Налаштування → Оплати
   inviteText?: string; kickText?: string; remindDays?: number; note?: string;
   enforce?: boolean; // автоматика доступу: посилання тим, хто має право, і виключення тих, хто не має. Вимкнено = лише спостереження
+  // захищені від автоматики: учасниці, якими керує ZenEdu. Hub їх ніколи не виключає і схвалює їхні заявки
+  protectedTgIds?: number[];
+  protectZenActive?: boolean; // також усі з чинною підпискою ZenEdu (за імпортом); не задано = увімкнено
 };
+
+const ZEN_LIVE = ["active", "trialing", "past_due"];
+const protectZen = (cfg: ChannelConfig) => cfg.protectZenActive !== false;
+const idList = (cfg: ChannelConfig) => (cfg.protectedTgIds ?? []).filter((n) => Number.isSafeInteger(n) && n > 0);
+/** Людина під захистом ZenEdu в цьому каналі: є в списку або має чинну підписку ZenEdu. */
+export async function isProtected(cfg: ChannelConfig, personId: number | null, telegramUserId: number) {
+  if (idList(cfg).includes(telegramUserId)) return true;
+  if (!protectZen(cfg) || !personId) return false;
+  const [s] = await db().select({ id: subscriptions.id }).from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu"), inArray(subscriptions.status, ZEN_LIVE))).limit(1);
+  return Boolean(s);
+}
+/** SQL-умова «людина m.person_id / p.telegram_user_id НЕ захищена» для вибірок виключення й статистики. */
+function notProtectedSql(cfg: ChannelConfig) {
+  const ids = idList(cfg);
+  const byList = ids.length ? sql`and p.telegram_user_id <> all(${sql.raw(`array[${ids.join(",")}]::bigint[]`)})` : sql``;
+  const byZen = protectZen(cfg) ? sql`and not exists (select 1 from subscriptions zs where zs.person_id = m.person_id and zs.source = 'zenedu' and zs.status in ('active','trialing','past_due'))` : sql``;
+  return sql`${byList} ${byZen}`;
+}
 
 const CHANNEL_KINDS = ["telegram_channel", "telegram_group"];
 
@@ -120,6 +141,7 @@ export async function processRevocations(limit = 30) {
       select m.person_id, p.telegram_user_id from memberships m join persons p on p.id = m.person_id
       where m.resource_key = ${r.key} and m.status = 'joined'
         and not exists (select 1 from entitlements e where e.person_id = m.person_id and e.resource_key = m.resource_key and e.revoked_at is null and (e.valid_until is null or e.valid_until > now()))
+        ${notProtectedSql(cfg)}
       limit ${limit}`);
     for (const row of due.rows as { person_id: number; telegram_user_id: number }[]) {
       try {
@@ -178,7 +200,7 @@ export async function onChatMember(chatId: number, user: { id: number; first_nam
   await d.insert(memberships).values({ personId: p.id, resourceKey: hit.r.key, status, joinedAt: inChat ? new Date() : null, leftAt: inChat ? null : new Date(), note, updatedAt: new Date() })
     .onConflictDoUpdate({ target: [memberships.personId, memberships.resourceKey], set: { status, joinedAt: inChat ? new Date() : sql`${memberships.joinedAt}`, leftAt: inChat ? null : new Date(), note, updatedAt: new Date() } });
   await d.insert(events).values({ personId: p.id, type: inChat ? "channel.joined" : "channel.left", source: "hub", payload: { resource: hit.r.key, via: inviteName ?? null, note } });
-  if (inChat && !(await hasEntitlement(p.id, hit.r.key)) && hit.cfg.joinMode !== "request") {
+  if (inChat && !(await hasEntitlement(p.id, hit.r.key)) && hit.cfg.joinMode !== "request" && !(await isProtected(hit.cfg, p.id, user.id))) {
     // зайшов без права (переслане посилання чи чужий інвайт) — виключаємо на наступному тіку
     await d.insert(events).values({ personId: p.id, type: "channel.joined_without_access", source: "hub", payload: { resource: hit.r.key } });
   }
@@ -191,9 +213,10 @@ export async function onJoinRequest(chatId: number, user: { id: number; first_na
   const hit = list.find((x) => String(x.cfg.chatId) === String(chatId));
   if (!hit) return;
   const [p] = await d.select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, user.id));
-  const ok = p ? await hasEntitlement(p.id, hit.r.key) : false;
+  const prot = await isProtected(hit.cfg, p?.id ?? null, user.id); // учасниць ZenEdu схвалюємо завжди: їхнім доступом керує ZenEdu
+  const ok = prot || (p ? await hasEntitlement(p.id, hit.r.key) : false);
   if (ok) await getBot().api.approveChatJoinRequest(chatId, user.id); else await getBot().api.declineChatJoinRequest(chatId, user.id);
-  if (p) await d.insert(events).values({ personId: p.id, type: ok ? "channel.request_approved" : "channel.request_declined", source: "hub", payload: { resource: hit.r.key } });
+  if (p) await d.insert(events).values({ personId: p.id, type: ok ? "channel.request_approved" : "channel.request_declined", source: "hub", payload: { resource: hit.r.key, ...(prot ? { protected: true } : {}) } });
 }
 
 /** Бот додали чи прибрали з каналу або групи: запам'ятовуємо чат, щоб показати його в панелі. */
@@ -220,11 +243,15 @@ export async function botRightsIn(chatId: string) {
 
 export async function channelStats(resourceKey: string) {
   const d = db();
+  const [res] = await d.select().from(resources).where(eq(resources.key, resourceKey));
+  const cfg = (res?.config ?? {}) as ChannelConfig;
   const [withRight] = await d.select({ c: sql<number>`count(distinct person_id)::int` }).from(entitlements).where(and(eq(entitlements.resourceKey, resourceKey), isNull(entitlements.revokedAt), or(isNull(entitlements.validUntil), gt(entitlements.validUntil, new Date()))));
   const byStatus = await d.select({ status: memberships.status, c: sql<number>`count(*)::int` }).from(memberships).where(eq(memberships.resourceKey, resourceKey)).groupBy(memberships.status);
   const st = Object.fromEntries(byStatus.map((x) => [x.status, x.c]));
-  const [extra] = await d.execute(sql`select count(*)::int as c from memberships m where m.resource_key = ${resourceKey} and m.status = 'joined' and not exists (select 1 from entitlements e where e.person_id = m.person_id and e.resource_key = m.resource_key and e.revoked_at is null and (e.valid_until is null or e.valid_until > now()))`).then((r) => r.rows as { c: number }[]);
-  return { withRight: withRight.c, joined: st.joined ?? 0, invited: st.invited ?? 0, kicked: st.kicked ?? 0, left: st.left ?? 0, withoutRight: extra?.c ?? 0 };
+  const noRight = sql`m.resource_key = ${resourceKey} and m.status = 'joined' and not exists (select 1 from entitlements e where e.person_id = m.person_id and e.resource_key = m.resource_key and e.revoked_at is null and (e.valid_until is null or e.valid_until > now()))`;
+  const [extra] = await d.execute(sql`select count(*)::int as c from memberships m join persons p on p.id = m.person_id where ${noRight} ${notProtectedSql(cfg)}`).then((r) => r.rows as { c: number }[]);
+  const [all] = await d.execute(sql`select count(*)::int as c from memberships m join persons p on p.id = m.person_id where ${noRight}`).then((r) => r.rows as { c: number }[]);
+  return { withRight: withRight.c, joined: st.joined ?? 0, invited: st.invited ?? 0, kicked: st.kicked ?? 0, left: st.left ?? 0, withoutRight: extra?.c ?? 0, protectedInChat: (all?.c ?? 0) - (extra?.c ?? 0), protectedListed: idList(cfg).length, protectZen: protectZen(cfg) };
 }
 
 /** Тік: права з підписок → запрошення → виключення. */
