@@ -23,15 +23,26 @@ const idList = (cfg: ChannelConfig) => (cfg.protectedTgIds ?? []).filter((n) => 
 export async function isProtected(cfg: ChannelConfig, personId: number | null, telegramUserId: number) {
   if (idList(cfg).includes(telegramUserId)) return true;
   if (!protectZen(cfg) || !personId) return false;
-  const [s] = await db().select({ id: subscriptions.id }).from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu"), inArray(subscriptions.status, ZEN_LIVE))).limit(1);
+  const [s] = await db().select({ id: subscriptions.id }).from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu"), or(inArray(subscriptions.status, ZEN_LIVE), gt(subscriptions.currentPeriodEnd, new Date())))).limit(1);
   return Boolean(s);
 }
 /** SQL-умова «людина m.person_id / p.telegram_user_id НЕ захищена» для вибірок виключення й статистики. */
 function notProtectedSql(cfg: ChannelConfig) {
   const ids = idList(cfg);
   const byList = ids.length ? sql`and p.telegram_user_id <> all(${sql.raw(`array[${ids.join(",")}]::bigint[]`)})` : sql``;
-  const byZen = protectZen(cfg) ? sql`and not exists (select 1 from subscriptions zs where zs.person_id = m.person_id and zs.source = 'zenedu' and zs.status in ('active','trialing','past_due'))` : sql``;
-  return sql`${byList} ${byZen}`;
+  const byZen = protectZen(cfg) ? sql`and not exists (select 1 from subscriptions zs where zs.person_id = m.person_id and zs.source = 'zenedu' and (zs.status in ('active','trialing','past_due') or zs.current_period_end > now()))` : sql``;
+  return sql`${byList} ${byZen} and ${HUB_MANAGED}`;
+}
+/**
+ * Людина, якою в цьому чаті керує Hub: колись мала тут право в Hub (за оффером чи вручну, зокрема вже забране)
+ * або зайшла за посиланням, яке видав Hub (назва pN). Решта (хто зайшов за посиланням ZenEdu чи іншим) — не Hub:
+ * дані ZenEdu оновлюються раз на добу, тож нову учасницю ZenEdu Hub не має права вважати «без доступу».
+ */
+const HUB_MANAGED = sql`(exists (select 1 from entitlements he where he.person_id = m.person_id and he.resource_key = m.resource_key)
+  or exists (select 1 from events hv where hv.person_id = m.person_id and hv.type = 'channel.joined' and hv.payload->>'resource' = m.resource_key and hv.payload->>'via' ~ '^p[0-9]+$'))`;
+export async function hubManaged(personId: number, resourceKey: string) {
+  const r = await db().execute(sql`select ${HUB_MANAGED} as ok from (select ${personId}::int as person_id, ${resourceKey}::text as resource_key) m`);
+  return Boolean((r.rows[0] as { ok?: boolean } | undefined)?.ok);
 }
 
 const CHANNEL_KINDS = ["telegram_channel", "telegram_group"];
@@ -243,9 +254,9 @@ export async function onChatMember(chatId: number, user: { id: number; first_nam
   await d.insert(events).values({ personId: p.id, type: inChat ? "channel.joined" : "channel.left", source: "hub", payload: { resource: hit.r.key, via: inviteName ?? null, note } });
   if (inChat && !(await hasEntitlement(p.id, hit.r.key)) && hit.cfg.joinMode !== "request" && !(await isProtected(hit.cfg, p.id, user.id))) {
     // зайшов без права (переслане посилання, чужий інвайт, право забрано після повернення коштів):
-    // з увімкненою автоматикою доступу виключаємо одразу, інакше лише записуємо подію
+    // з увімкненою автоматикою доступу виключаємо одразу, але лише людей Hub (див. HUB_MANAGED), інакше лише записуємо подію
     await d.insert(events).values({ personId: p.id, type: "channel.joined_without_access", source: "hub", payload: { resource: hit.r.key } });
-    if (hit.cfg.enforce === true) {
+    if (hit.cfg.enforce === true && (await hubManaged(p.id, hit.r.key))) {
       try {
         await getBot().api.banChatMember(hit.cfg.chatId!, user.id);
         await getBot().api.unbanChatMember(hit.cfg.chatId!, user.id, { only_if_banned: true });
@@ -304,6 +315,20 @@ export async function channelStats(resourceKey: string) {
   const [extra] = await d.execute(sql`select count(*)::int as c from memberships m join persons p on p.id = m.person_id where ${noRight} ${notProtectedSql(cfg)}`).then((r) => r.rows as { c: number }[]);
   const [all] = await d.execute(sql`select count(*)::int as c from memberships m join persons p on p.id = m.person_id where ${noRight}`).then((r) => r.rows as { c: number }[]);
   return { withRight: withRight.c, joined: st.joined ?? 0, invited: st.invited ?? 0, kicked: st.kicked ?? 0, left: st.left ?? 0, withoutRight: extra?.c ?? 0, protectedInChat: (all?.c ?? 0) - (extra?.c ?? 0), protectedListed: idList(cfg).length, protectZen: protectZen(cfg) };
+}
+
+/** Кого Hub виключав з чату за N днів; hub = чи була людина «людиною Hub» (інакше виключення, найімовірніше, помилкове). */
+export async function recentKicks(resourceKey: string, days = 30) {
+  const r = await db().execute(sql`
+    select distinct on (ev.person_id) ev.person_id, ev.created_at, p.first_name, p.last_name, p.username, p.telegram_user_id,
+      ${HUB_MANAGED} as hub,
+      exists (select 1 from events j where j.person_id = ev.person_id and j.type = 'channel.joined' and j.payload->>'resource' = ${resourceKey} and j.created_at > ev.created_at) as back
+    from events ev join persons p on p.id = ev.person_id
+    join lateral (select ev.person_id, ${resourceKey}::text as resource_key) m on true
+    where ev.type = 'channel.kicked' and ev.payload->>'resource' = ${resourceKey} and ev.created_at > now() - (${days} * interval '1 day')
+    order by ev.person_id, ev.created_at desc`);
+  return (r.rows as { person_id: number; created_at: string; first_name: string | null; last_name: string | null; username: string | null; telegram_user_id: number; hub: boolean; back: boolean }[])
+    .sort((a, b) => Number(a.hub) - Number(b.hub) || +new Date(b.created_at) - +new Date(a.created_at));
 }
 
 /** Тік: права з підписок → запрошення → виключення. */
