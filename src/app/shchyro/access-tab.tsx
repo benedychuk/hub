@@ -32,7 +32,7 @@ export default async function AccessTab({ resources, people }: { resources: { ke
         { k: "Зв'язок", v: lc?.at ? `${dateTime(lc.at)} · ${lc.ok ? `є, активних у боті ${lc.active_count ?? 0}` : `немає: ${lc.error ?? ""}`}` : "не перевірявся", mono: true },
       ]} />
       {ls && <div style={{ marginTop: 12 }}><Alert tone={ls.ok ? (ls.mode === "preview" ? "info" : "ok") : "bad"}>
-        {ls.ok ? `${ls.mode === "preview" ? "Перевірка" : "Звірка"} ${dateTime(ls.at)}: надіслано ${ls.total_received ?? 0}, увімкнено ${ls.activated ?? 0}, вимкнено ${ls.deactivated ?? 0}, захищених ${ls.protected_untouched ?? 0}, без змін ${ls.unchanged ?? 0}.` : `Звірка ${dateTime(ls.at)} не пройшла: ${ls.error}${ls.deactivated ? ` (вимкнулось би ${ls.deactivated}${ls.limit ? ` при ліміті ${ls.limit}` : ""})` : ""}.`}
+        {ls.ok ? `${ls.mode === "preview" ? "Перевірка" : "Звірка"} ${dateTime(ls.at)}: надіслано ${ls.total_received ?? 0}, увімкнено ${ls.activated ?? 0}, вимкнено ${ls.deactivated ?? 0}, захищених ${ls.protected_untouched ?? 0}, без змін ${ls.unchanged ?? 0}${ls.kept_zenedu ? `, лишено увімкненими учасниць ZenEdu ${ls.kept_zenedu}` : ""}.` : `Звірка ${dateTime(ls.at)} не пройшла: ${ls.error}${ls.deactivated ? ` (вимкнулось би ${ls.deactivated}${ls.limit ? ` при ліміті ${ls.limit}` : ""})` : ""}.`}
         {ls.ok && (ls.deactivated_ids?.length ?? 0) > 0 && <div className="mono" style={{ marginTop: 6, fontSize: 11.5 }}>{ls.mode === "preview" ? "Вимкнулись би" : "Вимкнено"}: {ls.deactivated_ids!.join(", ")}</div>}
         {ls.ok && (ls.activated_ids?.length ?? 0) > 0 && <div className="mono" style={{ marginTop: 4, fontSize: 11.5 }}>{ls.mode === "preview" ? "Увімкнулись би" : "Увімкнено"}: {ls.activated_ids!.join(", ")}</div>}
       </Alert></div>}

@@ -27,7 +27,7 @@ const PUSH_BATCH = 60; // grant/revoke за один тік: укладаєть�
 const KEYS = { enabled: "shchyro.push_enabled", resource: "shchyro.resource_key", pushed: "shchyro.pushed_ids", lastSync: "shchyro.last_sync", lastPush: "shchyro.last_push", lastCheck: "shchyro.last_check" } as const;
 
 export type ShchyroResult<T = Record<string, unknown>> = { ok: true; status: number; data: T } | { ok: false; status: number; error: string; data?: Record<string, unknown> };
-export type SyncSummary = { at: string; mode: "preview" | "reconcile"; ok: boolean; error?: string; total_received?: number; activated?: number; deactivated?: number; protected_untouched?: number; unchanged?: number; applied?: boolean; activated_ids?: number[]; deactivated_ids?: number[]; limit?: number };
+export type SyncSummary = { at: string; mode: "preview" | "reconcile"; ok: boolean; error?: string; total_received?: number; activated?: number; deactivated?: number; protected_untouched?: number; unchanged?: number; applied?: boolean; activated_ids?: number[]; deactivated_ids?: number[]; limit?: number; kept_zenedu?: number };
 export type ShchyroAccess = { is_active: boolean; is_admin: boolean; has_access: boolean; source: string | null; note: string; added_at: string | null; removed_at: string | null };
 export type ShchyroClientRow = { user_id: number; username: string | null; first_name: string | null; last_name: string | null; created_at: string; last_seen_at: string; total_messages: number; sessions_count: number; is_blocked: boolean; admin_notes: string; access: ShchyroAccess; profile_version: number };
 export type ShchyroClientCard = { user_id: number; found: boolean; access: ShchyroAccess; client: Omit<ShchyroClientRow, "access" | "profile_version"> | null; profile: { summary_text: string; data: Record<string, unknown>; version: number; updated_at: string | null } | null; window_chars?: number; consolidation_threshold_chars?: number; sessions: { id: number; started_at: string; last_activity_at: string; messages_count: number; opened_by: string | null }[]; summaries_count: number; messages: { id: number; role: string; content: string; created_at: string; archived: boolean }[] };
@@ -164,7 +164,8 @@ export async function shchyroPushChanges() {
   const byTg = new Map(entitled.map((e) => [e.telegramUserId, e]));
   const pushed = new Set(st.pushedIds);
   const toGrant = entitled.filter((e) => !pushed.has(e.telegramUserId)).slice(0, PUSH_BATCH);
-  const toRevoke = [...pushed].filter((tg) => !byTg.has(tg)).slice(0, PUSH_BATCH);
+  const zen = pushed.size ? await zenProtectedTgIds() : new Set<number>();
+  const toRevoke = [...pushed].filter((tg) => !byTg.has(tg) && !zen.has(tg)).slice(0, PUSH_BATCH); // учасниць ZenEdu не вимикаємо
   let granted = 0, revoked = 0, failed = 0; let lastError: string | null = null;
   for (const e of toGrant) {
     const r = await shchyroGrant(grantBody(e));
@@ -186,7 +187,25 @@ export async function shchyroPushChanges() {
   return summary;
 }
 
-/** Повна звірка: Hub надсилає всіх, хто має право, «Щиро» вмикає їх і вимикає решту (крім ручних і адміністраторів). */
+/**
+ * Учасниці ZenEdu, яких Hub ніколи не вимикає в «Щиро»: чинна підписка ZenEdu (за статусом або оплаченим періодом)
+ * і Telegram ID зі списків «Захищені від автоматики» всіх каналів. Їхнім доступом керує ZenEdu.
+ */
+export async function zenProtectedTgIds(): Promise<Set<number>> {
+  const d = db();
+  const zen = (await d.execute(sql`select distinct p.telegram_user_id from subscriptions s join persons p on p.id = s.person_id
+    where s.source = 'zenedu' and (s.status in ('active','trialing','past_due') or s.current_period_end > now())`)).rows as { telegram_user_id: string | number }[];
+  const out = new Set(zen.map((r) => Number(r.telegram_user_id)));
+  const chans = await d.select({ config: resources.config }).from(resources).where(inArray(resources.kind, ["telegram_channel", "telegram_group"]));
+  for (const c of chans) for (const id of ((c.config as { protectedTgIds?: number[] } | null)?.protectedTgIds ?? [])) if (Number.isSafeInteger(id) && id > 0) out.add(id);
+  return out;
+}
+
+/**
+ * Повна звірка: Hub надсилає всіх, хто має право, «Щиро» вмикає їх і вимикає решту (крім ручних і адміністраторів).
+ * Запобіжник: спершу перевірка без змін; учасниць ZenEdu, яких звірка вимкнула б, Hub додає до списку, тож вони лишаються
+ * увімкненими (нових Hub так не вмикає). Якщо «Щиро» не віддав повного списку тих, хто вимкнувся б, звірка не застосовується.
+ */
 export async function shchyroFullSync(opts: { preview?: boolean; force?: boolean; by?: string } = {}) {
   const st = await shchyroSettings();
   const mode: "preview" | "reconcile" = opts.preview ? "preview" : "reconcile";
@@ -194,11 +213,24 @@ export async function shchyroFullSync(opts: { preview?: boolean; force?: boolean
   if (mode === "reconcile" && !st.enabled) { const s: SyncSummary = { at: new Date().toISOString(), mode, ok: false, error: "Автоматика доступу «Щиро» вимкнена: доступна лише перевірка розбіжностей" }; await setSetting(KEYS.lastSync, s); return s; }
   const entitled = await shchyroEntitled(st.resourceKey);
   const ids = [...new Set(entitled.map((e) => e.telegramUserId))];
+  let kept = 0;
+  if (mode === "reconcile") {
+    const pre = await request("POST", "/api/v1/hub/access/sync", { active_user_ids: ids, mode: "preview", force: Boolean(opts.force), allow_empty: false });
+    const pd = (pre.data ?? {}) as Record<string, unknown>;
+    const would = Array.isArray(pd.deactivated_ids) ? (pd.deactivated_ids as unknown[]).map(Number) : null;
+    // перевірка могла впертись у ліміт масового вимкнення (409), але список тих, хто вимкнувся б, усе одно потрібен
+    if (would === null || would.length < Number(pd.deactivated ?? 0)) {
+      const s: SyncSummary = { at: new Date().toISOString(), mode, ok: false, error: pre.ok ? "«Щиро» не повернув повного списку тих, хто вимкнувся б: звірку не застосовано, щоб не вимкнути учасниць ZenEdu" : pre.error };
+      await setSetting(KEYS.lastSync, s); await logEvent(null, "shchyro.sync_blocked", { ...s, by: opts.by ?? "cron" }); return s;
+    }
+    const zen = await zenProtectedTgIds();
+    for (const id of would) if (zen.has(id)) { ids.push(id); kept++; }
+  }
   const r = await request("POST", "/api/v1/hub/access/sync", { active_user_ids: ids, mode, force: Boolean(opts.force), allow_empty: false });
   const d = (r.ok ? r.data : r.data ?? {}) as Record<string, unknown>;
   const summary: SyncSummary = { at: new Date().toISOString(), mode, ok: r.ok, error: r.ok ? undefined : r.error,
     total_received: Number(d.total_received ?? ids.length), activated: Number(d.activated ?? 0), deactivated: Number(d.deactivated ?? 0), protected_untouched: Number(d.protected_untouched ?? 0), unchanged: Number(d.unchanged ?? 0), applied: d.applied === true,
-    activated_ids: Array.isArray(d.activated_ids) ? (d.activated_ids as number[]).slice(0, 200) : [], deactivated_ids: Array.isArray(d.deactivated_ids) ? (d.deactivated_ids as number[]).slice(0, 200) : [], limit: d.limit != null ? Number(d.limit) : undefined };
+    activated_ids: Array.isArray(d.activated_ids) ? (d.activated_ids as number[]).slice(0, 200) : [], deactivated_ids: Array.isArray(d.deactivated_ids) ? (d.deactivated_ids as number[]).slice(0, 200) : [], limit: d.limit != null ? Number(d.limit) : undefined, kept_zenedu: kept };
   await setSetting(KEYS.lastSync, summary);
   if (r.ok && mode === "reconcile" && summary.applied) await setSetting(KEYS.pushed, ids); // знімок вирівняно з повним списком
   await logEvent(null, r.ok ? "shchyro.sync" : r.status === 409 ? "shchyro.sync_blocked" : "shchyro.error", { ...summary, by: opts.by ?? "cron", activated_ids: undefined, deactivated_ids: undefined });
