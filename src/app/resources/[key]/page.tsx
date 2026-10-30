@@ -7,8 +7,8 @@ import { PageHeader, Section, Field, FormRow, Stat, Row, Alert, EmptyState } fro
 import { Kebab, MenuAction, MenuSep, Switch } from "@/components/ui/controls";
 import { navCounts, resourceList, planList } from "@/lib/queries";
 import { saveResource, saveChannelResource, refreshChatInfo, toggleResource, deleteResource } from "@/lib/actions";
-import { botRightsIn, channelStats, type ChannelConfig } from "@/lib/telegram-access";
-import { dateTime } from "@/lib/format";
+import { botRightsIn, channelStats, recentKicks, type ChannelConfig } from "@/lib/telegram-access";
+import { dateTime, fullName } from "@/lib/format";
 import { shchyroSettings } from "@/lib/shchyro";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,8 @@ export default async function ResourcePage({ params, searchParams }: { params: P
   if (!r) notFound();
   const c = (r.config ?? {}) as Cfg;
   const chat = r.kind === "telegram_channel" || r.kind === "telegram_group";
-  const [s, rights] = chat ? await Promise.all([channelStats(r.key).catch(() => null), c.chatId && process.env.TELEGRAM_BOT_TOKEN ? botRightsIn(c.chatId) : Promise.resolve(null)]) : [null, null];
+  const [s, rights, kicks] = chat ? await Promise.all([channelStats(r.key).catch(() => null), c.chatId && process.env.TELEGRAM_BOT_TOKEN ? botRightsIn(c.chatId) : Promise.resolve(null), recentKicks(r.key).catch(() => [])]) : [null, null, []];
+  const wrongKicks = kicks.filter((k) => !k.hub && !k.back);
   const inPlans = plans.filter((p) => Object.keys((p.entitlements ?? {}) as Record<string, string>).includes(r.key));
   const isShchyro = r.kind === "bot_feature" && (await shchyroSettings().catch(() => null))?.resourceKey === r.key;
   return (
@@ -38,10 +39,11 @@ export default async function ResourcePage({ params, searchParams }: { params: P
       {chat && rights && !rights.ok && <Alert tone="bad">Hub-бот не має потрібних прав у цьому чаті: {(rights as { error?: string }).error ?? `статус ${(rights as { status?: string }).status}`}. Зробіть бота адміністратором із правами «Додавати учасників» і «Блокувати користувачів».</Alert>}
       {chat && s && <div className="grid g4" style={{ marginBottom: 16 }}>
         <Stat label="З правом" value={s.withRight} hint="за тарифом чи вручну" />
-        <Stat label="У чаті" value={s.joined} hint={`${c.memberCount != null ? `усього в Telegram ${c.memberCount}` : "за даними Hub"}${s.protectedInChat ? ` · захищених ZenEdu ${s.protectedInChat}` : ""}`} tone="good" />
+        <Stat label="У чаті" value={s.joined} hint={`${c.memberCount != null ? `усього в Telegram ${c.memberCount}` : "за даними Hub"}${s.protectedInChat ? ` · не з Hub або захищених ZenEdu ${s.protectedInChat}` : ""}`} tone="good" />
         <Stat label="Запрошені" value={s.invited} hint="отримали посилання, ще не зайшли" />
-        <Stat label="Без права в чаті" value={s.withoutRight} hint={c.enforce === true ? "виключить найближчий тік; захищені ZenEdu не рахуються" : "автоматика вимкнена: нікого не виключає"} tone={s.withoutRight && c.enforce === true ? "crit" : undefined} />
+        <Stat label="Без права в чаті" value={s.withoutRight} hint={c.enforce === true ? "виключить найближчий тік; лише ті, кого пустив Hub" : "автоматика вимкнена: нікого не виключає"} tone={s.withoutRight && c.enforce === true ? "crit" : undefined} />
       </div>}
+      {chat && wrongKicks.length > 0 && <Alert tone="bad">За 30 днів Hub виключив {wrongKicks.length} {wrongKicks.length === 1 ? "людину, яка не отримувала" : "людей, які не отримували"} доступ через Hub (найімовірніше, нові учасниці ZenEdu) і ще не повернулись. Тепер Hub таких не чіпає; список праворуч, щоб повернути їх у канал.</Alert>}
       <div className="grid g21">
         {chat ? (
           <form action={saveChannelResource}><input type="hidden" name="key" value={r.key} />
@@ -78,6 +80,11 @@ export default async function ResourcePage({ params, searchParams }: { params: P
         )}
         <div className="form aside-sticky">
           <Section title="В офферах">{inPlans.length ? inPlans.map((p) => <Row key={p.id} title={<Link href={`/offers/${p.id}`}>{p.name}</Link>} sub={`${p.price} ${p.currency} / ${p.period}`} />) : <EmptyState title="Поки не входить у жоден тариф" text="Додайте у Тарифах, щоб доступ видавався автоматично." action={<Link href="/plans" className="btn sm">Тарифи</Link>} />}</Section>
+          {chat && kicks.length > 0 && <Section title="Виключені Hub за 30 днів" description="Спершу ті, хто прийшов не через Hub. Повернутись у канал вони можуть за посиланням ZenEdu або за новим запрошенням.">
+            {kicks.slice(0, 60).map((k) => <Row key={k.person_id} tone={k.hub || k.back ? "off" : "warn"} title={<Link href={`/people/${k.person_id}`}>{fullName({ firstName: k.first_name, lastName: k.last_name, username: k.username, telegramUserId: k.telegram_user_id })}</Link>}
+              sub={`${dateTime(k.created_at)}${k.username ? ` · @${k.username}` : ""} · ID ${k.telegram_user_id}`}
+              right={k.back ? <Pill tone="good">повернулась</Pill> : k.hub ? <Pill tone="mute">через Hub</Pill> : <Pill tone="crit">не з Hub</Pill>} />)}
+          </Section>}
           {chat && <Section title="Як це працює"><p className="fld-h" style={{ margin: 0 }}>Людина з правом отримує в Hub-боті одноразове посилання, що діє {c.inviteTtlHours ?? 24} год. Коли підписка закінчується і минає грейс із «Налаштування → Оплати» (типово 24 год), щохвилинний тік виключає її з чату з можливістю повернутись і надсилає текст при виключенні. Успішна оплата повертає доступ автоматично.</p></Section>}
           {r.kind === "bot_feature" && <Section title="Як це працює"><p className="fld-h" style={{ margin: 0 }}>Зовнішній бот питає в Hub через API, чи має людина право «{r.key}». Ключ для бота створюється в розділі «Боти й меню».</p></Section>}
         </div>
