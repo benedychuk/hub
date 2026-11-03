@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, schema, hasDb } from "@/db";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +22,9 @@ export async function POST(req: Request) {
   }
   await d.insert(schema.events).values({ personId, type: `zenedu.${body.event ?? "unknown"}`, source: "zenedu", payload: body });
   if (body.event === "subscription.cancelled" && personId) {
-    await d.update(schema.subscriptions).set({ status: "cancelled", cancelAtPeriodEnd: true, updatedAt: new Date() })
-      .where(eq(schema.subscriptions.personId, personId));
+    // лише підписка ZenEdu: підписки Hub (свої оплати й автосписання) скасування в ZenEdu не стосується
+    await d.update(schema.subscriptions).set({ status: "cancelled", cancelAtPeriodEnd: true, zenCancelledAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(schema.subscriptions.personId, personId), eq(schema.subscriptions.source, "zenedu")));
   }
   return Response.json({ ok: true });
 }

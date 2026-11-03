@@ -24,30 +24,10 @@ export async function navCounts() {
   }, {} as Record<string, number>);
 }
 
-export async function dashboard(offer?: string) {
-  return safe(async () => {
-    const d = db();
-    const since30 = new Date(Date.now() - 30 * 86400000), since60 = new Date(Date.now() - 60 * 86400000);
-    // фільтр за оффером: підписки (s) і замовлення (o) звужуються до оффера Hub із привʼязаними офферами ZenEdu або до одного оффера ZenEdu
-    const sc = await offerScope(offer);
-    const sW = sc ? scopeSql(sc, "s") : sql`true`; const oW = sc ? scopeSql(sc, "o") : sql`true`;
-    const byStatus = (await d.execute(sql`select s.status, count(*)::int as c from subscriptions s where ${sW} group by 1`)).rows as { status: string; c: number }[];
-    const rev = (await d.execute(sql`select o.currency as cur, coalesce(sum(o.price),0)::text as sum, count(*)::int as c from orders o where o.status = 'paid' and o.created_at >= ${since30} and ${oW} group by 1`)).rows as { cur: string; sum: string; c: number }[];
-    const starts30 = (await d.execute(sql`select count(*)::int as c from orders o where o.status = 'paid' and o.type = 'subscription_start' and o.created_at >= ${since30} and ${oW}`)).rows as { c: number }[];
-    const startsPrev = (await d.execute(sql`select count(*)::int as c from orders o where o.status = 'paid' and o.type = 'subscription_start' and o.created_at >= ${since60} and o.created_at <= ${since30} and ${oW}`)).rows as { c: number }[];
-    const expiring = (await d.execute(sql`select to_char(s.current_period_end, 'YYYY-MM-DD') as day, count(*)::int as c from subscriptions s where s.status in ('active','trialing','past_due') and s.current_period_end >= now() and s.current_period_end <= now() + interval '14 days' and ${sW} group by 1 order by 1`)).rows as { day: string; c: number }[];
-    const monthly = await d.execute(sql`
-      select to_char(o.created_at, 'YYYY-MM') as m,
-        count(*) filter (where o.type = 'subscription_start')::int as starts,
-        count(*) filter (where o.type = 'subscription_renew')::int as renews,
-        coalesce(sum(o.price) filter (where o.currency = 'UAH' and o.type <> 'one_time'),0)::numeric as uah
-      from orders o where o.status = 'paid' and o.created_at >= now() - interval '8 months' and ${oW}
-      group by 1 order by 1`);
-    const recent = await d.select({ id: events.id, type: events.type, createdAt: events.createdAt, payload: events.payload, personId: events.personId, first: persons.firstName, last: persons.lastName, username: persons.username })
-      .from(events).leftJoin(persons, eq(persons.id, events.personId)).orderBy(desc(events.createdAt)).limit(10);
-    const hubStarts = await d.select({ c: count() }).from(identities).where(eq(identities.botKey, "hub"));
-    return { byStatus, rev, starts30: starts30[0].c, startsPrev: startsPrev[0].c, expiring, monthly: monthly.rows as { m: string; starts: number; renews: number; uah: string }[], recent, hubStarts: hubStarts[0].c };
-  }, null);
+/** Останні події для дашборда. */
+export async function recentEvents(n = 10) {
+  return safe(() => db().select({ id: events.id, type: events.type, createdAt: events.createdAt, payload: events.payload, personId: events.personId, first: persons.firstName, last: persons.lastName, username: persons.username })
+    .from(events).leftJoin(persons, eq(persons.id, events.personId)).orderBy(desc(events.createdAt)).limit(n), []);
 }
 
 export type PeopleFilter = { q?: string; status?: string; page?: number; tag?: string; offer?: string; product?: number; sort?: string; all?: boolean };

@@ -78,6 +78,8 @@ export const zen = {
   funnels: (botId: number) => zenGet<Page<ZenFunnel>>(`/bot/${botId}/funnels`, { per_page: 100 }).then((r) => r.data),
   subscribers: (botId: number, startPage = 1) => zenPages<ZenSubscriber>(`/bot/${botId}/subscribers`, 30, startPage),
   orders: (botId: number, startPage = 1) => zenPages<ZenOrder>(`/bot/${botId}/orders`, 30, startPage),
+  /** Одна сторінка (для інкременту з обох кінців списку: порядок сторінок API не гарантовано). */
+  page: <T>(path: string, page: number) => zenGet<Page<T>>(path, { per_page: 30, page }).then((d) => ({ rows: d.data ?? [], lastPage: d.meta?.last_page ?? 1 })),
   sendMessage: (botId: number, subscriberId: number, text: string) =>
     zenPost(`/bot/${botId}/subscribers/${subscriberId}/messages`, { text }),
   addTags: (botId: number, subscriberId: number, tags: string[]) =>

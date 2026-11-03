@@ -129,21 +129,24 @@ export async function syncSubscribers(botId: number, stats: SyncStats, maxPages 
   return done;
 }
 
+async function upsertOrders(rows: ZenOrder[]) {
+  if (!rows.length) return;
+  const offerMap = new Map<number, number>();
+  (await db().select({ id: offers.id, zen: offers.zenOfferId }).from(offers)).forEach((o) => { if (o.zen) offerMap.set(o.zen, o.id); });
+  const pm = await upsertPersons(rows.map((o) => o.subscriber).filter(Boolean) as ZenSubscriber[]);
+  await db().insert(orders).values(rows.map((o: ZenOrder) => ({
+    source: "zenedu", zenOrderId: o.id, personId: o.subscriber ? pm.get(o.subscriber.user_id) ?? null : null,
+    offerId: offerMap.get(o.offer_id) ?? null, offerName: o.offer_name, type: o.type,
+    price: String(o.price), currency: o.currency, status: o.status, paymentSystem: o.payment_system_type,
+    paidAt: parseDate(o.status_changed_at), createdAt: new Date(o.created_at),
+  }))).onConflictDoUpdate({ target: orders.zenOrderId, set: { status: sql`excluded.status`, paidAt: sql`excluded.paid_at`, personId: sql`coalesce(excluded.person_id, ${orders.personId})` } });
+}
+
 export async function syncOrders(botId: number, stats: SyncStats, maxPages = 20, resume = true): Promise<boolean> {
   let n = 0, pages = 0, done = true;
   const start = resume ? Number((await getSetting<number>("sync.orders.page")) ?? 1) : 1;
-  const offerMap = new Map<number, number>();
-  (await db().select({ id: offers.id, zen: offers.zenOfferId }).from(offers)).forEach((o) => { if (o.zen) offerMap.set(o.zen, o.id); });
   for await (const { rows, page, lastPage } of zen.orders(botId, start)) {
-    const pm = await upsertPersons(rows.map((o) => o.subscriber).filter(Boolean) as ZenSubscriber[]);
-    if (rows.length) {
-      await db().insert(orders).values(rows.map((o: ZenOrder) => ({
-        source: "zenedu", zenOrderId: o.id, personId: o.subscriber ? pm.get(o.subscriber.user_id) ?? null : null,
-        offerId: offerMap.get(o.offer_id) ?? null, offerName: o.offer_name, type: o.type,
-        price: String(o.price), currency: o.currency, status: o.status, paymentSystem: o.payment_system_type,
-        paidAt: parseDate(o.status_changed_at), createdAt: new Date(o.created_at),
-      }))).onConflictDoUpdate({ target: orders.zenOrderId, set: { status: sql`excluded.status`, paidAt: sql`excluded.paid_at`, personId: sql`coalesce(excluded.person_id, ${orders.personId})` } });
-    }
+    await upsertOrders(rows);
     n += rows.length; pages++;
     if (page >= lastPage) { done = true; break; }
     if (pages >= maxPages) { done = false; await setSetting("sync.orders.page", page + 1); break; }
@@ -154,9 +157,11 @@ export async function syncOrders(botId: number, stats: SyncStats, maxPages = 20,
 }
 
 /**
- * Виводить підписки з платежів однією SQL-командою: останній платіж підписки кожної людини
- * + період за назвою оффера. Той самий алгоритм, що дав 177 ≈ 163 активних у ZenEdu (різниця — trial).
- * Стани cancelled/paused, виставлені вручну або вебхуком, не перезаписуються.
+ * Виводить підписки ZenEdu з платежів: останній платіж підписки кожної людини + період за назвою оффера.
+ * Той самий алгоритм, що дав 177 ≈ 163 активних у ZenEdu (різниця — trial).
+ * Скасування (вебхук ZenEdu) або пауза зберігаються, доки не прийде новий платіж: новий платіж означає, що людина знову платить.
+ * Без ON CONFLICT: унікальний індекс (person_id, source) прибрано міграцією 0009 (у Hub людина може мати кілька підписок),
+ * тому оновлюємо наявну підписку ZenEdu людини, а нову вставляємо лише тим, у кого її ще немає.
  */
 export async function deriveSubscriptions(stats: SyncStats) {
   const d = db();
@@ -167,30 +172,37 @@ export async function deriveSubscriptions(stats: SyncStats) {
       where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew') and person_id is not null
       order by person_id, created_at desc
     ), cnt as (
-      select person_id, count(*)::int as c from orders
+      select person_id, count(*)::int as c, min(created_at) as first_at from orders
       where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew') and person_id is not null
       group by person_id
     ), calc as (
-      select l.*, c.c as payments,
+      select l.*, c.c as payments, c.first_at,
         case
           when lower(l.offer_name) like '%рік%' or lower(l.offer_name) like '%year%' then 366
           when lower(l.offer_name) like '%3 місяці%' or lower(l.offer_name) like '%три місяці%' then 92
           when lower(l.offer_name) like '%2 тижні%' and l.type = 'subscription_start' then 14
           else 31 end as period_days
       from last l join cnt c on c.person_id = l.person_id
+    ), fin as (
+      select calc.*, created_at + (period_days || ' days')::interval as period_end,
+        case when now() <= created_at + (period_days || ' days')::interval + interval '3 days'
+             then (case when period_days = 14 then 'trialing' else 'active' end) else 'expired' end as new_status
+      from calc
+    ), upd as (
+      update subscriptions s set
+        offer_id = f.offer_id,
+        status = case when s.status in ('cancelled','paused') and f.new_status <> 'expired' and s.last_payment_at is not null and f.created_at <= s.last_payment_at
+                      then s.status else f.new_status end,
+        cancel_at_period_end = case when s.last_payment_at is not null and f.created_at > s.last_payment_at then false else s.cancel_at_period_end end,
+        price = f.price, currency = f.currency, period_days = f.period_days,
+        current_period_end = f.period_end, last_payment_at = f.created_at,
+        payments_count = f.payments, updated_at = now()
+      from fin f where s.person_id = f.person_id and s.source = 'zenedu'
+      returning s.person_id
     )
     insert into subscriptions (person_id, offer_id, source, status, price, currency, period_days, current_period_end, last_payment_at, payments_count, started_at, updated_at)
-    select person_id, offer_id, 'zenedu',
-      case when now() <= created_at + (period_days || ' days')::interval + interval '3 days'
-           then (case when period_days = 14 then 'trialing' else 'active' end) else 'expired' end,
-      price, currency, period_days, created_at + (period_days || ' days')::interval, created_at, payments, created_at, now()
-    from calc
-    on conflict (person_id, source) do update set
-      offer_id = excluded.offer_id,
-      status = case when subscriptions.status in ('cancelled','paused') and excluded.status <> 'expired' then subscriptions.status else excluded.status end,
-      price = excluded.price, currency = excluded.currency, period_days = excluded.period_days,
-      current_period_end = excluded.current_period_end, last_payment_at = excluded.last_payment_at,
-      payments_count = excluded.payments_count, updated_at = now()
+    select person_id, offer_id, 'zenedu', new_status, price, currency, period_days, period_end, created_at, payments, first_at, now()
+    from fin where person_id not in (select person_id from upd)
   `);
   const r = await d.select({ status: subscriptions.status, c: sql<number>`count(*)::int` }).from(subscriptions).groupBy(subscriptions.status);
   r.forEach((x) => { stats[`subs_${x.status}`] = x.c; });
@@ -235,7 +247,22 @@ export async function runFullSyncStep(): Promise<{ done: boolean; phase: string;
   }
 }
 
-/** Швидкий інкремент: перші сторінки підписників і замовлень (нові з'являються згори). */
+/**
+ * Нові записи з обох кінців списку: перші й останні сторінки. API не обіцяє порядку (новіші згори чи знизу),
+ * тож читаємо обидва кінці, щоб нові підписники й замовлення не загубились. Дублі відсікає upsert.
+ */
+async function syncRecent<T>(path: string, stats: SyncStats, key: string, each: (rows: T[]) => Promise<unknown>, edge = 3) {
+  const first = await zen.page<T>(path, 1);
+  const pages = new Set<number>([1]);
+  for (let i = 2; i <= Math.min(edge, first.lastPage); i++) pages.add(i);
+  for (let i = Math.max(1, first.lastPage - edge + 1); i <= first.lastPage; i++) pages.add(i);
+  let n = 0;
+  await each(first.rows); n += first.rows.length;
+  for (const pg of [...pages].filter((x) => x !== 1)) { await new Promise((res) => setTimeout(res, 1050)); const { rows } = await zen.page<T>(path, pg); await each(rows); n += rows.length; }
+  stats[key] = (stats[key] ?? 0) + n; stats[`${key}_pages`] = pages.size;
+}
+
+/** Швидкий інкремент (щодня): нові підписники й замовлення з обох кінців списку, потім перерахунок підписок. */
 export async function runIncrementalSync() {
   const d = db();
   const run = await d.insert(syncRuns).values({ kind: "zenedu_incremental" }).returning({ id: syncRuns.id });
@@ -243,8 +270,8 @@ export async function runIncrementalSync() {
   try {
     const botId = await getZenBotId();
     await syncOffersAndFunnels(botId, stats);
-    await syncSubscribers(botId, stats, 3, false);
-    await syncOrders(botId, stats, 3, false);
+    await syncRecent<ZenSubscriber>(`/bot/${botId}/subscribers`, stats, "subscribers", (rows) => upsertPersons(rows));
+    await syncRecent<ZenOrder>(`/bot/${botId}/orders`, stats, "orders", (rows) => upsertOrders(rows));
     await deriveSubscriptions(stats);
     await d.update(syncRuns).set({ status: "done", stats, finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
   } catch (e) {
