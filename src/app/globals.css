@@ -670,3 +670,4 @@ td.num { white-space: nowrap; }
 /* усередині Field загальний стиль input не має малювати другу рамку в полі копіювання */
 .fld .copyfield input:not([type=checkbox]):not([type=radio]), .copyfield input:not([type=checkbox]):not([type=radio]) { height: 100%; border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0 12px; font-family: var(--mono); font-size: 12.5px; }
 .fld .copyfield.sm input:not([type=checkbox]):not([type=radio]), .copyfield.sm input:not([type=checkbox]):not([type=radio]) { font-size: 12px; padding: 0 10px; }
+.tbl td.ellipsis { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
