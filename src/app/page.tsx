@@ -34,8 +34,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     <Shell title="Дашборд" counts={counts}>
       {!hasDb() && <Alert tone="warn">База даних ще не підключена. Додайте Neon у Vercel → Storage; після деплою тут з’являться дані. <Link href="/settings">Налаштування</Link></Alert>}
       {hasDb() && !d && <Alert tone="bad">Не вдалося порахувати показники. Оновіть сторінку; якщо не допоможе, напишіть розробнику.</Alert>}
-      {d && d.syncLast?.status === "error" && <Alert tone="bad">Остання синхронізація з ZenEdu ({dateTime(d.syncLast.started_at)}) завершилась помилкою: дані ZenEdu можуть бути неповні. Запустіть імпорт у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
-      {d && d.syncLast?.status !== "error" && (staleHours === null || staleHours > 30) && <Alert tone="warn">Дані ZenEdu {d.syncOkAt ? `оновлені ${dateTime(d.syncOkAt)}` : "ще не імпортовані"}: показники ZenEdu можуть відставати. Синхронізація йде щоранку; вручну — у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
+      {d?.syncProblem && <Alert tone="bad"><b>{d.syncProblem.title}.</b> Показники ZenEdu можуть бути неповні. {d.syncProblem.what} <Link href="/settings">Налаштування</Link>{d.syncProblem.detail && <div className="mono fld-h">{d.syncProblem.detail}</div>}</Alert>}
+      {d && !d.syncProblem && staleHours !== null && staleHours > 30 && <Alert tone="warn">Дані ZenEdu оновлені {dateTime(d.syncOkAt!)}: показники ZenEdu можуть відставати. Синхронізація йде щоранку; вручну — у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
       <Toolbar><form method="get" className="row-actions"><AutoSubmitSelect name="offer" defaultValue={sp.offer ?? ""} className="btn" ariaLabel="Оффер"><option value="">Клуб: усі оффери</option>{offers.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}</AutoSubmitSelect>
         <span className="fld-h">{offerName ? `Показано лише «${offerName}»: підписки й платежі цього оффера (Hub і прив'язані оффери ZenEdu).` : `ZenEdu і Hub разом, без тестових оплат.${d?.syncOkAt ? ` Дані ZenEdu на ${dateTime(d.syncOkAt)}.` : ""}`}</span></form></Toolbar>
 
@@ -47,7 +47,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       </div>
       <div className="grid g4" style={{ marginBottom: 16 }}>
         <Stat label="Щомісячний дохід (MRR)" value={d ? uah(d.mrrUah) : "—"} hint={d ? `з автопродовженням, у перерахунку на місяць${d.mrrUsd ? ` · ще ${money(d.mrrUsd, "USD")}` : ""}` : ""} />
-        <Stat label="Продовжили за 30 днів" value={d?.renews30 ?? "—"} hint="оплати продовження в ZenEdu і Hub" />
+        <Stat label="ARPU" value={d ? uah(d.arpu) : "—"} hint={d ? `MRR на учасницю з автопродовженням · фактично за 30 днів ${uah(d.arpu30)} на учасницю` : ""} />
         <Stat label="Пішли за 30 днів" value={d?.left ?? "—"} hint={d ? `доступ закінчився і не поновлений${d.members ? ` · ${Math.round((d.left / Math.max(1, d.members + d.left)) * 100)}% від учасниць` : ""}` : ""} tone={d && d.left > d.starts30 ? "crit" : undefined} />
         <Stat label="Без автопродовження" value={d?.noRenew ?? "—"} hint={d ? `скасували продовження або разовий доступ; у доступі до кінця періоду${d.pastDue ? ` · списання не пройшло ${d.pastDue}` : ""}` : ""} tone={d && d.pastDue ? "warn" : undefined} />
       </div>
@@ -65,7 +65,24 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             </tbody></table>
           ) : <EmptyState title="Немає даних" text="Запустіть імпорт із ZenEdu в Налаштуваннях." action={<Link href="/settings" className="btn sm">Налаштування</Link>} />}
         </Section>
-        <Section title="Списання на 14 днів" description="Автопродовження ZenEdu і Hub за днями; сума — якщо всі пройдуть">
+        <Section title="Останні 14 днів" description="Оплати за днями (київський час), ZenEdu і Hub разом. «пр.» — з них пробних; наведіть на число, щоб побачити ZenEdu / Hub." className="tbl">
+          <table><thead><tr><th>День</th><th className="num">Нові</th><th className="num">Прод.</th><th className="num">Сума</th></tr></thead><tbody>
+            {(d?.last14 ?? []).map((x) => <tr key={x.day}><td className="mono">{x.day.slice(8, 10)}.{x.day.slice(5, 7)}</td>
+              <td className="num" title={x.starts ? `ZenEdu ${x.starts_zen} · Hub ${x.starts_hub}${x.trials ? ` · з них пробних ${x.trials}` : ""}` : undefined}>{x.starts}{x.trials ? <span className="muted"> ({x.trials} пр.)</span> : null}</td>
+              <td className="num">{x.renews}</td><td className="num">{uah(Number(x.uah))}</td></tr>)}
+          </tbody></table>
+        </Section>
+      </div>
+
+      <div className="grid g21" style={{ marginBottom: 16 }}>
+        <Section title="Конверсії" description="Когорти: пробні, розпочаті 17–90 днів тому; перші повні місячні оплати 34–120 днів тому. Продовжила — була наступна оплата клубу протягом 45 днів.">
+          <div className="grid g3">
+            <Stat label="Пробний → 1-й повний місяць" value={d?.conv.trials ? `${Math.round((d.conv.trials_paid / d.conv.trials) * 100)}%` : "—"} hint={d ? `${d.conv.trials_paid} з ${d.conv.trials}` : ""} />
+            <Stat label="1-й → 2-й місяць" value={d?.conv.firsts ? `${Math.round((d.conv.firsts_paid / d.conv.firsts) * 100)}%` : "—"} hint={d ? `${d.conv.firsts_paid} з ${d.conv.firsts}` : ""} />
+            <Stat label="Продовжили за 30 днів" value={d?.renews30 ?? "—"} hint="оплати продовження в ZenEdu і Hub" />
+          </div>
+        </Section>
+        <Section title="Списання на 14 днів вперед" description="Автопродовження ZenEdu і Hub за днями; сума — якщо всі пройдуть">
           {d?.days14.some((x) => x.c || x.ends) ? <Timeline items={d.days14.filter((x) => x.c || x.ends).map((x) => ({ id: x.day, when: `${x.day.slice(8, 10)}.${x.day.slice(5, 7)}`, what: <div><b>{x.c}</b> {x.c ? `· ${uah(x.uah)}` : ""}<span className="muted">{x.c ? ` (ZenEdu ${x.zen}, Hub ${x.hub})` : ""}{x.ends ? ` · закінчується без продовження ${x.ends}` : ""}</span><div className="bar" title="списань"><i style={{ width: `${(x.c / maxDay) * 100}%` }} /></div></div> }))} />
             : <EmptyState title="Списань у найближчі 14 днів немає" text={d?.syncOkAt ? undefined : "Дані ZenEdu ще не імпортовані."} />}
         </Section>

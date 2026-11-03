@@ -157,7 +157,7 @@ export async function syncOrders(botId: number, stats: SyncStats, maxPages = 20,
 }
 
 /**
- * Виводить підписки ZenEdu з платежів: останній платіж підписки кожної людини + період за назвою оффера.
+ * Виводить підписки ZenEdu з платежів: останній платіж підписки кожної людини (за датою оплати) + період за назвою оффера.
  * Той самий алгоритм, що дав 177 ≈ 163 активних у ZenEdu (різниця — trial).
  * Скасування (вебхук ZenEdu) або пауза зберігаються, доки не прийде новий платіж: новий платіж означає, що людина знову платить.
  * Без ON CONFLICT: унікальний індекс (person_id, source) прибрано міграцією 0009 (у Hub людина може мати кілька підписок),
@@ -167,12 +167,12 @@ export async function deriveSubscriptions(stats: SyncStats) {
   const d = db();
   await d.execute(sql`
     with last as (
-      select distinct on (person_id) person_id, offer_id, offer_name, type, price, currency, created_at
+      select distinct on (person_id) person_id, offer_id, offer_name, type, price, currency, coalesce(paid_at, created_at) as created_at
       from orders
       where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew') and person_id is not null
-      order by person_id, created_at desc
+      order by person_id, coalesce(paid_at, created_at) desc
     ), cnt as (
-      select person_id, count(*)::int as c, min(created_at) as first_at from orders
+      select person_id, count(*)::int as c, min(coalesce(paid_at, created_at)) as first_at from orders
       where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew') and person_id is not null
       group by person_id
     ), calc as (
@@ -268,17 +268,23 @@ export async function runIncrementalSync() {
   const run = await d.insert(syncRuns).values({ kind: "zenedu_incremental" }).returning({ id: syncRuns.id });
   const stats: SyncStats = {};
   try {
+    // кожен крок окремо: збій одного (напр., ZenEdu тимчасово обмежив запити) не зупиняє решту, підписки перераховуються завжди
+    const errors: string[] = [];
+    const step = async (name: string, fn: () => Promise<unknown>) => { try { await fn(); } catch (e) { errors.push(`${name}: ${String(e).slice(0, 200)}`); } };
     const botId = await getZenBotId();
-    await syncOffersAndFunnels(botId, stats);
-    await syncRecent<ZenSubscriber>(`/bot/${botId}/subscribers`, stats, "subscribers", (rows) => upsertPersons(rows));
-    await syncRecent<ZenOrder>(`/bot/${botId}/orders`, stats, "orders", (rows) => upsertOrders(rows));
+    await step("оффери", () => syncOffersAndFunnels(botId, stats));
+    await step("підписники", () => syncRecent<ZenSubscriber>(`/bot/${botId}/subscribers`, stats, "subscribers", (rows) => upsertPersons(rows)));
+    await step("замовлення", () => syncRecent<ZenOrder>(`/bot/${botId}/orders`, stats, "orders", (rows) => upsertOrders(rows)));
     await deriveSubscriptions(stats);
-    await d.update(syncRuns).set({ status: "done", stats, finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
+    await d.update(syncRuns).set({ status: errors.length ? "error" : "done", stats, error: errors.length ? errors.join("; ") : null, finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
+    if (errors.length) throw new Error(errors.join("; "));
+    return stats;
   } catch (e) {
+    const [cur] = await d.select({ status: syncRuns.status }).from(syncRuns).where(eq(syncRuns.id, run[0].id));
+    if (cur?.status === "error") throw e;
     await d.update(syncRuns).set({ status: "error", stats, error: String(e), finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
     throw e;
   }
-  return stats;
 }
 
 export async function lastSyncRuns(n = 5) {
