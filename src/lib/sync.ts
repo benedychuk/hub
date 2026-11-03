@@ -163,6 +163,15 @@ export async function syncOrders(botId: number, stats: SyncStats, maxPages = 20,
  * Без ON CONFLICT: унікальний індекс (person_id, source) прибрано міграцією 0009 (у Hub людина може мати кілька підписок),
  * тому оновлюємо наявну підписку ZenEdu людини, а нову вставляємо лише тим, у кого її ще немає.
  */
+/** Короткий текст помилки для журналу й дашборду: справжня причина від Postgres замість повного тексту SQL-запиту. */
+export function errorText(e: unknown, max = 300): string {
+  const err = e as { message?: string; cause?: { message?: string; code?: string } };
+  const cause = err?.cause?.message ? `${err.cause.message}${err.cause.code ? ` (${err.cause.code})` : ""}` : "";
+  const msg = String(err?.message ?? e);
+  const short = msg.startsWith("Failed query") ? "Помилка запиту до бази" : msg;
+  return (cause ? `${short}: ${cause}` : short).slice(0, max);
+}
+
 export async function deriveSubscriptions(stats: SyncStats) {
   const d = db();
   await d.execute(sql`
@@ -242,7 +251,7 @@ export async function runFullSyncStep(): Promise<{ done: boolean; phase: string;
     await d.update(syncRuns).set({ status: "done", stats, finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
     return { done, phase: next, stats };
   } catch (e) {
-    await d.update(syncRuns).set({ status: "error", stats, error: String(e), finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
+    await d.update(syncRuns).set({ status: "error", stats, error: errorText(e), finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
     throw e;
   }
 }
@@ -270,19 +279,19 @@ export async function runIncrementalSync() {
   try {
     // кожен крок окремо: збій одного (напр., ZenEdu тимчасово обмежив запити) не зупиняє решту, підписки перераховуються завжди
     const errors: string[] = [];
-    const step = async (name: string, fn: () => Promise<unknown>) => { try { await fn(); } catch (e) { errors.push(`${name}: ${String(e).slice(0, 200)}`); } };
+    const step = async (name: string, fn: () => Promise<unknown>) => { try { await fn(); } catch (e) { errors.push(`${name}: ${errorText(e, 200)}`); } };
     const botId = await getZenBotId();
     await step("оффери", () => syncOffersAndFunnels(botId, stats));
     await step("підписники", () => syncRecent<ZenSubscriber>(`/bot/${botId}/subscribers`, stats, "subscribers", (rows) => upsertPersons(rows)));
     await step("замовлення", () => syncRecent<ZenOrder>(`/bot/${botId}/orders`, stats, "orders", (rows) => upsertOrders(rows)));
-    await deriveSubscriptions(stats);
+    await step("підписки", () => deriveSubscriptions(stats));
     await d.update(syncRuns).set({ status: errors.length ? "error" : "done", stats, error: errors.length ? errors.join("; ") : null, finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
     if (errors.length) throw new Error(errors.join("; "));
     return stats;
   } catch (e) {
     const [cur] = await d.select({ status: syncRuns.status }).from(syncRuns).where(eq(syncRuns.id, run[0].id));
     if (cur?.status === "error") throw e;
-    await d.update(syncRuns).set({ status: "error", stats, error: String(e), finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
+    await d.update(syncRuns).set({ status: "error", stats, error: errorText(e), finishedAt: new Date() }).where(eq(syncRuns.id, run[0].id));
     throw e;
   }
 }
