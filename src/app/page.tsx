@@ -7,7 +7,7 @@ import { AutoSubmitSelect } from "@/components/ui/controls";
 import { ColumnChart, LineChart, ShareBar, HBars, type Cat } from "@/components/ui/charts";
 import { offerOptions } from "@/lib/offers";
 import { navCounts, recentEvents } from "@/lib/queries";
-import { buildDashboard, kyivMonth } from "@/lib/dashboard";
+import { buildDashboard, kyivMonth, USD_UAH } from "@/lib/dashboard";
 import { dateTime, fullName, money } from "@/lib/format";
 import { describeEvent } from "@/lib/event-labels";
 import { hasDb } from "@/db";
@@ -26,10 +26,10 @@ const addMonth = (m: string, k: number) => { const [y, mm] = m.split("-").map(Nu
 const INFO = {
   members: "Скільки людей зараз мають доступ до клубу.\n\nУнікальні люди з чинною підпискою клубу в ZenEdu або в Hub: людина, що є в обох, рахується один раз. Доступ ZenEdu — до кінця оплаченого періоду + 3 дні на автосписання; Hub — до кінця періоду + грейс із налаштувань оплат. Тестові оплати не рахуються.",
   starts: "Скільки підписок клубу розпочато за останні 30 днів.\n\nZenEdu — замовлення «початок підписки» (зокрема пробні). Hub — перша оплата оффера з доступом до каналу. Дата — момент оплати. Порівняння — з 30 днями перед тим.",
-  revenue: "Скільки грошей реально надійшло за 30 днів.\n\nУсі оплачені замовлення ZenEdu і Hub (клуб і продукти), без тестових і повернених. Долари показано окремо, не конвертуємо.",
+  revenue: `Скільки грошей реально надійшло за 30 днів.\n\nУсі оплачені замовлення ZenEdu і Hub (клуб і продукти), без тестових і повернених. Долари перераховано в гривні за курсом ${USD_UAH} грн; під числом видно, скільки з них у доларах.`,
   bot: "Скільки людей уперше натиснули /start у Hub-боті за 30 днів.\n\n«Усього» — усі, хто колись запускав Hub-бот.",
-  mrr: "Щомісячний дохід, який дадуть чинні підписки з автопродовженням.\n\nСума цін у перерахунку на місяць: місячна = ціна, 3 місяці = ціна / 3, рік = ціна / 12. Пробні рахуються за ціною повного місяця. Без скасованих і разових. Це «потенціал», а не прогноз: прогноз з урахуванням тих, хто не продовжує, — у графіку по місяцях.",
-  arpu: "Скільки в середньому принесла одна учасниця за останні 90 днів.\n\nУвесь дохід клубу в гривнях за 90 днів (оплати ZenEdu і Hub, без тестових і повернених), поділений на кількість людей, які мали доступ до клубу хоча б один день за ці 90 днів — і тих, хто вже пішов, і нових. «На місяць» — те саме, поділене на 3. Долари не враховуються.",
+  mrr: `Щомісячний дохід, який дадуть чинні підписки з автопродовженням.\n\nСума цін у перерахунку на місяць: місячна = ціна, 3 місяці = ціна / 3, рік = ціна / 12. Пробні рахуються за ціною повного місяця. Без скасованих і разових. Доларові підписки — за курсом ${USD_UAH} грн. Це «потенціал», а не прогноз: прогноз з урахуванням тих, хто не продовжує, — у графіку по місяцях.`,
+  arpu: `Скільки в середньому принесла одна учасниця за останні 90 днів.\n\nУвесь дохід клубу в гривнях за 90 днів (оплати ZenEdu і Hub, без тестових і повернених), поділений на кількість людей, які мали доступ до клубу хоча б один день за ці 90 днів — і тих, хто вже пішов, і нових. «На місяць» — те саме, поділене на 3. Долари — за курсом ${USD_UAH} грн.`,
   left: "Скільки людей утратили доступ за останні 30 днів і не поновили його.\n\nПідписка закінчилась (для ZenEdu — +3 дні на автосписання), а іншої чинної підписки клубу в людини немає. Сюди ж потрапляють пробні, які не перейшли в оплату. Відсоток — від суми нинішніх учасниць і тих, хто пішов.",
   norenew: "Учасниці, які ще мають доступ, але наступного списання не буде.\n\nВимкнули продовження (ZenEdu повідомляє вебхуком, Hub — кнопкою в боті) або купили разовий доступ. Вони підуть наприкінці оплаченого періоду, якщо не оплатять знову. «Списання не пройшло» — автосписання Hub, які банк відхилив.",
 } as const;
@@ -54,7 +54,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     revExtra[m] = [
       ...(f ? [{ name: "оплат: нових / повернулись / продовжень", value: `${f.new} / ${f.returned} / ${f.renew}` }] : []),
       ...(p && m >= thisMonth ? [{ name: "якщо продовжать усі", value: uah(p.maxUah) }, { name: "очікуваних списань", value: `${Math.round(p.expC)} з ${p.c}` }] : []),
-      ...(f && Number(f.usd) ? [{ name: "ще в доларах", value: money(Number(f.usd), "USD") }] : []),
+      ...(f && Number(f.usd) ? [{ name: `з них у доларах (×${d?.usdRate})`, value: money(Number(f.usd), "USD") }] : []),
     ];
   }
   const flowCats = mCats.filter((c) => c.key <= thisMonth);
@@ -78,16 +78,16 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {d?.syncProblem && <Alert tone="bad"><b>{d.syncProblem.title}.</b> Показники ZenEdu можуть бути неповні. {d.syncProblem.what} <Link href="/settings">Налаштування</Link>{d.syncProblem.detail && <div className="mono fld-h">{d.syncProblem.detail}</div>}</Alert>}
       {d && !d.syncProblem && staleHours !== null && staleHours > 30 && <Alert tone="warn">Дані ZenEdu оновлені {dateTime(d.syncOkAt!)}: показники ZenEdu можуть відставати. Синхронізація йде щоранку; вручну — у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
       <Toolbar><form method="get" className="row-actions"><AutoSubmitSelect name="offer" defaultValue={sp.offer ?? ""} className="btn" ariaLabel="Оффер"><option value="">Клуб: усі оффери</option>{offers.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}</AutoSubmitSelect>
-        <span className="fld-h">{offerName ? `Показано лише «${offerName}»: підписки й платежі цього оффера (Hub і прив'язані оффери ZenEdu).` : `ZenEdu і Hub разом, без тестових оплат.${d?.syncOkAt ? ` Дані ZenEdu на ${dateTime(d.syncOkAt)}.` : ""}`}</span></form></Toolbar>
+        <span className="fld-h">{offerName ? `Показано лише «${offerName}»: підписки й платежі цього оффера (Hub і прив'язані оффери ZenEdu).` : `ZenEdu і Hub разом, без тестових оплат. Суми в гривнях, долари за курсом ${USD_UAH} грн.${d?.syncOkAt ? ` Дані ZenEdu на ${dateTime(d.syncOkAt)}.` : ""}`}</span></form></Toolbar>
 
       <div className="grid g4" style={{ marginBottom: 16 }}>
         <Stat label="Активні учасниці клубу" info={INFO.members} value={d?.members ?? "—"} hint={d ? `ZenEdu ${d.zenOnly} · Hub ${d.hubOnly}${d.both ? ` · в обох ${d.both}` : ""} · з них пробних ${d.trialing}` : ""} />
         <Stat label="Нових підписок за 30 днів" info={INFO.starts} value={d?.starts30 ?? "—"} hint={d ? `ZenEdu ${d.startsZen} · Hub ${d.startsHub} · ${delta(d.starts30, d.startsPrev)}` : ""} tone={d ? (d.starts30 < d.startsPrev ? "crit" : "good") : undefined} />
-        <Stat label="Зібрано за 30 днів" info={INFO.revenue} value={d ? uah(d.revUah) : "—"} hint={d ? `ZenEdu ${uah(d.revZen)} · Hub ${uah(d.revHub)}${d.revUsd ? ` · ще ${money(d.revUsd, "USD")}` : ""} · ${d.revCount} оплат` : ""} />
+        <Stat label="Зібрано за 30 днів" info={INFO.revenue} value={d ? uah(d.revUah) : "—"} hint={d ? `ZenEdu ${uah(d.revZen)} · Hub ${uah(d.revHub)}${d.revUsd ? ` · з них ${money(d.revUsd, "USD")} за курсом ${d.usdRate}` : ""} · ${d.revCount} оплат` : ""} />
         <Stat label="Запустили Hub-бот за 30 днів" info={INFO.bot} value={d?.bot.d30 ?? "—"} hint={d ? `усього ${d.bot.total} · ${delta(d.bot.d30, d.bot.prev)}` : ""} />
       </div>
       <div className="grid g4" style={{ marginBottom: 16 }}>
-        <Stat label="Щомісячний дохід (MRR)" info={INFO.mrr} value={d ? uah(d.mrrUah) : "—"} hint={d ? `потенціал автопродовжень${d.mrrUsd ? ` · ще ${money(d.mrrUsd, "USD")}` : ""}` : ""} />
+        <Stat label="Щомісячний дохід (MRR)" info={INFO.mrr} value={d ? uah(d.mrrUah) : "—"} hint={d ? `потенціал автопродовжень${d.mrrUsd ? ` · з них ${money(d.mrrUsd, "USD")} за курсом ${d.usdRate}` : ""}` : ""} />
         <Stat label="ARPU за 90 днів" info={INFO.arpu} value={d ? uah(d.arpu90) : "—"} hint={d ? `≈ ${uah(d.arpu90 / 3)} на місяць · ${uah(d.arpu90Uah)} / ${d.arpu90People} учасниць` : ""} />
         <Stat label="Пішли за 30 днів" info={INFO.left} value={d?.left ?? "—"} hint={d ? `${pct(d.left, d.members + d.left)}% від учасниць · нових за той час ${d.starts30}` : ""} tone={d && d.left > d.starts30 ? "crit" : undefined} />
         <Stat label="Без автопродовження" info={INFO.norenew} value={d?.noRenew ?? "—"} hint={d ? `у доступі до кінця періоду${d.pastDue ? ` · списання не пройшло ${d.pastDue}` : ""}` : ""} tone={d && d.pastDue ? "warn" : undefined} />
@@ -141,7 +141,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         </Section>
       </div>
 
-      <Section title="Тарифи: хто на якому" description={`Учасниці з чинним доступом за тарифами. MRR — щомісячний дохід з автопродовженням.${d?.zenRenewPrice ? ` Пробний ZenEdu після 2 тижнів рахується за ${uah(d.zenRenewPrice)}/міс.` : ""}`} className="tbl">
+      <Section title="Тарифи: хто на якому" description={`Учасниці з чинним доступом за тарифами. MRR — щомісячний дохід з автопродовженням (у валюті тарифу; «Разом» — у гривнях, долари за курсом).${d?.zenRenewPrice ? ` Пробний ZenEdu після 2 тижнів рахується за ${uah(d.zenRenewPrice)}/міс.` : ""}`} className="tbl">
         {d?.tariffs.length ? (
           <table><thead><tr><th>Тариф</th><th>Джерело</th><th>Період</th><th className="num">Підписок</th><th className="num">З автопродовженням</th><th className="num">Ціна</th><th className="num">MRR</th><th style={{ width: "18%" }}></th></tr></thead><tbody>
             {d.tariffs.map((t) => (<tr key={`${t.source}${t.name}${t.period}${t.currency}`}><td className="ellipsis">{t.name}</td><td><Pill tone={t.source === "hub" ? "acc" : "moon"}>{t.source === "hub" ? "Hub" : "ZenEdu"}</Pill></td><td>{periodLabel(t.period)}</td>
