@@ -134,6 +134,11 @@ export async function buildDashboard(offerKey?: string) {
     from fl`)).rows as { due: number; renewed: number; trial_due: number; trial_paid: number }[];
   const pRenew = rates?.due ? rates.renewed / rates.due : 0.8;
   const pTrial = rates?.trial_due ? rates.trial_paid / rates.trial_due : 0.5;
+  // ARPU за 90 днів: дохід клубу (UAH) за 90 днів / люди, які мали доступ до клубу хоча б день за ці 90 днів
+  const [a90] = (await d.execute(sql`${cover}
+    select coalesce(sum(price) filter (where currency = 'UAH' and created_at >= now() - interval '90 days'), 0)::text as uah,
+      count(distinct person_id) filter (where created_at <= now() and cover_end + interval '3 days' > now() - interval '90 days')::int as people
+    from fl`)).rows as { uah: string; people: number }[];
 
   // останні 14 днів по днях (київський час): нові й продовження
   const daily = (await d.execute(sql`
@@ -236,6 +241,7 @@ export async function buildDashboard(offerKey?: string) {
     // ARPU: щомісячний дохід (MRR) на учасницю з автопродовженням; і фактичний дохід клубу за 30 днів на активну учасницю
     arpu: renewingPersons.size ? Math.round(mrrUah / renewingPersons.size) : 0,
     arpu30: bySource.size ? Math.round(Number(period.club_uah) / bySource.size) : 0,
+    arpu90: a90?.people ? Math.round(Number(a90.uah) / a90.people) : 0, arpu90People: a90?.people ?? 0, arpu90Uah: Number(a90?.uah ?? 0),
     starts30: period.starts, startsZen: period.starts_zen, startsHub: period.starts_hub, startsPrev: period.starts_prev, renews30: period.renews,
     revUah: revOf("UAH"), revUsd: revOf("USD"), revZen: revOf("UAH", "zenedu"), revHub: revOf("UAH", "hub"), revCount,
     bot: bot ?? { total: 0, d30: 0, prev: 0 },
