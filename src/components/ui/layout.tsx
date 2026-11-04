@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { ArrowLeft, Check } from "lucide-react";
+import { ArrowLeft, Check, Info } from "lucide-react";
+import { Tip } from "./controls";
 
 /** Заголовок сторінки об’єкта: назад, назва, статус, дії. */
 export function PageHeader({ back, backLabel = "Назад", title, icon, status, actions }: { back?: string; backLabel?: string; title: React.ReactNode; icon?: React.ReactNode; status?: React.ReactNode; actions?: React.ReactNode }) {
@@ -52,8 +53,10 @@ export function Field({ label, hint, error, children, htmlFor }: { label: React.
 export function FormRow({ cols = 2, children }: { cols?: 2 | 3; children: React.ReactNode }) { return <div className={`frow c${cols}`}>{children}</div>; }
 
 /** Велика цифра з підписом. */
-export function Stat({ label, value, hint, tone }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: "good" | "warn" | "crit" }) {
-  return <div className={`stat ${tone ?? ""}`}><small>{label}</small><b>{value}</b>{hint && <span className="pct">{hint}</span>}</div>;
+/** Плитка показника. info — пояснення «що це і як рахується», спливає при наведенні на «i» у куті. */
+export function Stat({ label, value, hint, tone, info }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: "good" | "warn" | "crit"; info?: string }) {
+  return <div className={`stat ${tone ?? ""}`}><small>{label}</small><b>{value}</b>{hint && <span className="pct">{hint}</span>}
+    {info && <Tip text={info}><button type="button" className="stat-i" aria-label={`Як рахується: ${label}`}><Info size={14} /></button></Tip>}</div>;
 }
 /** Компактний підсумок «підпис: значення» у рядок. */
 export function Summary({ items }: { items: { label: string; value: React.ReactNode; tone?: "warn" | "crit" }[] }) {
