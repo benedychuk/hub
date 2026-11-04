@@ -90,16 +90,50 @@ export async function buildDashboard(offerKey?: string) {
       count(*) filter (where kind = 'subscription_renew' and created_at >= now() - interval '30 days')::int as renews,
       coalesce(sum(price) filter (where currency = 'UAH' and created_at >= now() - interval '30 days'), 0)::text as club_uah
     from c`)).rows[0] as { starts: number; starts_zen: number; starts_hub: number; starts_prev: number; renews: number; club_uah: string };
-  const monthly = (await d.execute(sql`
-    with c as (${classified})
-    select to_char(created_at at time zone 'Europe/Kyiv', 'YYYY-MM') as m,
-      count(*) filter (where kind = 'subscription_start')::int as starts,
-      count(*) filter (where kind = 'subscription_renew')::int as renews,
-      count(*) filter (where source = 'hub')::int as hub,
-      coalesce(sum(price) filter (where currency = 'UAH'), 0)::text as uah,
-      coalesce(sum(price) filter (where currency = 'USD'), 0)::text as usd
-    from c where created_at >= date_trunc('month', now() at time zone 'Europe/Kyiv') - interval '7 months'
-    group by 1 order by 1`)).rows as { m: string; starts: number; renews: number; hub: number; uah: string; usd: string }[];
+  // ---------- динаміка по місяцях (за оплатами) ----------
+  // кожна оплата клубу покриває період (місяць / 3 міс. / рік / пробні 2 тижні); +3 дні на продовження.
+  // нова — перша оплата людини; повернулась — оплата після перерви (попередній доступ скінчився понад 3 дні тому);
+  // продовження — оплата без перерви. Пішла — доступ скінчився (+3 дні) і наступної оплати не було.
+  const cover = sql`
+    with c as (${classified}),
+    cv as (select c.*, (case
+        when c.source = 'zenedu' then (case when lower(o.offer_name) like '%рік%' or lower(o.offer_name) like '%year%' then 366
+          when lower(o.offer_name) like '%3 місяці%' or lower(o.offer_name) like '%три місяці%' then 92 when c.is_trial then 14 else 31 end)
+        else (case when c.is_trial then 14 else coalesce((select s.period_days from payment_attempts pa join subscriptions s on s.id = pa.subscription_id where pa.order_id = c.id limit 1), 31) end) end) as days
+      from c join orders o on o.id = c.id),
+    sq as (select cv.*, created_at + days * interval '1 day' as cover_end,
+        max(created_at + days * interval '1 day') over (partition by person_id order by created_at, id rows between unbounded preceding and 1 preceding) as prev_end,
+        max(created_at + days * interval '1 day') over (partition by person_id order by created_at, id rows between unbounded preceding and current row) as run_end,
+        lead(created_at) over (partition by person_id order by created_at, id) as next_at
+      from cv),
+    fl as (select sq.*, case when prev_end is null then 'new' when prev_end + interval '3 days' < created_at then 'returned' else 'renew' end as flow,
+        case when next_at is null or next_at > run_end + interval '3 days' then run_end + interval '3 days' end as lapse_at
+      from sq)`;
+  const flowRows = (await d.execute(sql`${cover},
+    mo as (select g as m0, g + interval '1 month' as m1 from generate_series(date_trunc('month', now() at time zone 'Europe/Kyiv') - interval '11 months', date_trunc('month', now() at time zone 'Europe/Kyiv'), interval '1 month') g),
+    mz as (select to_char(m0, 'YYYY-MM') as m, m0 at time zone 'Europe/Kyiv' as a, least(m1 at time zone 'Europe/Kyiv', now()) as b from mo)
+    select mz.m,
+      (select count(*) from fl where flow = 'new' and created_at >= mz.a and created_at < mz.b)::int as new,
+      (select count(*) from fl where flow = 'new' and is_trial and created_at >= mz.a and created_at < mz.b)::int as new_trial,
+      (select count(*) from fl where flow = 'returned' and created_at >= mz.a and created_at < mz.b)::int as returned,
+      (select count(*) from fl where flow = 'renew' and created_at >= mz.a and created_at < mz.b)::int as renew,
+      (select coalesce(sum(price), 0) from fl where flow = 'new' and currency = 'UAH' and created_at >= mz.a and created_at < mz.b)::text as uah_new,
+      (select coalesce(sum(price), 0) from fl where flow = 'returned' and currency = 'UAH' and created_at >= mz.a and created_at < mz.b)::text as uah_returned,
+      (select coalesce(sum(price), 0) from fl where flow = 'renew' and currency = 'UAH' and created_at >= mz.a and created_at < mz.b)::text as uah_renew,
+      (select coalesce(sum(price), 0) from fl where currency = 'USD' and created_at >= mz.a and created_at < mz.b)::text as usd,
+      (select count(distinct person_id) from fl where lapse_at >= mz.a and lapse_at < mz.b and lapse_at <= now())::int as churned,
+      (select count(distinct person_id) from fl where created_at <= mz.b and cover_end + interval '3 days' > mz.b)::int as members
+    from mz order by mz.m`)).rows as { m: string; new: number; new_trial: number; returned: number; renew: number; uah_new: string; uah_returned: string; uah_renew: string; usd: string; churned: number; members: number }[];
+  // ймовірності для прогнозу: частка тих, хто продовжив, серед доступів, що закінчились за останні 150 днів
+  const [rates] = (await d.execute(sql`${cover}
+    select
+      count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days')::int as due,
+      count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days' and next_at is not null and next_at <= run_end + interval '10 days')::int as renewed,
+      count(*) filter (where is_trial and cover_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days')::int as trial_due,
+      count(*) filter (where is_trial and cover_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days' and next_at is not null and next_at <= cover_end + interval '10 days')::int as trial_paid
+    from fl`)).rows as { due: number; renewed: number; trial_due: number; trial_paid: number }[];
+  const pRenew = rates?.due ? rates.renewed / rates.due : 0.8;
+  const pTrial = rates?.trial_due ? rates.trial_paid / rates.trial_due : 0.5;
 
   // останні 14 днів по днях (київський час): нові й продовження
   const daily = (await d.execute(sql`
@@ -146,7 +180,7 @@ export async function buildDashboard(offerKey?: string) {
   const zenMonthly = subs.filter((s) => s.source === "zenedu" && s.period_days >= 28 && s.period_days <= 31).map((s) => Number(s.price));
   const zenRenewPrice = mode(zenMonthly);
   const now = Date.now();
-  const charges: { at: number; price: number; currency: string; source: string }[] = [];
+  const charges: { at: number; price: number; currency: string; source: string; p: number }[] = [];
   const horizon = endOfMonthKyiv(2); // поточний місяць і два наступні
   for (const s of subs.filter(autoRenews)) {
     let next = new Date((s.source === "hub" ? s.next_charge_at ?? s.current_period_end : s.current_period_end) ?? 0).getTime();
@@ -154,7 +188,9 @@ export async function buildDashboard(offerKey?: string) {
     if (next < now) next = now; // ZenEdu: списання вже мало бути, чекаємо в межах 3 днів
     const price = s.source === "zenedu" && s.status === "trialing" ? (zenRenewPrice ?? Number(s.price)) : Number(s.price);
     const step = Math.max(1, s.source === "zenedu" && s.status === "trialing" ? 31 : s.period_days) * DAY;
-    for (let t = next; t < horizon; t += step) charges.push({ at: t, price, currency: s.currency, source: s.source });
+    // імовірність k-го списання: пробний — спершу конверсія пробного, далі продовження; решта — продовження щоразу
+    let p = s.status === "trialing" ? pTrial : pRenew;
+    for (let t = next; t < horizon; t += step) { charges.push({ at: t, price, currency: s.currency, source: s.source, p }); p *= pRenew; }
   }
   const days14: { day: string; c: number; zen: number; hub: number; uah: number; ends: number }[] = [];
   for (let i = 0; i < 14; i++) {
@@ -168,10 +204,12 @@ export async function buildDashboard(offerKey?: string) {
     const day = kyivDay(new Date(s.current_period_end).getTime());
     const row = days14.find((x) => x.day === day); if (row) row.ends++;
   }
-  const forecast = new Map<string, { uah: number; usd: number; c: number }>();
+  // прогноз по місяцях: очікуване (з імовірностями) і максимум (якщо всі продовжать)
+  const forecast = new Map<string, { uah: number; usd: number; c: number; maxUah: number; expC: number }>();
   for (const c of charges) {
-    const m = kyivMonth(c.at); const f = forecast.get(m) ?? { uah: 0, usd: 0, c: 0 };
-    if (c.currency === "USD") f.usd += c.price; else f.uah += c.price; f.c++; forecast.set(m, f);
+    const m = kyivMonth(c.at); const f = forecast.get(m) ?? { uah: 0, usd: 0, c: 0, maxUah: 0, expC: 0 };
+    if (c.currency === "USD") f.usd += c.price * c.p; else { f.uah += c.price * c.p; f.maxUah += c.price; }
+    f.c++; f.expC += c.p; forecast.set(m, f);
   }
 
   // ---------- тарифи ----------
@@ -201,7 +239,7 @@ export async function buildDashboard(offerKey?: string) {
     starts30: period.starts, startsZen: period.starts_zen, startsHub: period.starts_hub, startsPrev: period.starts_prev, renews30: period.renews,
     revUah: revOf("UAH"), revUsd: revOf("USD"), revZen: revOf("UAH", "zenedu"), revHub: revOf("UAH", "hub"), revCount,
     bot: bot ?? { total: 0, d30: 0, prev: 0 },
-    days14, monthly, forecast: [...forecast.entries()].map(([m, f]) => ({ m, ...f })).sort((a, b) => a.m.localeCompare(b.m)),
+    days14, flow: flowRows, pRenew, pTrial, rates: rates ?? { due: 0, renewed: 0, trial_due: 0, trial_paid: 0 }, forecast: [...forecast.entries()].map(([m, f]) => ({ m, ...f })).sort((a, b) => a.m.localeCompare(b.m)),
     tariffs: tariffRows, mrrUah, mrrUsd, zenRenewPrice,
     syncOkAt: sync?.ok_at ? new Date(sync.ok_at) : null, syncLast: sync?.last ?? null, syncProblem: syncProblem(sync?.last ?? null),
     scoped: Boolean(sc),
