@@ -36,7 +36,7 @@ export default async function Shchyro({ searchParams }: { searchParams: Promise<
   const sp = await searchParams;
   const tab = TABS.some((t) => t[0] === sp.tab) ? sp.tab! : "overview";
   const configured = shchyroConfigured();
-  const [counts, res, plans, st] = await Promise.all([navCounts(), resourceList(), planList(), safe(() => shchyroSettings(), { enabled: false, resourceKey: "shchyro.access", pushedIds: [] as number[], lastSync: null, lastPush: null, lastCheck: null })]);
+  const [counts, res, plans, st] = await Promise.all([navCounts(), resourceList(), planList(), safe(() => shchyroSettings(), { fullSync: false, enabled: false, resourceKey: "shchyro.access", pushedIds: [] as number[], lastSync: null, lastPush: null, lastCheck: null })]);
   const entitled = await safe(() => shchyroEntitled(st.resourceKey), [] as Entitled[]);
   const resource = res.find((r) => r.key === st.resourceKey);
   const inPlans = plans.filter((p) => Object.keys((p.entitlements ?? {}) as Record<string, string>).includes(st.resourceKey));

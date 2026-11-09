@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db, hasDb, schema } from "@/db";
-import { accessGraceHours, subscriptionAllowsSql } from "./access-rule";
+import { accessGraceHours, subscriptionAllowsSql, ZEN_GRACE_HOURS } from "./access-rule";
 
 /**
  * Керування доступом до бота «Щиро» з Hub (push-модель за ТЗ інтеграції).
@@ -24,7 +24,7 @@ const { persons, settings, events, entitlements, resources } = schema;
 export const DEFAULT_RESOURCE = "shchyro.access";
 const TIMEOUT_MS = 8_000;
 const PUSH_BATCH = 60; // grant/revoke за один тік: укладається в хвилину й не б'є по «Щиро»
-const KEYS = { enabled: "shchyro.push_enabled", resource: "shchyro.resource_key", pushed: "shchyro.pushed_ids", lastSync: "shchyro.last_sync", lastPush: "shchyro.last_push", lastCheck: "shchyro.last_check" } as const;
+const KEYS = { fullSync: "shchyro.full_sync", enabled: "shchyro.push_enabled", resource: "shchyro.resource_key", pushed: "shchyro.pushed_ids", lastSync: "shchyro.last_sync", lastPush: "shchyro.last_push", lastCheck: "shchyro.last_check" } as const;
 
 export type ShchyroResult<T = Record<string, unknown>> = { ok: true; status: number; data: T } | { ok: false; status: number; error: string; data?: Record<string, unknown> };
 export type SyncSummary = { at: string; mode: "preview" | "reconcile"; ok: boolean; error?: string; total_received?: number; activated?: number; deactivated?: number; protected_untouched?: number; unchanged?: number; applied?: boolean; activated_ids?: number[]; deactivated_ids?: number[]; limit?: number; kept_zenedu?: number };
@@ -41,11 +41,14 @@ export function shchyroConfigured() { return Boolean(process.env.SHCHYRO_API_URL
 export function shchyroBaseUrl() { return (process.env.SHCHYRO_API_URL ?? "").replace(/\/$/, ""); }
 
 export async function shchyroSettings() {
-  if (!hasDb()) return { enabled: false, resourceKey: DEFAULT_RESOURCE, pushedIds: [] as number[], lastSync: null as SyncSummary | null, lastPush: null as Record<string, unknown> | null, lastCheck: null as Record<string, unknown> | null };
+  if (!hasDb()) return { fullSync: false, enabled: false, resourceKey: DEFAULT_RESOURCE, pushedIds: [] as number[], lastSync: null as SyncSummary | null, lastPush: null as Record<string, unknown> | null, lastCheck: null as Record<string, unknown> | null };
   const rows = await db().select().from(settings).where(inArray(settings.key, Object.values(KEYS)));
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   return {
     enabled: m[KEYS.enabled] === true,
+    // щоденна звірка повного списку (вимикає в боті всіх, кого немає в Hub) — окремий вимикач, вимкнений за замовчуванням;
+    // без неї автоматика лише видає доступ тим, хто оплатив, і забирає його в тих, кому сама видала
+    fullSync: m[KEYS.fullSync] === true,
     resourceKey: typeof m[KEYS.resource] === "string" && m[KEYS.resource] ? String(m[KEYS.resource]) : DEFAULT_RESOURCE,
     pushedIds: Array.isArray(m[KEYS.pushed]) ? (m[KEYS.pushed] as number[]).map(Number).filter((n) => n > 0) : [],
     lastSync: (m[KEYS.lastSync] as SyncSummary | undefined) ?? null,
@@ -56,8 +59,9 @@ export async function shchyroSettings() {
 async function setSetting(key: string, value: unknown) {
   await db().insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
 }
-export async function saveShchyroSettings(v: { enabled: boolean; resourceKey: string }) {
+export async function saveShchyroSettings(v: { enabled: boolean; resourceKey: string; fullSync?: boolean }) {
   await setSetting(KEYS.enabled, v.enabled);
+  await setSetting(KEYS.fullSync, Boolean(v.fullSync));
   await setSetting(KEYS.resource, v.resourceKey || DEFAULT_RESOURCE);
 }
 
@@ -194,7 +198,7 @@ export async function shchyroPushChanges() {
 export async function zenProtectedTgIds(): Promise<Set<number>> {
   const d = db();
   const zen = (await d.execute(sql`select distinct p.telegram_user_id from subscriptions s join persons p on p.id = s.person_id
-    where s.source = 'zenedu' and (s.status in ('active','trialing','past_due') or s.current_period_end > now())`)).rows as { telegram_user_id: string | number }[];
+    where s.source = 'zenedu' and (s.status in ('active','trialing','past_due') or s.current_period_end > now() - ${ZEN_GRACE_HOURS} * interval '1 hour')`)).rows as { telegram_user_id: string | number }[];
   const out = new Set(zen.map((r) => Number(r.telegram_user_id)));
   const chans = await d.select({ config: resources.config }).from(resources).where(inArray(resources.kind, ["telegram_channel", "telegram_group"]));
   for (const c of chans) for (const id of ((c.config as { protectedTgIds?: number[] } | null)?.protectedTgIds ?? [])) if (Number.isSafeInteger(id) && id > 0) out.add(id);
@@ -279,4 +283,35 @@ export async function shchyroEntitledFor(personId: number) {
   const st = await shchyroSettings();
   const [e] = await shchyroEntitled(st.resourceKey, personId);
   return e ?? null;
+}
+
+export type HubBuyerGap = { personId: number; name: string; telegramUserId: number; plan: string; since: Date | null; problems: ("no_right" | "automation_off" | "not_pushed" | "no_cabinet")[] };
+/**
+ * Хто оплатив оффер Hub (бойова оплата, підписка чинна), але не отримав «Щиро» чи кабінет, і чому:
+ * no_right — оффер не містить право «Щиро»; automation_off — автоматика «Щиро» вимкнена, Hub не передає людей у бот;
+ * not_pushed — право є, автоматика ввімкнена, але бот ще не отримав людину (черга або помилка); no_cabinet — немає кабінету платформи.
+ */
+export async function hubBuyerGaps(onboardingOn: boolean): Promise<HubBuyerGap[]> {
+  const st = await shchyroSettings(); const grace = await accessGraceHours();
+  const allow = sql.raw(subscriptionAllowsSql("s", grace));
+  const rows = (await db().execute(sql`
+    select distinct on (s.person_id) s.person_id, p.telegram_user_id, coalesce(nullif(trim(concat_ws(' ', p.first_name, p.last_name)), ''), p.username, p.telegram_user_id::text) as name,
+      pl.name as plan, s.started_at, (pl.entitlements ? ${st.resourceKey}) as has_right,
+      exists (select 1 from onboarding_accounts oa where oa.person_id = s.person_id) as has_cabinet
+    from subscriptions s join persons p on p.id = s.person_id join plans pl on pl.id = s.plan_id
+    where s.source = 'hub' and ${allow}
+      and exists (select 1 from payment_attempts pa where pa.subscription_id = s.id and pa.mode = 'live' and pa.status = 'approved')
+    order by s.person_id, (pl.entitlements ? ${st.resourceKey}) desc, s.started_at desc`)).rows as { person_id: number; telegram_user_id: string | number; name: string; plan: string; started_at: string | null; has_right: boolean; has_cabinet: boolean }[];
+  const entitled = new Set((await shchyroEntitled(st.resourceKey)).map((e) => e.personId));
+  const pushed = new Set(st.pushedIds);
+  const out: HubBuyerGap[] = [];
+  for (const r of rows) {
+    const problems: HubBuyerGap["problems"] = [];
+    if (!r.has_right && !entitled.has(r.person_id)) problems.push("no_right");
+    else if (!st.enabled) problems.push("automation_off");
+    else if (!pushed.has(Number(r.telegram_user_id))) problems.push("not_pushed");
+    if (onboardingOn && !r.has_cabinet) problems.push("no_cabinet");
+    if (problems.length) out.push({ personId: r.person_id, name: r.name, telegramUserId: Number(r.telegram_user_id), plan: r.plan, since: r.started_at ? new Date(r.started_at) : null, problems });
+  }
+  return out;
 }

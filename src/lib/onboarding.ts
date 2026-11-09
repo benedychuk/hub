@@ -288,7 +288,7 @@ export async function onboardingDaily() {
   for (const a of rows) {
     const tags = a.tags ?? [];
     if (a.personId) { // учасниця з підпискою: тріал не має значення, теги станів тріалу не ставимо
-      const subs = await d.select({ status: schema.subscriptions.status, currentPeriodEnd: schema.subscriptions.currentPeriodEnd }).from(schema.subscriptions).where(eq(schema.subscriptions.personId, a.personId));
+      const subs = await d.select({ status: schema.subscriptions.status, currentPeriodEnd: schema.subscriptions.currentPeriodEnd, source: schema.subscriptions.source }).from(schema.subscriptions).where(eq(schema.subscriptions.personId, a.personId));
       if (subs.some((x) => subscriptionAllows(x, grace, now))) continue;
     }
     if (a.trialEndsAt > now) { if (!tags.includes("trial_expiring_soon")) { await trackEvent(a, { event_type: "trial_expiring_soon", payload: { days: 3, by: "cron" } }); expiring++; } continue; }

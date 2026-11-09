@@ -24,7 +24,7 @@ export default async function Bots({ searchParams }: { searchParams: Promise<{ n
   const hub = list.find((b) => b.key === "hub");
   const zen = list.filter((b) => b.role === "zenedu");
   const url = (info as { url?: string })?.url;
-  const shConf = shchyroConfigured(); const sh = await safe(() => shchyroSettings(), { enabled: false, resourceKey: "shchyro.access", pushedIds: [] as number[], lastSync: null, lastPush: null, lastCheck: null });
+  const shConf = shchyroConfigured(); const sh = await safe(() => shchyroSettings(), { fullSync: false, enabled: false, resourceKey: "shchyro.access", pushedIds: [] as number[], lastSync: null, lastPush: null, lastCheck: null });
   return (
     <Shell title="Боти й меню" counts={counts}>
       {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}

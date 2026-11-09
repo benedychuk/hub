@@ -4,7 +4,8 @@ import { Pill } from "@/components/ui";
 import { Section, Field, FormRow, KV, Alert, EmptyState } from "@/components/ui/layout";
 import { Switch, Checkbox } from "@/components/ui/controls";
 import { saveShchyroSettings, shchyroSyncNow, shchyroCheck, shchyroImport, shchyroQuickGrant } from "@/lib/actions";
-import { shchyroConfigured, shchyroBaseUrl, shchyroSettings, shchyroEntitled, type Entitled } from "@/lib/shchyro";
+import { shchyroConfigured, shchyroBaseUrl, shchyroSettings, shchyroEntitled, hubBuyerGaps, type Entitled, type HubBuyerGap } from "@/lib/shchyro";
+import { onboardingConfigured } from "@/lib/onboarding";
 import { date } from "@/lib/format";
 import { safe } from "@/lib/queries";
 import { dateTime } from "@/lib/format";
@@ -12,15 +13,25 @@ import { dateTime } from "@/lib/format";
 /** Вкладка «Доступ»: Hub керує списком доступу бота через його API (push-модель за ТЗ), список тих, хто має право, швидка видача. */
 export default async function AccessTab({ resources, people }: { resources: { key: string; name: string; kind: string }[]; people: Record<number, { id: number; name: string }> }) {
   const configured = shchyroConfigured();
-  const st = await safe(() => shchyroSettings(), { enabled: false, resourceKey: "shchyro.access", pushedIds: [] as number[], lastSync: null, lastPush: null, lastCheck: null });
+  const st = await safe(() => shchyroSettings(), { fullSync: false, enabled: false, resourceKey: "shchyro.access", pushedIds: [] as number[], lastSync: null, lastPush: null, lastCheck: null });
   const entitledRows = await safe(() => shchyroEntitled(st.resourceKey), [] as Entitled[]);
   const entitled = entitledRows.length;
   const SRC: Record<string, string> = { manual: "ручне право", plan: "тариф", zenedu: "підписка ZenEdu" };
   const ls = st.lastSync; const lp = st.lastPush as { at?: string; granted?: number; revoked?: number; failed?: number; pending?: number; error?: string | null } | null; const lc = st.lastCheck as { at?: string; ok?: boolean; error?: string; active_count?: number } | null;
+  const gaps = await safe(() => hubBuyerGaps(onboardingConfigured()), [] as HubBuyerGap[]);
+  const noRight = gaps.filter((g) => g.problems.includes("no_right")); const offOnes = gaps.filter((g) => g.problems.includes("automation_off")); const notPushed = gaps.filter((g) => g.problems.includes("not_pushed"));
+  const noRightPlans = [...new Set(noRight.map((g) => g.plan))];
   const options = resources.filter((r) => r.kind === "bot_feature" || r.kind === "external_url");
   return (<>
-    <Section title="Доступ до «Щиро» з Hub" description="Hub видає доступ після оплати, закриває після завершення підписки і раз на день звіряє повний список із ботом. Бот підхоплює зміни за 5 секунд."
+    <Section title="Доступ до «Щиро» з Hub" description="Hub видає доступ тим, хто оплатив оффер із правом «Щиро», і закриває після завершення підписки. Бот підхоплює зміни за 5 секунд. Повна щоденна звірка — окремим перемикачем."
       actions={<Pill tone={!configured ? "crit" : st.enabled ? "good" : "warn"}>{!configured ? "не підключено" : st.enabled ? "автоматика увімкнена" : "лише спостереження"}</Pill>}>
+      {(noRight.length > 0 || offOnes.length > 0 || notPushed.length > 0) && <Alert tone="bad">
+        <b>Оплатили через Hub, але не мають «Щиро»: {noRight.length + offOnes.length + notPushed.length}.</b>{" "}
+        {offOnes.length > 0 && <>Автоматика вимкнена, тож Hub не передає в бот {offOnes.length} {offOnes.length === 1 ? "людину" : "людей"}: увімкніть перемикач нижче — Hub видасть їм доступ протягом хвилини (учасниць ZenEdu це не зачепить). </>}
+        {noRight.length > 0 && <>Оффер{noRightPlans.length > 1 ? "и" : ""} {noRightPlans.map((n) => `«${n}»`).join(", ")} не містить права «{resources.find((r) => r.key === st.resourceKey)?.name ?? st.resourceKey}»: поставте його в оффері: «Основне» → «Канали, групи, функції бота». Після цього ці люди отримають «Щиро» (якщо автоматика ввімкнена). </>}
+        {notPushed.length > 0 && <>{notPushed.length} ще в черзі або «Щиро» відповів помилкою — дивіться «Останній тік» нижче. </>}
+        <div className="fld-h">{[...offOnes, ...noRight, ...notPushed].slice(0, 30).map((g, i) => <span key={g.personId}>{i ? ", " : ""}<Link href={`/people/${g.personId}`}>{g.name}</Link></span>)}{gaps.length > 30 ? " …" : ""}</div>
+      </Alert>}
       {!configured && <Alert tone="warn">Додайте SHCHYRO_API_URL і SHCHYRO_API_SECRET у Vercel і зробіть редеплой. Той самий секрет має стояти в «Щиро» як HUB_API_SECRET.</Alert>}
       {configured && !st.enabled && <Alert tone="info">Автоматика вимкнена: Hub нічого не змінює в боті. Можна перевірити зв'язок і подивитись розбіжності, а вмикати після імпорту та перевірки.</Alert>}
       <KV items={[
@@ -37,7 +48,8 @@ export default async function AccessTab({ resources, people }: { resources: { ke
         {ls.ok && (ls.activated_ids?.length ?? 0) > 0 && <div className="mono" style={{ marginTop: 4, fontSize: 11.5 }}>{ls.mode === "preview" ? "Увімкнулись би" : "Увімкнено"}: {ls.activated_ids!.join(", ")}</div>}
       </Alert></div>}
       <form action={saveShchyroSettings} style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-        <Switch name="enabled" defaultChecked={st.enabled} label="Автоматика доступу «Щиро» увімкнена" hint="Hub відкриває бота тим, хто має право, закриває тим, у кого право зникло, і щодня звіряє повний список. Вимкнено = Hub лише спостерігає." />
+        <Switch name="enabled" defaultChecked={st.enabled} label="Автоматика доступу «Щиро» увімкнена" hint="Hub відкриває бота тим, хто має право (оплатив оффер із правом «Щиро»), і закриває тим, кому сам відкрив, коли право зникло. Учасниць ZenEdu не чіпає. Вимкнено = Hub лише спостерігає." />
+        <Switch name="fullSync" defaultChecked={st.fullSync} label="Щоденна звірка повного списку" hint="Раз на добу вмикає в боті всіх, хто має право в Hub, і вимикає решту (крім адміністраторів, доданих вручну і учасниць ZenEdu). Без неї Hub лише видає «Щиро» тим, хто оплатив, і забирає в тих, кому видав сам. Вмикайте, коли «Щиро» повністю перейде на Hub." />
         <FormRow>
           <Field label="Право, яке відкриває бота" hint="ресурс із тарифів; людина з чинним правом на нього має доступ до «Щиро»">
             <select name="resourceKey" defaultValue={st.resourceKey}>{options.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}{!options.some((r) => r.key === st.resourceKey) && <option value={st.resourceKey}>{st.resourceKey}</option>}</select>

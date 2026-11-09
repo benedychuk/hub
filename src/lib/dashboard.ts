@@ -2,6 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { accessGraceHours, subscriptionAllowsSql } from "./access-rule";
 import { offerScope, scopeSql } from "./offers";
+import { zenPeriodSql } from "./zenedu";
 
 /**
  * Зведення для дашборда. Дані ZenEdu (імпорт) і Hub (оплати WayForPay) рахуються разом:
@@ -82,7 +83,7 @@ export async function buildDashboard(offerKey?: string) {
            then 'subscription_renew' else 'subscription_start' end as kind,
       (o.type = 'subscription_start' and ((o.source = 'zenedu' and (lower(o.offer_name) like '%2 тижні%' or lower(o.offer_name) like '%пробн%'))
         or (o.source = 'hub' and exists (select 1 from plans pl where pl.id = o.plan_id and o.price < pl.price * 0.5)))) as is_trial,
-      (case when o.source = 'zenedu' then not (lower(o.offer_name) like '%рік%' or lower(o.offer_name) like '%year%' or lower(o.offer_name) like '%3 місяці%' or lower(o.offer_name) like '%три місяці%')
+      (case when o.source = 'zenedu' then ${sql.raw(zenPeriodSql("o.offer_name", "o.type"))} in (14, 31)
             else exists (select 1 from plans pl where pl.id = o.plan_id and pl.payment_type = 'subscription' and pl.period = 'month' and pl.interval_count = 1) end) as monthly
     from orders o where o.status = 'paid' and ${clubOrder("o")} and ${notTestOrder("o")}`;
   const period = (await d.execute(sql`
@@ -102,8 +103,7 @@ export async function buildDashboard(offerKey?: string) {
   const cover = sql`
     with c as (${classified}),
     cv as (select c.*, (case
-        when c.source = 'zenedu' then (case when lower(o.offer_name) like '%рік%' or lower(o.offer_name) like '%year%' then 366
-          when lower(o.offer_name) like '%3 місяці%' or lower(o.offer_name) like '%три місяці%' then 92 when c.is_trial then 14 else 31 end)
+        when c.source = 'zenedu' then (case when c.is_trial then 14 else ${sql.raw(zenPeriodSql("o.offer_name", "o.type"))} end)
         else (case when c.is_trial then 14 else coalesce((select s.period_days from payment_attempts pa join subscriptions s on s.id = pa.subscription_id where pa.order_id = c.id limit 1), 31) end) end) as days
       from c join orders o on o.id = c.id),
     sq as (select cv.*, created_at + days * interval '1 day' as cover_end,

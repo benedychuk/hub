@@ -17,7 +17,8 @@ export async function GET(req: Request) {
     const rec = process.env.TELEGRAM_BOT_TOKEN ? await reconcile().catch((e) => ({ error: String(e) })) : null;
     const payments = await dailyPayments().catch((e) => ({ error: String(e) }));
     // щоденна звірка списку доступу «Щиро» з Hub; без force: масове відключення зупиниться на боці «Щиро» і буде видно на сторінці ботів
-    const shchyro = (await shchyroSettings()).enabled ? await shchyroFullSync({ by: "cron" }).catch((e) => ({ error: String(e) })) : null;
+    const shst = await shchyroSettings();
+    const shchyro = shst.enabled && shst.fullSync ? await shchyroFullSync({ by: "cron" }).catch((e) => ({ error: String(e) })) : null;
     const onboarding = await onboardingDaily().catch((e) => ({ error: String(e) })); // стани тріалу кабінету: теги «закінчується», «14 днів минули», «доступ завершено»
     return Response.json({ ok: true, stats, reconcile: rec, payments, shchyro, onboarding });
   }
