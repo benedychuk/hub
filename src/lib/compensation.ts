@@ -17,6 +17,8 @@ export type ApologyCandidate = {
   personId: number; name: string; firstName: string | null; telegramUserId: number; subscriptionId: number; plan: string;
   paidAt: Date; currentEnd: Date | null; days: number; shchyroLateDays: number; channelLateDays: number;
   shchyro: boolean; channels: { key: string; name: string }[]; newEnd: Date | null;
+  /** «Щиро» входить в оффер, але ще не відкрито (автоматика вимкнена або черга): вибачення чекає, щоб людина отримала все разом */
+  shchyroPending: boolean;
 };
 const DAY = 86400_000;
 // цілі дні на користь людини, але без «+1» за кілька хвилин понад рівну кількість діб
@@ -40,8 +42,10 @@ export async function apologyCandidates(): Promise<ApologyCandidate[]> {
   for (const s of subs) {
     const paidAt = new Date(s.paid_at ?? Date.now()); const pid = s.person_id; const tg = Number(s.telegram_user_id);
     // «Щиро»: доступ є зараз, але відкрився із запізненням
-    let shchyroLateDays = 0, shchyro = false;
-    if (pushed.has(tg) && (await hasEntitlementOrPlan(pid, st.resourceKey, s.ents))) {
+    let shchyroLateDays = 0, shchyro = false, shchyroPending = false;
+    const wantsShchyro = await hasEntitlementOrPlan(pid, st.resourceKey, s.ents);
+    if (wantsShchyro && !pushed.has(tg)) { shchyroPending = true; shchyroLateDays = ceilDays(Date.now() - paidAt.getTime()); }
+    if (wantsShchyro && pushed.has(tg)) {
       const [g] = (await d.execute(sql`select min(created_at) as at from events where person_id = ${pid} and type = 'shchyro.granted'`)).rows as { at: string | null }[];
       const grantedAt = g?.at ? new Date(g.at).getTime() : null;
       if (grantedAt && grantedAt - paidAt.getTime() > 30 * 60_000) { shchyroLateDays = ceilDays(grantedAt - paidAt.getTime()); shchyro = true; }
@@ -59,9 +63,9 @@ export async function apologyCandidates(): Promise<ApologyCandidate[]> {
       if (m?.status !== "joined") channels.push({ key, name: chanNames.get(key) ?? key });
     }
     const days = Math.max(shchyroLateDays, channelLateDays);
-    if (!days && !channels.length) continue;
+    if (!days && !channels.length && !shchyroPending) continue;
     const currentEnd = s.current_period_end ? new Date(s.current_period_end) : null;
-    out.push({ personId: pid, name: s.name, firstName: s.first_name, telegramUserId: tg, subscriptionId: s.id, plan: s.plan, paidAt, currentEnd, days, shchyroLateDays, channelLateDays, shchyro, channels, newEnd: currentEnd && days ? new Date(currentEnd.getTime() + days * DAY) : currentEnd });
+    out.push({ personId: pid, name: s.name, firstName: s.first_name, telegramUserId: tg, subscriptionId: s.id, plan: s.plan, paidAt, currentEnd, days, shchyroLateDays, channelLateDays, shchyro, channels, newEnd: currentEnd && days ? new Date(currentEnd.getTime() + days * DAY) : currentEnd, shchyroPending });
   }
   return out;
 }
@@ -71,7 +75,8 @@ async function hasEntitlementOrPlan(pid: number, key: string, ents: Record<strin
 
 /** Надсилає вибачення, подовжує підписку на дні без доступу, видає нові посилання в канал. */
 export async function sendApologies(onlyPersonIds?: number[]) {
-  const d = db(); const list = (await apologyCandidates()).filter((c) => !onlyPersonIds?.length || onlyPersonIds.includes(c.personId));
+  // хто ще чекає на «Щиро» — пропускаємо: вибачення одне, тож надсилаємо, коли доступ уже відкрито
+  const d = db(); const list = (await apologyCandidates()).filter((c) => !c.shchyroPending && (!onlyPersonIds?.length || onlyPersonIds.includes(c.personId)));
   let sent = 0, undelivered = 0, invites = 0, extended = 0;
   for (const c of list) {
     if (c.days > 0) {

@@ -18,12 +18,14 @@ export function Checkbox({ name, value = "on", defaultChecked, label, hint, disa
     </label>
   );
 }
-/** Перемикач для налаштувань «увімкнено/вимкнено». */
-export function Switch({ name, defaultChecked, label, hint }: { name: string; defaultChecked?: boolean; label: React.ReactNode; hint?: React.ReactNode }) {
+/** Перемикач для налаштувань «увімкнено/вимкнено». autoSubmit — зберігає форму одразу після перемикання (без окремої кнопки). */
+export function Switch({ name, defaultChecked, label, hint, autoSubmit, disabled }: { name: string; defaultChecked?: boolean; label: React.ReactNode; hint?: React.ReactNode; autoSubmit?: boolean; disabled?: boolean }) {
+  const ref = useRef<HTMLButtonElement>(null);
   return (
     <label className="sw">
       <span className="chk-t"><span>{label}</span>{hint && <small>{hint}</small>}</span>
-      <RSwitch.Root className="sw-root" name={name} value="on" defaultChecked={defaultChecked}><RSwitch.Thumb className="sw-thumb" /></RSwitch.Root>
+      <RSwitch.Root ref={ref} className="sw-root" name={name} value="on" defaultChecked={defaultChecked} disabled={disabled}
+        onCheckedChange={autoSubmit ? () => { const f = ref.current?.closest("form"); setTimeout(() => f?.requestSubmit(), 60); } : undefined}><RSwitch.Thumb className="sw-thumb" /></RSwitch.Root>
     </label>
   );
 }
