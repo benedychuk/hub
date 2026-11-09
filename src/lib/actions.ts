@@ -53,13 +53,24 @@ export async function saveOffer(fd: FormData) {
   let oid = id;
   if (id) await db().update(plans).set(row).where(eq(plans.id, id));
   else { const [n] = await db().insert(plans).values(row as typeof plans.$inferInsert).returning({ id: plans.id }); oid = n.id; }
+  // право прибрали з оффера: ті, хто вже оплатив, зберігають його, поки діє їхня підписка (з продовженнями); нові покупці не отримують
+  let kept = 0;
+  if (part === "general" && cur) {
+    const removed = Object.keys(cur.entitlements ?? {}).filter((k) => !(k in ((row.entitlements as Record<string, string>) ?? {})));
+    if (removed.length) {
+      const r = await db().execute(sql`update entitlements e set granted_by = 'grandfathered' from subscriptions s
+        where e.subscription_id = s.id and s.plan_id = ${oid} and e.granted_by = 'subscription' and e.revoked_at is null and e.resource_key in (${sql.join(removed.map((k) => sql`${k}`), sql`, `)})
+        returning e.id`);
+      kept = r.rows.length;
+    }
+  }
   if (part === "general") { // відповідність офферам ZenEdu: спільні звіти й фільтри для підписок з обох джерел
     const zen = fd.getAll("zenOfferIds").map(Number).filter((n) => n > 0);
     await db().update(schema.offers).set({ planId: null }).where(eq(schema.offers.planId, oid));
     if (zen.length) await db().update(schema.offers).set({ planId: oid }).where(inArray(schema.offers.id, zen));
   }
   revalidatePath("/offers"); revalidatePath(`/offers/${oid}`); revalidatePath("/products");
-  redirect(`/offers/${oid}?tab=${part}&saved=1`);
+  redirect(`/offers/${oid}?tab=${part}&saved=1${kept ? `&kept=${kept}` : ""}`);
 }
 export async function setOfferStatus(fd: FormData) {
   const id = Number(fd.get("id")); const active = str(fd, "status") === "active";
@@ -730,6 +741,13 @@ export async function shchyroImport(fd: FormData) {
 }
 
 /** Швидка видача права на «Щиро» з вкладки «Доступ»: за Telegram ID або @username. */
+/** Вибачення й компенсація тим, хто оплатив через Hub, але недоотримав доступ (кнопка на «Щиро → Доступ»). */
+export async function sendAccessApologies() {
+  const { sendApologies } = await import("./compensation");
+  const r = await sendApologies();
+  revalidatePath("/shchyro");
+  redirect("/shchyro?tab=access&ok=" + encodeURIComponent(`Надіслано вибачення: ${r.sent} з ${r.total}${r.undelivered ? ` (ще ${r.undelivered} не запускали Hub-бот — повідомлення не дійшло, але дні додано)` : ""}. Подовжено підписок: ${r.extended}. Нових посилань у канал: ${r.invites}.`));
+}
 export async function shchyroQuickGrant(fd: FormData) {
   const who = str(fd, "who").replace(/^@/, ""); const days = Math.max(1, Math.min(3650, Number(fd.get("days") || 30)));
   const st = await readShchyroSettings();

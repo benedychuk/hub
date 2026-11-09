@@ -22,6 +22,8 @@ import { accessGraceHours, subscriptionAllowsSql, ZEN_GRACE_HOURS } from "./acce
 const { persons, settings, events, entitlements, resources } = schema;
 
 export const DEFAULT_RESOURCE = "shchyro.access";
+/** Посилання на бота «Щиро» для людей (кнопки в повідомленнях, кабінет). */
+export const SHCHYRO_BOT_URL = "https://t.me/m_kravchuk_ai_bot";
 const TIMEOUT_MS = 8_000;
 const PUSH_BATCH = 60; // grant/revoke за один тік: укладається в хвилину й не б'є по «Щиро»
 const KEYS = { fullSync: "shchyro.full_sync", enabled: "shchyro.push_enabled", resource: "shchyro.resource_key", pushed: "shchyro.pushed_ids", lastSync: "shchyro.last_sync", lastPush: "shchyro.last_push", lastCheck: "shchyro.last_check" } as const;
@@ -307,7 +309,8 @@ export async function hubBuyerGaps(onboardingOn: boolean): Promise<HubBuyerGap[]
   const out: HubBuyerGap[] = [];
   for (const r of rows) {
     const problems: HubBuyerGap["problems"] = [];
-    if (!r.has_right && !entitled.has(r.person_id)) problems.push("no_right");
+    // оффер без права «Щиро» (напр., клуб окремо від «Щиро») — не проблема: людина «Щиро» не купувала
+    if (!r.has_right && !entitled.has(r.person_id)) { /* «Щиро» не входить в оффер */ }
     else if (!st.enabled) problems.push("automation_off");
     else if (!pushed.has(Number(r.telegram_user_id))) problems.push("not_pushed");
     if (onboardingOn && !r.has_cabinet) problems.push("no_cabinet");

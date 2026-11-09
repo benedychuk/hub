@@ -3,7 +3,10 @@ import { Bot, RefreshCw, Download, Save, Activity, KeyRound } from "lucide-react
 import { Pill } from "@/components/ui";
 import { Section, Field, FormRow, KV, Alert, EmptyState } from "@/components/ui/layout";
 import { Switch, Checkbox } from "@/components/ui/controls";
-import { saveShchyroSettings, shchyroSyncNow, shchyroCheck, shchyroImport, shchyroQuickGrant } from "@/lib/actions";
+import { saveShchyroSettings, shchyroSyncNow, shchyroCheck, shchyroImport, shchyroQuickGrant, sendAccessApologies } from "@/lib/actions";
+import { apologyCandidates, type ApologyCandidate } from "@/lib/compensation";
+import { ConfirmSubmitButton } from "@/components/ui/confirm";
+import { Send } from "lucide-react";
 import { shchyroConfigured, shchyroBaseUrl, shchyroSettings, shchyroEntitled, hubBuyerGaps, type Entitled, type HubBuyerGap } from "@/lib/shchyro";
 import { onboardingConfigured } from "@/lib/onboarding";
 import { date } from "@/lib/format";
@@ -21,6 +24,7 @@ export default async function AccessTab({ resources, people }: { resources: { ke
   const gaps = await safe(() => hubBuyerGaps(onboardingConfigured()), [] as HubBuyerGap[]);
   const noRight = gaps.filter((g) => g.problems.includes("no_right")); const offOnes = gaps.filter((g) => g.problems.includes("automation_off")); const notPushed = gaps.filter((g) => g.problems.includes("not_pushed"));
   const noRightPlans = [...new Set(noRight.map((g) => g.plan))];
+  const apologies = await safe(() => apologyCandidates(), [] as ApologyCandidate[]);
   const options = resources.filter((r) => r.kind === "bot_feature" || r.kind === "external_url");
   return (<>
     <Section title="Доступ до «Щиро» з Hub" description="Hub видає доступ тим, хто оплатив оффер із правом «Щиро», і закриває після завершення підписки. Бот підхоплює зміни за 5 секунд. Повна щоденна звірка — окремим перемикачем."
@@ -77,6 +81,14 @@ export default async function AccessTab({ resources, people }: { resources: { ke
         <p className="fld-h" style={{ marginTop: 10 }}><Bot size={13} style={{ verticalAlign: -2 }} /> Порядок переходу: перевірити зв'язок → імпортувати нинішні доступи як перехідні права → перевірити розбіжності → увімкнути автоматику. Імпорт нічого не дублює: кому право вже є, той пропускається.</p>
       </div>
     </Section>
+    {apologies.length > 0 && <Section title="Вибачення тим, хто недоотримав доступ" description="Оплатили через Hub, але доступ відкрився не одразу або посилання в канал так і не дійшло. Кожна людина отримає в Hub-боті вибачення, кнопку «Щиро» (якщо його відкрили із запізненням), нове посилання в канал (якщо ще не зайшла), а підписку буде подовжено на дні без доступу. Кожному — один раз." className="tbl">
+      <table><thead><tr><th>Людина</th><th>Оффер</th><th>Оплата</th><th>Що бракувало</th><th className="num">Додати днів</th><th>Підписка до</th></tr></thead><tbody>
+        {apologies.map((c) => <tr key={c.subscriptionId}><td><Link href={`/people/${c.personId}`}>{c.name}</Link></td><td className="muted">{c.plan}</td><td className="mono">{date(c.paidAt)}</td>
+          <td>{[c.shchyro ? `«Щиро» відкрито через ${c.shchyroLateDays} дн.` : "", c.channelLateDays ? `канал: ${c.channelLateDays} дн. без посилання` : "", c.channels.length ? `ще не в ${c.channels.map((x) => `«${x.name}»`).join(", ")}` : ""].filter(Boolean).join("; ")}</td>
+          <td className="num">{c.days ? `+${c.days}` : "—"}</td><td className="mono">{c.newEnd ? date(c.newEnd) : "—"}</td></tr>)}
+      </tbody></table>
+      <form action={sendAccessApologies} style={{ marginTop: 12 }}><ConfirmSubmitButton className="btn pri" title="Надіслати вибачення" confirmLabel={`Надіслати ${apologies.length}`} message={`Отримувачів: ${apologies.length}. Кожна людина отримає в Hub-боті вибачення${apologies.some((c) => c.channels.length) ? " і нове посилання в канал (кому потрібно)" : ""}, а підписку буде подовжено на вказані дні. Повторно тим самим людям не надсилається.`}><Send size={15} /> Надіслати вибачення й доступ ({apologies.length})</ConfirmSubmitButton></form>
+    </Section>}
     <div className="grid g21" style={{ marginTop: 16 }}>
       <Section title="Хто має право зараз" description="Право дає тариф із ресурсом «Щиро», ручна видача в картці людини або перехідний режим ZenEdu. Саме цей список Hub передає боту.">
         {entitledRows.length ? <div className="tbl"><table><thead><tr><th>Людина</th><th>Telegram ID</th><th>Джерело</th><th>Діє до</th><th>У боті</th></tr></thead><tbody>

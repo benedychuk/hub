@@ -23,7 +23,7 @@ const toDateInput = (d: Date | null | undefined) => d ? new Date(d.getTime() - d
 const toDateTimeInput = (d: Date | null | undefined) => d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
 
 /** Редактор оффера: вкладки як у ZenEdu (General / Design / Settings) плюс «Посилання» (оплата в боті, доступ без оплати). */
-export default async function OfferEditor({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; saved?: string; from?: string }> }) {
+export default async function OfferEditor({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; saved?: string; from?: string; kept?: string }> }) {
   const { id } = await params; const sp = await searchParams;
   const isNew = id === "new";
   const [counts, d, prods, res, bl, zen] = await Promise.all([navCounts(), isNew ? Promise.resolve(null) : offerDetail(Number(id)), productPicker(), resourceList(), botList(), offerList()]);
@@ -48,7 +48,7 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
             <MenuAction action={deleteOffer} fields={{ id: pl.id }} icon={<Trash2 />} danger confirm={`Видалити оффер «${pl.name}»?`}>Видалити оффер</MenuAction>
           </Kebab>
         </> : undefined} />
-      {sp.saved && <Alert tone="ok">Збережено.</Alert>}
+      {sp.saved && <Alert tone="ok">Збережено.{Number(sp.kept) > 0 ? ` Право, яке ви прибрали, лишилось у ${sp.kept} тих, хто вже оплатив цей оффер: діє, поки діє їхня підписка (з продовженнями). Нові покупці його не отримають.` : ""}</Alert>}
       {pl && sp.from === "zen" && <Alert tone="info">
         <b>Оффер створено з ZenEdu.</b> ZenEdu через API не віддає частину налаштувань, тому перевірте вручну:
         <ul className="alert-list">

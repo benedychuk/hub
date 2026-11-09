@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from "./auth";
 import { appUrl, botToken } from "./bot";
 import { shchyroConfigured, shchyroRequestPublic } from "./shchyro";
 import { accessGraceHours, accessEnd, subscriptionAllows } from "./access-rule";
+import { SHCHYRO_BOT_URL } from "./shchyro";
 
 /**
  * Платформа онбордингу (кабінет кандидатки) як частина Hub.
@@ -276,7 +277,7 @@ export async function profilePayload(acc: Account) {
     trial_state: live ? "subscription" : refunded ? "fully_expired" : ends > now ? (ends - now < 72 * 3600_000 ? "expiring_soon" : "active") : acc.extensionCount > 0 ? "fully_expired" : "expired_14",
     quiz_completed: Boolean(acc.quizCompletedAt), quiz_result_id: acc.quizResultId, quiz_scenario: acc.quizScenario, quiz: acc.quiz ?? {}, deep_quiz: acc.deepQuiz ?? {}, diagnostic_completed: Boolean(acc.diagnosticCompletedAt),
     feedback_completed: Boolean(acc.feedbackAt), feedback: acc.feedback ?? null, feedback_at: acc.feedbackAt?.toISOString() ?? null, tags: acc.tags ?? [],
-    shchyro_url: "https://t.me/m_kravchuk_ai_bot",
+    shchyro_url: SHCHYRO_BOT_URL,
   };
 }
 

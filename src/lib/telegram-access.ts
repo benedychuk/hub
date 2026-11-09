@@ -91,6 +91,13 @@ export async function syncEntitlementsFromSubscriptions() {
         else if ((ex.validUntil?.getTime() ?? 0) !== (until?.getTime() ?? 0)) await d.update(entitlements).set({ validUntil: until }).where(eq(entitlements.id, ex.id));
       } else if (ex) { await d.update(entitlements).set({ revokedAt: now }).where(eq(entitlements.id, ex.id)); closed++; }
     }
+    // права, які прибрали з оффера, але зберегли тим, хто вже оплатив: живуть разом із підпискою (продовження подовжує, кінець закриває)
+    const kept = await d.select().from(entitlements).where(and(eq(entitlements.subscriptionId, s.id), eq(entitlements.grantedBy, "grandfathered"), isNull(entitlements.revokedAt)));
+    for (const ex of kept) {
+      if (ents && ex.resourceKey in ents) continue; // право знову в оффері — ним керує цикл вище
+      if (!allowed) { await d.update(entitlements).set({ revokedAt: now }).where(eq(entitlements.id, ex.id)); closed++; }
+      else if ((ex.validUntil?.getTime() ?? 0) !== (until?.getTime() ?? 0)) await d.update(entitlements).set({ validUntil: until }).where(eq(entitlements.id, ex.id));
+    }
   }
   return { granted, closed };
 }
