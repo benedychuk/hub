@@ -7,7 +7,7 @@ import { creds, charge as wfpCharge, refund as wfpRefund, purchaseForm, verifyRe
 import { money } from "./format";
 import { adminTelegramId } from "./auth";
 import { periodDaysOf, accessEndFor, offerAvailability, syncProductAccess, expireOneTime } from "./offers";
-import { DEFAULT_GRACE_HOURS } from "./access-rule";
+import { DEFAULT_GRACE_HOURS, accessGraceHours, subscriptionAllowsSql } from "./access-rule";
 import { onboardingConfigured, ensureAccountForPerson } from "./onboarding";
 import { shchyroPushChanges } from "./shchyro";
 
@@ -209,6 +209,21 @@ async function createCabinetQuietly(personId: number) {
     const [p] = await db().select().from(persons).where(eq(persons.id, personId)); if (!p) return;
     await ensureAccountForPerson(p, "payment");
   } catch { /* кабінет не налаштовано */ }
+}
+
+/** Самовідновлення: у кожного, хто оплатив через Hub (бойова оплата, підписка чинна), має бути кабінет платформи. Нічого не надсилає людям. */
+export async function ensureHubCabinets(limit = 20) {
+  if (!onboardingConfigured()) return { created: 0 };
+  const grace = await accessGraceHours();
+  const rows = (await db().execute(sql`
+    select distinct s.person_id from subscriptions s
+    where s.source = 'hub' and ${sql.raw(subscriptionAllowsSql("s", grace))}
+      and exists (select 1 from payment_attempts pa where pa.subscription_id = s.id and pa.mode = 'live' and pa.status = 'approved')
+      and not exists (select 1 from onboarding_accounts oa where oa.person_id = s.person_id)
+    limit ${limit}`)).rows as { person_id: number }[];
+  let created = 0;
+  for (const r of rows) { await createCabinetQuietly(r.person_id); created++; }
+  return { created };
 }
 
 // ---------- автосписання ----------

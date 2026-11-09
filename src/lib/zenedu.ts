@@ -86,11 +86,24 @@ export const zen = {
     zenPost(`/bot/${botId}/subscribers/${subscriberId}/tags`, Object.fromEntries(tags.map((t, i) => [`tags[${i}]`, t]))),
 };
 
-/** Тривалість періоду за назвою оффера (у ZenEdu API немає поля періоду). */
+/**
+ * Тривалість періоду за назвою оффера (у ZenEdu API немає поля періоду): пів року, рік, 3 і 2 місяці, пробні 2 тижні; інакше місяць.
+ * Та сама логіка в SQL — zenPeriodSql (перерахунок підписок і дашборд).
+ */
+const PERIODS: [RegExp, number][] = [
+  [/(6\s*міс|пів\s*року|півроку|півріч|6\s*month|half)/, 183],
+  [/(рік|року|річн|12\s*міс|year|annual)/, 366],
+  [/(3\s*міс|три\s*міс|квартал|3\s*month|quarter)/, 92],
+  [/(2\s*міс|два\s*міс|2\s*month)/, 61],
+];
 export function periodDaysFromOfferName(name: string, type?: string): number {
   const n = (name || "").toLowerCase();
-  if (n.includes("рік") || n.includes("1 рік") || n.includes("year")) return 366;
-  if (n.includes("3 місяці") || n.includes("три місяці")) return 92;
-  if (n.includes("2 тижні") && type === "subscription_start") return 14;
+  for (const [re, days] of PERIODS) if (re.test(n)) return days;
+  if (/2\s*тиж/.test(n) && type === "subscription_start") return 14;
   return 31;
+}
+/** SQL-вираз тієї ж логіки: name, type — SQL-вирази (напр. "l.offer_name", "l.type"). */
+export function zenPeriodSql(name: string, type: string) {
+  const n = `lower(coalesce(${name}, ''))`;
+  return `(case ${PERIODS.map(([re, days]) => `when ${n} ~ '${re.source.replace(/'/g, "''")}' then ${days}`).join(" ")} when ${n} ~ '2\\s*тиж' and ${type} = 'subscription_start' then 14 else 31 end)`;
 }

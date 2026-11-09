@@ -1,6 +1,6 @@
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
-import { zen, type ZenSubscriber, type ZenOrder } from "./zenedu";
+import { zen, zenPeriodSql, type ZenSubscriber, type ZenOrder } from "./zenedu";
 
 const { persons, orders, offers, funnels, subscriptions, syncRuns, bots, settings } = schema;
 
@@ -186,11 +186,7 @@ export async function deriveSubscriptions(stats: SyncStats) {
       group by person_id
     ), calc as (
       select l.*, c.c as payments, c.first_at,
-        case
-          when lower(l.offer_name) like '%рік%' or lower(l.offer_name) like '%year%' then 366
-          when lower(l.offer_name) like '%3 місяці%' or lower(l.offer_name) like '%три місяці%' then 92
-          when lower(l.offer_name) like '%2 тижні%' and l.type = 'subscription_start' then 14
-          else 31 end as period_days
+        ${sql.raw(zenPeriodSql("l.offer_name", "l.type"))} as period_days
       from last l join cnt c on c.person_id = l.person_id
     ), fin as (
       select calc.*, created_at + (period_days || ' days')::interval as period_end,

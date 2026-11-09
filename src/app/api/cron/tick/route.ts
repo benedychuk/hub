@@ -1,7 +1,7 @@
 import { processDue, processDeletions } from "@/lib/funnels";
 import { accessTick } from "@/lib/telegram-access";
 import { processBroadcasts } from "@/lib/broadcasts";
-import { chargeDue } from "@/lib/payments";
+import { chargeDue, ensureHubCabinets } from "@/lib/payments";
 import { syncProductAccess } from "@/lib/offers";
 import { shchyroPushChanges } from "@/lib/shchyro";
 import { runAutomations } from "@/lib/automations";
@@ -23,13 +23,14 @@ export async function GET(req: Request) {
     const deletions = await processDeletions().catch((e) => ({ error: String(e).slice(0, 200) }));
     const access = await accessTick().catch((e) => ({ error: String(e).slice(0, 200) }));
     const payments = await chargeDue().catch((e) => ({ error: String(e).slice(0, 200) }));
+    const cabinets = await ensureHubCabinets().catch((e) => ({ error: String(e).slice(0, 200) })); // кабінет платформи кожному, хто оплатив через Hub
     const products = await syncProductAccess().catch((e) => ({ error: String(e).slice(0, 200) })); // доступ до цифрових продуктів за офферами
     const shchyro = await shchyroPushChanges().catch((e) => ({ error: String(e).slice(0, 200) })); // grant/revoke у бота «Щиро» за змінами прав (лише коли автоматика увімкнена)
     // автоматизації «тригер → дії» за новими подіями журналу (лише коли загальний вимикач увімкнено)
     const automations = await runAutomations(appUrl(), 15_000).catch((e) => ({ error: String(e).slice(0, 200) }));
     // розсилки: заплановані, черга надсилання, видалення у підписників; у межах бюджету, щоб тіки не накладались
     const broadcasts = await processBroadcasts(Math.max(5_000, 50_000 - (Date.now() - t0))).catch((e) => ({ error: String(e).slice(0, 200) }));
-    return Response.json({ ok: true, funnels, deletions, access, payments, products, shchyro, automations, broadcasts });
+    return Response.json({ ok: true, funnels, deletions, access, payments, cabinets, products, shchyro, automations, broadcasts });
   }
   catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 500 }); }
 }

@@ -3,7 +3,7 @@ import { InlineKeyboard } from "grammy";
 import { db, schema } from "@/db";
 import { getBot, BOT_KEY } from "./bot";
 import { fillVars, hasVars } from "./vars";
-import { accessGraceHours, accessEnd, subscriptionAllows } from "./access-rule";
+import { accessGraceHours, accessEnd, subscriptionAllows, ZEN_GRACE_HOURS } from "./access-rule";
 
 const { resources, entitlements, memberships, identities, persons, events, subscriptions, plans, settings } = schema;
 
@@ -23,14 +23,14 @@ const idList = (cfg: ChannelConfig) => (cfg.protectedTgIds ?? []).filter((n) => 
 export async function isProtected(cfg: ChannelConfig, personId: number | null, telegramUserId: number) {
   if (idList(cfg).includes(telegramUserId)) return true;
   if (!protectZen(cfg) || !personId) return false;
-  const [s] = await db().select({ id: subscriptions.id }).from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu"), or(inArray(subscriptions.status, ZEN_LIVE), gt(subscriptions.currentPeriodEnd, new Date())))).limit(1);
+  const [s] = await db().select({ id: subscriptions.id }).from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu"), or(inArray(subscriptions.status, ZEN_LIVE), gt(subscriptions.currentPeriodEnd, new Date(Date.now() - ZEN_GRACE_HOURS * 3600_000))))).limit(1);
   return Boolean(s);
 }
 /** SQL-умова «людина m.person_id / p.telegram_user_id НЕ захищена» для вибірок виключення й статистики. */
 function notProtectedSql(cfg: ChannelConfig) {
   const ids = idList(cfg);
   const byList = ids.length ? sql`and p.telegram_user_id <> all(${sql.raw(`array[${ids.join(",")}]::bigint[]`)})` : sql``;
-  const byZen = protectZen(cfg) ? sql`and not exists (select 1 from subscriptions zs where zs.person_id = m.person_id and zs.source = 'zenedu' and (zs.status in ('active','trialing','past_due') or zs.current_period_end > now()))` : sql``;
+  const byZen = protectZen(cfg) ? sql`and not exists (select 1 from subscriptions zs where zs.person_id = m.person_id and zs.source = 'zenedu' and (zs.status in ('active','trialing','past_due') or zs.current_period_end > now() - ${ZEN_GRACE_HOURS} * interval '1 hour'))` : sql``;
   return sql`${byList} ${byZen} and ${HUB_MANAGED}`;
 }
 /**

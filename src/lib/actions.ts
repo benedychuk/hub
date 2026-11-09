@@ -701,7 +701,7 @@ export async function rotateBotKey(fd: FormData) {
 /** Перемикач автоматики й ресурс, за яким Hub вирішує, кому відкривати бота. Вимкнено за замовчуванням. */
 export async function saveShchyroSettings(fd: FormData) {
   const enabled = fd.get("enabled") === "on";
-  await persistShchyroSettings({ enabled, resourceKey: str(fd, "resourceKey") || DEFAULT_RESOURCE });
+  await persistShchyroSettings({ enabled, resourceKey: str(fd, "resourceKey") || DEFAULT_RESOURCE, fullSync: fd.get("fullSync") === "on" });
   revalidatePath("/bots");
   redirect("/shchyro?tab=access&ok=" + encodeURIComponent(enabled ? "Автоматика доступу «Щиро» увімкнена: Hub керує списком доступу бота." : "Автоматика доступу «Щиро» вимкнена: Hub нічого не змінює в боті."));
 }

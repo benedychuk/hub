@@ -11,6 +11,13 @@ import { db, schema } from "@/db";
  * «доступ завершено».
  */
 export const DEFAULT_GRACE_HOURS = 24;
+/**
+ * Грейс для підписок ZenEdu — не менше 7 днів. Hub не знає точної дати списання в ZenEdu: кінець періоду він оцінює
+ * за останньою оплатою, а про продовження дізнається з синхронізації із запізненням; ZenEdu також повторює невдалі
+ * списання кілька днів, не забираючи доступ. Доступом учасниць ZenEdu керує ZenEdu, тож Hub закриває його лише тоді,
+ * коли оплати точно немає.
+ */
+export const ZEN_GRACE_HOURS = 7 * 24;
 const CLOSED = new Set(["paused", "refunded"]); // пауза й повернення коштів закривають доступ одразу, без грейсу
 
 export async function accessGraceHours(): Promise<number> {
@@ -20,10 +27,11 @@ export async function accessGraceHours(): Promise<number> {
   } catch { return DEFAULT_GRACE_HOURS; }
 }
 
-export type SubLike = { status: string; currentPeriodEnd: Date | null; kind?: string };
+export type SubLike = { status: string; currentPeriodEnd: Date | null; kind?: string; source?: string };
+const graceFor = (s: SubLike, graceHours: number) => s.source === "zenedu" ? Math.max(graceHours, ZEN_GRACE_HOURS) : graceHours;
 /** Коли закінчується доступ за цією підпискою з урахуванням грейсу; null = безстроково. */
 export function accessEnd(s: SubLike, graceHours: number): Date | null {
-  return s.currentPeriodEnd ? new Date(s.currentPeriodEnd.getTime() + graceHours * 3600_000) : null;
+  return s.currentPeriodEnd ? new Date(s.currentPeriodEnd.getTime() + graceFor(s, graceHours) * 3600_000) : null;
 }
 /** Чи дає підписка доступ зараз. */
 export function subscriptionAllows(s: SubLike, graceHours: number, now = new Date()): boolean {
@@ -34,6 +42,7 @@ export function subscriptionAllows(s: SubLike, graceHours: number, now = new Dat
 }
 /** SQL-умова тієї самої логіки для таблиці підписок з псевдонімом alias. */
 export function subscriptionAllowsSql(alias: string, graceHours: number) {
-  return `(${alias}.status not in ('paused','refunded') and (case when ${alias}.current_period_end is null then ${alias}.status in ('active','trialing') else ${alias}.current_period_end + (${Math.max(0, Math.round(graceHours))} * interval '1 hour') > now() end))`;
+  const g = Math.max(0, Math.round(graceHours)), zg = Math.max(g, ZEN_GRACE_HOURS);
+  return `(${alias}.status not in ('paused','refunded') and (case when ${alias}.current_period_end is null then ${alias}.status in ('active','trialing') else ${alias}.current_period_end + ((case when ${alias}.source = 'zenedu' then ${zg} else ${g} end) * interval '1 hour') > now() end))`;
 }
 export { inArray };
