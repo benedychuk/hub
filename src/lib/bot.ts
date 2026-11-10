@@ -11,6 +11,7 @@ import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, en
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
 import { linkAccountToPerson, magicLinkFor, onboardingConfigured, ensureAccountForPerson } from "./onboarding";
 import { fillVars, hasVars } from "./vars";
+import { recordStreamVisit } from "./streams";
 import { mediaOf, saveMedia, startRecording, recordMessage, REC_KEYS, type RecKeyboard } from "./funnel-recorder";
 
 /** Клавіатура під полем вводу під час запису кроків воронки. */
@@ -69,6 +70,14 @@ export function getBot() {
       const r = await linkAccountToPerson(payload.slice(3), personId);
       const kb = onboardingConfigured() ? new InlineKeyboard().url("Відкрити кабінет", magicLinkFor(personId)) : undefined;
       await ctx.reply(r.ok ? `Готово, ${ctx.from.first_name ?? ""}! Особистий кабінет підключено до Telegram: тепер він відкривається з будь-якого пристрою, а результати тестів зберігаються.` : r.error === "linked_to_other" ? "Цей кабінет уже підключено до іншого Telegram-акаунта. Напишіть у підтримку, і ми розберемось." : "Посилання для підтвердження застаріло. Відкрийте кабінет і натисніть «Підтвердити через Telegram» ще раз.", { reply_markup: kb, link_preview_options: { is_disabled: true } });
+      return;
+    }
+    if (payload.startsWith("ev_")) { // етер: записуємо, хто перейшов, і даємо кнопку на трансляцію
+      const st = await recordStreamVisit(payload.slice(3), personId, ctx.from.id, "bot");
+      if (!st) { await ctx.reply("Цей етер не знайдено. Перевірте посилання в каналі."); return; }
+      const when = st.startsAt.toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+      if (st.youtubeUrl) await ctx.reply(`${st.title} · ${when}\n\nНатисніть кнопку нижче, щоб дивитись етер.`, { reply_markup: new InlineKeyboard().url("Дивитись етер", st.youtubeUrl) });
+      else await ctx.reply(`${st.title} · ${when}\n\nПосилання на трансляцію з'явиться ближче до початку. Натисніть посилання в каналі ще раз за кілька хвилин до етеру.`);
       return;
     }
     if (payload.startsWith("g_")) { // посилання доступу до оффера без оплати

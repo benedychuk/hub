@@ -41,6 +41,7 @@ export function describeEvent(e: EventRow, n: Names): Described {
     case "subscription.refunded": return { title: "Доступ закрито після повернення коштів", group: "payment", tone: "warn" };
     case "access.compensated": return { title: `Компенсація: +${String(p.days ?? "")} дн. до підписки`, detail: "за дні без доступу після оплати", group: "payment", tone: "good" };
     case "access.apology_sent": return { title: "Надіслано вибачення за затримку доступу", detail: p.delivered === false ? "не доставлено: людина не запускала Hub-бот" : undefined, group: "payment" };
+    case "stream.visit": return { title: `Перейшла на етер «${String(p.title ?? "")}»`, detail: e.source === "miniapp" ? "через Mini App" : "через Hub-бот", href: p.streamId ? `/streams/${String(p.streamId)}` : undefined, group: "funnel", tone: "acc" };
     case "subscription.paused": return { title: "Підписку поставлено на паузу", group: "payment", tone: "warn" };
     case "subscription.expired": return { title: "Підписка завершилась", detail: String(p.reason ?? ""), group: "payment", tone: "mute" };
     case "access.granted": return { title: `Відкрито доступ за оффером «${planName || String(p.plan ?? "")}»`, detail: `${p.until ? `до ${dt(p.until)}` : "безстроково"}${e.source === "access_link" ? " · за посиланням доступу" : e.source === "admin" ? " · вручну" : ""}`, href: planId ? `/offers/${planId}` : undefined, group: "access", tone: "good" };
