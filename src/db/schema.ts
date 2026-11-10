@@ -561,3 +561,27 @@ export const onboardingAccounts = pgTable("onboarding_accounts", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex("ob_person_uidx").on(t.personId), uniqueIndex("ob_link_uidx").on(t.linkCode), index("ob_contact_idx").on(t.contactNorm), index("ob_trial_idx").on(t.trialEndsAt)]);
+
+// Етери клубу (трансляції YouTube щовівторка): посилання-прокладка через Hub-бот або Mini App фіксує, хто перейшов.
+export const streams = pgTable("streams", {
+  id: serial("id").primaryKey(),
+  code: text("code").notNull(),                       // у посиланні: t.me/<bot>?start=ev_<code> або ?startapp=ev_<code>
+  title: text("title").notNull(),
+  youtubeUrl: text("youtube_url"),                    // можна додати пізніше: посилання-прокладка не змінюється
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+  tag: text("tag"),                                   // тег, який отримують ті, хто перейшов (напр. етер_10.11.2026)
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("streams_code_uidx").on(t.code), index("streams_starts_idx").on(t.startsAt)]);
+
+// Хто перейшов на етер: одна людина — один рядок на етер, з першим і останнім переходом.
+export const streamVisits = pgTable("stream_visits", {
+  id: serial("id").primaryKey(),
+  streamId: integer("stream_id").notNull().references(() => streams.id, { onDelete: "cascade" }),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+  via: text("via").notNull().default("bot"),           // bot | miniapp
+  clicks: integer("clicks").notNull().default(1),
+  firstAt: timestamp("first_at", { withTimezone: true }).notNull().defaultNow(),
+  lastAt: timestamp("last_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("stream_visits_uidx").on(t.streamId, t.personId), index("stream_visits_person_idx").on(t.personId)]);

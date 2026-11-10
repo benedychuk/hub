@@ -27,9 +27,9 @@ function useWidth<T extends HTMLElement>() {
   return [ref, w] as const;
 }
 /** «Чисті» поділки осі: 0, 1/2/5×10ⁿ. */
-function ticks(max: number, min = 0, n = 4) {
-  const span = Math.max(1, max - min); const raw = span / n; const p = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= raw) ?? raw;
+function ticks(max: number, min = 0, n = 4, minStep = 0) {
+  const span = Math.max(1, max - min); const raw = Math.max(span / n, minStep); const p = 10 ** Math.floor(Math.log10(raw));
+  const step = Math.max(minStep, [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= raw) ?? raw); // для лічильників крок не дрібніший за 1
   const lo = Math.floor(min / step) * step, hi = Math.ceil(max / step) * step;
   const out: number[] = []; for (let v = lo; v <= hi + step / 2; v += step) out.push(Math.round(v * 100) / 100);
   return out;
@@ -61,7 +61,7 @@ export function ColumnChart({ cats, series, values, format, height = 220, extra,
   const pos = cats.map((c) => series.filter((s) => !s.negative).reduce((a, s) => a + v(c.key, s), 0));
   const neg = cats.map((c) => series.filter((s) => s.negative).reduce((a, s) => a + v(c.key, s), 0));
   const hasNeg = neg.some((x) => x > 0);
-  const tk = ticks(Math.max(1, ...pos), hasNeg ? -Math.max(...neg) : 0);
+  const tk = ticks(Math.max(1, ...pos), hasNeg ? -Math.max(...neg) : 0, 4, format === "int" ? 1 : 0);
   const top = tk[tk.length - 1], bot = tk[0];
   const padL = 52, padR = 8, padT = showTotals ? 18 : 8, padB = 34;
   const ih = height - padT - padB, iw = Math.max(10, w - padL - padR);
@@ -113,7 +113,7 @@ function roundedBar(x: number, y: number, w: number, h: number, r: number, down?
 /** Лінія з легкою заливкою (один ряд): перехрестя знаходить найближчу точку, підказка показує значення. */
 export function LineChart({ points, format, color = "var(--c1)", height = 200, ariaLabel, name }: { points: { key: string; label: string; value: number | null; note?: string }[]; format: Fmt; color?: string; height?: number; ariaLabel: string; name: string }) {
   const [ref, w] = useWidth<HTMLDivElement>(); const [hover, setHover] = useState<number | null>(null);
-  const vals = points.map((p) => p.value ?? 0); const tk = ticks(Math.max(1, ...vals) * 1.08, 0);
+  const vals = points.map((p) => p.value ?? 0); const tk = ticks(Math.max(1, ...vals) * 1.08, 0, 4, format === "int" ? 1 : 0);
   const top = tk[tk.length - 1];
   const padL = 52, padR = 16, padT = 14, padB = 30; const ih = height - padT - padB, iw = Math.max(10, w - padL - padR);
   const x = (i: number) => padL + (points.length > 1 ? (iw * i) / (points.length - 1) : iw / 2);

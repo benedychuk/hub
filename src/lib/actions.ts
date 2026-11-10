@@ -978,3 +978,35 @@ export async function deleteAutomation(fd: FormData) {
   await db().delete(automationsT).where(eq(automationsT.id, num(fd, "id")));
   revalidatePath("/automations"); redirect("/automations?ok=" + encodeURIComponent("Правило видалено."));
 }
+
+// ---------- етери ----------
+/** «2026-11-10T19:00» з поля datetime-local — це київський час; перетворюємо на момент часу. */
+function kyivLocal(v: string) {
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/); if (!m) return null;
+  const asUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  const kyivAtThat = new Date(new Date(asUtc).toLocaleString("en-US", { timeZone: "Europe/Kyiv" })).getTime();
+  const utcAtThat = new Date(new Date(asUtc).toLocaleString("en-US", { timeZone: "UTC" })).getTime();
+  return new Date(asUtc - (kyivAtThat - utcAtThat));
+}
+const ytUrl = (v: string) => { if (!v) return null; try { const u = new URL(v); return /^https?:$/.test(u.protocol) ? u.toString() : null; } catch { return null; } };
+export async function createStream(fd: FormData) {
+  const { newStreamCode, defaultStreamTag, defaultStreamTitle } = await import("./streams");
+  const at = kyivLocal(str(fd, "startsAt")) ?? new Date();
+  const [s] = await db().insert(schema.streams).values({ code: newStreamCode(), title: str(fd, "title") || defaultStreamTitle(at), youtubeUrl: ytUrl(str(fd, "youtubeUrl")), startsAt: at, tag: str(fd, "tag") || defaultStreamTag(at) }).returning({ id: schema.streams.id });
+  revalidatePath("/streams");
+  redirect(`/streams/${s.id}?created=1`);
+}
+export async function saveStream(fd: FormData) {
+  const id = Number(fd.get("id"));
+  const at = kyivLocal(str(fd, "startsAt"));
+  const raw = str(fd, "youtubeUrl"); const yt = ytUrl(raw);
+  if (raw && !yt) redirect(`/streams/${id}?err=` + encodeURIComponent("Посилання на YouTube має починатися з https://"));
+  await db().update(schema.streams).set({ title: str(fd, "title") || "Етер", youtubeUrl: yt, ...(at ? { startsAt: at } : {}), tag: str(fd, "tag") || null, updatedAt: new Date() }).where(eq(schema.streams.id, id));
+  revalidatePath("/streams"); revalidatePath(`/streams/${id}`);
+  redirect(`/streams/${id}?saved=1`);
+}
+export async function deleteStream(fd: FormData) {
+  await db().delete(schema.streams).where(eq(schema.streams.id, Number(fd.get("id"))));
+  revalidatePath("/streams");
+  redirect("/streams");
+}
