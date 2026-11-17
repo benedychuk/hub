@@ -4,8 +4,9 @@ import { db, schema } from "@/db";
 import { hashPassword, verifyPassword } from "./auth";
 import { appUrl, botToken } from "./bot";
 import { shchyroConfigured, shchyroRequestPublic } from "./shchyro";
-import { accessGraceHours, accessEnd, subscriptionAllows, subscriptionAllowsSql } from "./access-rule";
+import { accessGraceHours, subscriptionAllowsSql } from "./access-rule";
 import { SHCHYRO_BOT_URL } from "./shchyro";
+import { clubAccess } from "./club";
 
 /**
  * Платформа онбордингу (кабінет кандидатки) як частина Hub.
@@ -374,27 +375,25 @@ export async function bridgeQuizToShchyro(acc: Account) {
 export async function profilePayload(acc: Account) {
   const d = db();
   const [p] = acc.personId ? await d.select().from(persons).where(eq(persons.id, acc.personId)) : [];
-  const grace = await accessGraceHours();
-  // підписки людини: кабінет відкритий, поки хоч одна дає доступ за єдиним правилом (активна або грейс після кінця періоду)
-  const subs = acc.personId ? await d.select({ s: schema.subscriptions, planName: schema.plans.name }).from(schema.subscriptions).leftJoin(schema.plans, eq(schema.plans.id, schema.subscriptions.planId)).where(eq(schema.subscriptions.personId, acc.personId)).orderBy(desc(schema.subscriptions.updatedAt)) : [];
-  const sub = subs.find((x) => subscriptionAllows(x.s, grace)) ?? subs[0];
-  const live = Boolean(sub && subscriptionAllows(sub.s, grace));
-  // повернення коштів скасовує і тріал кабінету, створеного після оплати: доступ закривається повністю
-  const refunded = !live && subs.some((x) => x.s.status === "refunded");
-  const subEnd = sub ? accessEnd(sub.s, grace) : null;
+  // доступ до платформи: єдине правило «учасниця клубу» (lib/club): чинна підписка клубу ZenEdu чи Hub, право на канал клубу або команда
+  const club = await clubAccess(acc.personId);
+  const live = club.member;
+  // колишня учасниця (мала підписку клубу, зараз немає) або повернення коштів — без пробного періоду: доступ закрито
+  const closed = !live && (club.hadClub || club.refunded);
   const now = Date.now(); const ends = acc.trialEndsAt.getTime();
   const botUser = (await d.select({ u: schema.bots.username }).from(schema.bots).where(eq(schema.bots.key, "hub")))[0]?.u ?? null;
   return {
     account_id: acc.id, user_id: p?.telegramUserId ?? null, telegram_linked: Boolean(acc.personId), telegram_link: botUser ? `https://t.me/${botUser}?start=ob_${acc.linkCode}` : null,
     first_name: acc.name ?? p?.firstName ?? null, name: acc.name ?? ([p?.firstName, p?.lastName].filter(Boolean).join(" ") || null), telegram_username: p?.username ?? null, contact: acc.contact,
-    subscription_status: sub ? sub.s.status : "none", subscription_plan: live ? sub!.planName ?? (sub!.s.source === "zenedu" ? "Клуб (ZenEdu)" : "Підписка Hub") : null, subscription_until: live && sub!.s.currentPeriodEnd ? sub!.s.currentPeriodEnd.toISOString() : null,
-    // доступ до кабінету: за підпискою безстроково (поки вона діє, з грейсом), інакше тріал 14 + 7 днів; колишня учасниця без тріалу бачить «доступ завершено»
-    access_mode: live ? "subscription" : sub ? "subscription_ended" : "trial",
-    access_until: live ? (sub!.s.currentPeriodEnd ? subEnd!.toISOString() : null) : acc.trialEndsAt.toISOString(),
-    access_active: live || (!refunded && ends > now),
-    subscription_ended_at: !live && sub ? (subEnd ?? sub.s.currentPeriodEnd)?.toISOString() ?? null : null,
+    subscription_status: live ? "active" : club.hadClub ? "ended" : "none", subscription_plan: live ? club.plan : null, subscription_until: live && club.until ? club.until.toISOString() : null,
+    club_member: live, club_access_via: club.via, // zenedu | hub | grant | team
+    // доступ до кабінету: учасниці клубу — безстроково, поки діє підписка; кандидатки — тріал 14 + 7 днів; колишні учасниці — «доступ завершено»
+    access_mode: live ? "subscription" : club.hadClub ? "subscription_ended" : "trial",
+    access_until: live ? (club.until ? club.until.toISOString() : null) : closed ? null : acc.trialEndsAt.toISOString(),
+    access_active: live || (!closed && ends > now),
+    subscription_ended_at: null,
     registered_at: acc.registeredAt.toISOString(), registration_time: acc.registeredAt.getTime(), trial_expires_at: acc.trialEndsAt.toISOString(), extended_end_time: ends, extension_count: acc.extensionCount,
-    trial_state: live ? "subscription" : refunded ? "fully_expired" : ends > now ? (ends - now < 72 * 3600_000 ? "expiring_soon" : "active") : acc.extensionCount > 0 ? "fully_expired" : "expired_14",
+    trial_state: live ? "subscription" : closed ? "fully_expired" : ends > now ? (ends - now < 72 * 3600_000 ? "expiring_soon" : "active") : acc.extensionCount > 0 ? "fully_expired" : "expired_14",
     quiz_completed: Boolean(acc.quizCompletedAt), quiz_result_id: acc.quizResultId, quiz_scenario: acc.quizScenario, quiz: acc.quiz ?? {}, deep_quiz: acc.deepQuiz ?? {}, diagnostic_completed: Boolean(acc.diagnosticCompletedAt),
     feedback_completed: Boolean(acc.feedbackAt), feedback: acc.feedback ?? null, feedback_at: acc.feedbackAt?.toISOString() ?? null, tags: acc.tags ?? [],
     shchyro_url: SHCHYRO_BOT_URL,
@@ -405,14 +404,14 @@ export async function profilePayload(acc: Account) {
 
 // ---------- щоденний крон: стани тріалу (ТЗ, рядки 11.1–11.4) ----------
 export async function onboardingDaily() {
-  const d = db(); const now = new Date(); const soon = new Date(now.getTime() + 72 * 3600_000); const grace = await accessGraceHours();
+  const d = db(); const now = new Date(); const soon = new Date(now.getTime() + 72 * 3600_000);
   let expiring = 0, expired14 = 0, expiredFinal = 0;
   const rows = await d.select().from(onboardingAccounts).where(or(and(gt(onboardingAccounts.trialEndsAt, now), lte(onboardingAccounts.trialEndsAt, soon)), lt(onboardingAccounts.trialEndsAt, now)));
   for (const a of rows) {
     const tags = a.tags ?? [];
     if (a.personId) { // учасниця з підпискою: тріал не має значення, теги станів тріалу не ставимо
-      const subs = await d.select({ status: schema.subscriptions.status, currentPeriodEnd: schema.subscriptions.currentPeriodEnd, source: schema.subscriptions.source }).from(schema.subscriptions).where(eq(schema.subscriptions.personId, a.personId));
-      if (subs.some((x) => subscriptionAllows(x, grace, now))) continue;
+      const club = await clubAccess(a.personId);
+      if (club.member || club.hadClub) continue; // учасниця або колишня учасниця: станів тріалу не ставимо
     }
     if (a.trialEndsAt > now) { if (!tags.includes("trial_expiring_soon")) { await trackEvent(a, { event_type: "trial_expiring_soon", payload: { days: 3, by: "cron" } }); expiring++; } continue; }
     if (a.extensionCount > 0) { if (!tags.includes("trial_fully_expired")) { await trackEvent(a, { event_type: "trial_fully_expired", payload: { by: "cron" } }); expiredFinal++; } }
