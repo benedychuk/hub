@@ -7,7 +7,7 @@ import { PageHeader, Section, Field, Alert, EmptyState, Stat } from "@/component
 import { Kebab, MenuAction, MenuLink, MenuSep } from "@/components/ui/controls";
 import { CopyField } from "@/components/ui/copy-field";
 import { navCounts, safe } from "@/lib/queries";
-import { streamDetail, streamLinks, hubBotUsername } from "@/lib/streams";
+import { streamDetail, streamLinks, hubBotUsername, platformStreamLink } from "@/lib/streams";
 import { saveStream, deleteStream } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export default async function StreamPage({ params, searchParams }: { params: Pro
   const [counts, d, botUser] = await Promise.all([navCounts(), safe(() => streamDetail(Number(id)), null), safe(() => hubBotUsername(), null)]);
   if (!d) notFound();
   const { s, visitors, members } = d;
-  const links = streamLinks(s.code, botUser); const main = links.miniapp ?? links.bot;
+  const links = streamLinks(s.code, botUser); const platform = platformStreamLink(); const main = links.miniapp ?? links.bot;
   const club = visitors.filter((v) => v.zen || v.hub).length;
   return (
     <Shell title="Етери" counts={counts}>
@@ -38,7 +38,10 @@ export default async function StreamPage({ params, searchParams }: { params: Pro
       </div>
       <div className="grid g21">
         <div>
-          <Section title="Посилання для каналу" description={links.miniapp ? "Відкриває етер одним дотиком (Mini App): Telegram передає, хто перейшов, і одразу відкриває YouTube." : "Відкриває Hub-бот: людина натискає «Старт», бот записує її і дає кнопку «Дивитись етер»."}>
+          {platform && <Section title="Через кабінет (головне)" description="Постійне посилання на всі етери: учасниця відкриває кабінет, бачить цей етер і кнопку «Дивитись». Його достатньо закріпити в каналі один раз.">
+            <CopyField value={platform} open ariaLabel="Постійне посилання на етери в кабінеті" />
+          </Section>}
+          <Section title={platform ? "Запасне посилання (через Telegram)" : "Посилання для каналу"} description={links.miniapp ? "Відкриває етер одним дотиком (Mini App): Telegram передає, хто перейшов, і одразу відкриває YouTube." : "Відкриває Hub-бот: людина натискає «Старт», бот записує її і дає кнопку «Дивитись етер»."}>
             {main ? <CopyField value={main} open ariaLabel="Посилання на етер" /> : <EmptyState title="Hub-бот не підключено" text="Підключіть бота в «Система → Боти й меню»." />}
             {links.miniapp && links.bot && <div style={{ marginTop: 10 }}><div className="fld-h" style={{ marginBottom: 6 }}>Запасне, через бота (якщо Mini App не відкривається):</div><CopyField value={links.bot} compact ariaLabel="Запасне посилання через бота" /></div>}
           </Section>
@@ -46,7 +49,7 @@ export default async function StreamPage({ params, searchParams }: { params: Pro
             {visitors.length ? <table><thead><tr><th>Людина</th><th>Telegram ID</th><th>Учасниця</th><th>Перейшла</th><th className="num">Переходів</th></tr></thead><tbody>
               {visitors.map((v) => <tr key={v.personId}><td><Link href={`/people/${v.personId}`}>{v.name}</Link>{v.username && <div className="fld-h">@{v.username}</div>}</td><td className="mono">{v.telegramUserId}</td>
                 <td>{v.zen && <Pill tone="moon">ZenEdu</Pill>}{v.hub && <Pill tone="acc">Hub</Pill>}{!v.zen && !v.hub && <Pill tone="mute">не з клубу</Pill>}</td>
-                <td className="mono">{when(v.firstAt)}</td><td className="num">{v.clicks}</td></tr>)}
+                <td className="mono">{when(v.firstAt)}{v.via !== "bot" && <div className="fld-h">{v.via === "cabinet" ? "з кабінету" : "Mini App"}</div>}</td><td className="num">{v.clicks}</td></tr>)}
             </tbody></table> : <EmptyState icon={<Radio size={20} />} title="Ще ніхто не перейшов" text="Опублікуйте посилання в каналі: список оновлюється одразу після кожного переходу." />}
           </Section>
         </div>
