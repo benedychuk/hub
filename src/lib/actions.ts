@@ -873,7 +873,10 @@ export async function deleteResource(fd: FormData) {
 export async function resendInvite(fd: FormData) {
   const personId = Number(fd.get("personId")); const key = str(fd, "resourceKey");
   const r = await inviteNow(personId, key); // явна дія: працює навіть без автоматики доступу
-  revalidatePath(`/people/${personId}`); redirect(`/people/${personId}?${r.ok ? "ok=" + encodeURIComponent("Посилання надіслано в бот") : "err=" + encodeURIComponent(r.reason)}`);
+  const back = str(fd, "back"); // зі списку конфліктів каналу — повертаємось туди
+  const to = back.startsWith("/resources/") ? back : `/people/${personId}`;
+  revalidatePath(`/people/${personId}`); if (back) revalidatePath(back);
+  redirect(`${to}?${r.ok ? "ok=" + encodeURIComponent("Посилання надіслано в бот") : "err=" + encodeURIComponent(r.reason)}`);
 }
 
 // ---------- оплати WayForPay ----------

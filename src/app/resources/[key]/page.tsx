@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { RefreshCw, Pause, Play, Trash2, Radio, Save } from "lucide-react";
+import { RefreshCw, Pause, Play, Trash2, Radio, Save, Send } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { PageHeader, Section, Field, FormRow, Stat, Row, Alert, EmptyState } from "@/components/ui/layout";
+import { PageHeader, Section, Field, FormRow, Stat, Row, Alert, EmptyState, FilterGroup } from "@/components/ui/layout";
 import { Kebab, MenuAction, MenuSep, Switch } from "@/components/ui/controls";
 import { navCounts, resourceList, planList } from "@/lib/queries";
-import { saveResource, saveChannelResource, refreshChatInfo, toggleResource, deleteResource } from "@/lib/actions";
+import { saveResource, saveChannelResource, refreshChatInfo, toggleResource, deleteResource, resendInvite } from "@/lib/actions";
+import { zenHubConflicts, CONFLICT_LABELS, type Conflict, type ConflictKind } from "@/lib/conflicts";
 import { botRightsIn, channelStats, recentKicks, type ChannelConfig } from "@/lib/telegram-access";
 import { dateTime, fullName } from "@/lib/format";
 import { shchyroSettings } from "@/lib/shchyro";
@@ -15,7 +16,7 @@ export const dynamic = "force-dynamic";
 const KINDS: Record<string, string> = { telegram_channel: "Канал", telegram_group: "Група", bot_feature: "Функція бота", external_url: "Посилання", course: "Курс" };
 type Cfg = ChannelConfig & { cover?: string; memberCount?: number; username?: string; syncedAt?: string; url?: string; description?: string; zenedu_grants?: boolean; offer_url?: string; quota_per_day?: number };
 
-export default async function ResourcePage({ params, searchParams }: { params: Promise<{ key: string }>; searchParams: Promise<{ saved?: string; new?: string }> }) {
+export default async function ResourcePage({ params, searchParams }: { params: Promise<{ key: string }>; searchParams: Promise<{ saved?: string; new?: string; ok?: string; err?: string }> }) {
   const { key } = await params; const sp = await searchParams;
   const [counts, res, plans] = await Promise.all([navCounts(), resourceList(), planList()]);
   const r = res.find((x) => x.key === key);
@@ -24,6 +25,10 @@ export default async function ResourcePage({ params, searchParams }: { params: P
   const chat = r.kind === "telegram_channel" || r.kind === "telegram_group";
   const [s, rights, kicks] = chat ? await Promise.all([channelStats(r.key).catch(() => null), c.chatId && process.env.TELEGRAM_BOT_TOKEN ? botRightsIn(c.chatId) : Promise.resolve(null), recentKicks(r.key).catch(() => [])]) : [null, null, []];
   const wrongKicks = kicks.filter((k) => !k.hub && !k.back);
+  // конфлікти ZenEdu і Hub у цьому чаті: оплатила в Hub, але не може зайти, або платить двічі
+  const conflicts = chat ? await zenHubConflicts(r.key).catch(() => [] as Conflict[]) : [];
+  const byKind = (Object.keys(CONFLICT_LABELS) as ConflictKind[]).map((k) => ({ k, rows: conflicts.filter((x) => x.kind === k) })).filter((g) => g.rows.length);
+  const canInvite: ConflictKind[] = ["removed_by_other", "banned", "not_joined"];
   const inPlans = plans.filter((p) => Object.keys((p.entitlements ?? {}) as Record<string, string>).includes(r.key));
   const isShchyro = r.kind === "bot_feature" && (await shchyroSettings().catch(() => null))?.resourceKey === r.key;
   return (
@@ -34,6 +39,8 @@ export default async function ResourcePage({ params, searchParams }: { params: P
           <Kebab><MenuAction action={toggleResource} fields={{ key: r.key }} icon={r.isActive ? <Pause /> : <Play />}>{r.isActive ? "Вимкнути" : "Увімкнути"}</MenuAction><MenuSep /><MenuAction action={deleteResource} fields={{ key: r.key }} icon={<Trash2 />} danger confirm={`Видалити «${r.name}» з Hub?`}>Видалити</MenuAction></Kebab></>} />
       {sp.new && <Alert tone="ok">{chat ? "Канал підключено. Перевірте режим вступу й тексти, а право доступу додайте в тарифі." : "Продукт створено. Додайте його до тарифу, щоб видавати доступ."}</Alert>}
       {sp.saved && <Alert tone="ok">Збережено.</Alert>}
+      {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}
+      {sp.err && <Alert tone="bad">{sp.err}</Alert>}
       {isShchyro && <Alert tone="info">Це право відкриває бота «Щиро». Люди, доступ, аналітика й керування автоматикою — на сторінці <Link href="/shchyro">Бот «Щиро»</Link>; тут лише назва, квота й посилання на оффер.</Alert>}
       {chat && c.enforce !== true && <Alert tone="info">Автоматика доступу для цього чату вимкнена: Hub нікого не запрошує й не виключає. Увімкніть перемикач у налаштуваннях нижче, коли будете готові (для бойового каналу лише після тестів). Учасниць ZenEdu автоматика не чіпатиме: {c.protectZenActive !== false ? "усі з чинною підпискою ZenEdu" : "лише"}{(c.protectedTgIds ?? []).length ? ` і ${(c.protectedTgIds ?? []).length} зі списку захищених` : c.protectZenActive !== false ? "" : " люди зі списку захищених (зараз порожній)"}.</Alert>}
       {chat && rights && !rights.ok && <Alert tone="bad">Hub-бот не має потрібних прав у цьому чаті: {(rights as { error?: string }).error ?? `статус ${(rights as { status?: string }).status}`}. Зробіть бота адміністратором із правами «Додавати учасників» і «Блокувати користувачів».</Alert>}
@@ -44,6 +51,15 @@ export default async function ResourcePage({ params, searchParams }: { params: P
         <Stat label="Без права в чаті" value={s.withoutRight} hint={c.enforce === true ? "виключить найближчий тік; лише ті, кого пустив Hub" : "автоматика вимкнена: нікого не виключає"} tone={s.withoutRight && c.enforce === true ? "crit" : undefined} />
       </div>}
       {chat && wrongKicks.length > 0 && <Alert tone="bad">За 30 днів Hub виключив {wrongKicks.length} {wrongKicks.length === 1 ? "людину, яка не отримувала" : "людей, які не отримували"} доступ через Hub (найімовірніше, нові учасниці ZenEdu) і ще не повернулись. Тепер Hub таких не чіпає; список праворуч, щоб повернути їх у канал.</Alert>}
+      {byKind.length > 0 && <Section title={`Конфлікти ZenEdu і Hub: ${conflicts.length}`} description="Люди, які оплатили в Hub, але не можуть бути в чаті через стан у ZenEdu чи Telegram, або платять двічі. Hub лише показує їх; посилання надсилається тільки кнопкою.">
+        {byKind.map((g) => <FilterGroup key={g.k} title={`${CONFLICT_LABELS[g.k].title} · ${g.rows.length}`} open>
+          <p className="fld-h">{CONFLICT_LABELS[g.k].hint}</p>
+          {g.rows.slice(0, 100).map((x) => <Row key={`${x.kind}${x.personId}`} tone="warn"
+            title={<Link href={`/people/${x.personId}`}>{x.name}</Link>}
+            sub={`${x.detail}${x.username ? ` · @${x.username}` : ""} · ID ${x.telegramUserId}`}
+            right={canInvite.includes(x.kind) && x.resourceKey ? <form action={resendInvite}><input type="hidden" name="personId" value={x.personId} /><input type="hidden" name="resourceKey" value={x.resourceKey} /><input type="hidden" name="back" value={`/resources/${r.key}`} /><button className="btn sm" type="submit"><Send size={14} /> Надіслати посилання</button></form> : undefined} />)}
+        </FilterGroup>)}
+      </Section>}
       <div className="grid g21">
         {chat ? (
           <form action={saveChannelResource}><input type="hidden" name="key" value={r.key} />
