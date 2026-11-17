@@ -5,17 +5,27 @@ import { Pill } from "@/components/ui";
 import { Section, Stat, Alert, EmptyState, Toolbar, Pager, KV } from "@/components/ui/layout";
 import { AutoSubmitSelect } from "@/components/ui/controls";
 import { navCounts, safe } from "@/lib/queries";
-import { onboardingConfigured, onboardingUrl, onboardingStats, onboardingList, SCENARIOS, TAG_LABELS, TRIAL_DAYS, EXTENSION_DAYS } from "@/lib/onboarding";
+import { onboardingConfigured, onboardingUrl, onboardingStats, onboardingList, clubMembersWithoutCabinet, SCENARIOS, TAG_LABELS, TRIAL_DAYS, EXTENSION_DAYS } from "@/lib/onboarding";
+import { createClubCabinetsAction } from "@/lib/actions";
+import { ConfirmSubmitButton } from "@/components/ui/confirm";
+import { db } from "@/db";
+import { sql } from "drizzle-orm";
 import { date, dateTime, fullName } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
-type SP = { q?: string; scenario?: string; state?: string; p?: string };
+type SP = { q?: string; scenario?: string; state?: string; p?: string; ok?: string };
 const n = (v: number | null | undefined) => (v ?? 0).toLocaleString("uk-UA");
 
 /** Платформа онбордингу: воронка кандидаток, тріали, сценарії кризи, список акаунтів кабінету. */
 export default async function Onboarding({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams; const configured = onboardingConfigured();
   const [counts, st, list] = await Promise.all([navCounts(), safe(() => onboardingStats(), null), safe(() => onboardingList({ q: sp.q, scenario: Number(sp.scenario) || undefined, state: sp.state, page: Number(sp.p) || 1 }), { rows: [], total: 0, page: 1, per: 50 })]);
+  // учасниці клубу й кабінети: скільки без кабінету, скільки вже створили пароль
+  const club = await safe(async () => {
+    const missing = (await clubMembersWithoutCabinet()).length;
+    const [t] = (await db().execute(sql`select count(*)::int as total, count(*) filter (where password_hash is not null)::int as with_password from onboarding_accounts where source = 'club'`)).rows as { total: number; with_password: number }[];
+    return { missing, total: t?.total ?? 0, withPassword: t?.with_password ?? 0 };
+  }, null);
   const link = (p: Partial<SP>) => { const u = new URLSearchParams(); const all = { ...sp, ...p }; for (const [k, v] of Object.entries(all)) if (v) u.set(k, String(v)); const s = u.toString(); return "/onboarding" + (s ? "?" + s : ""); };
   const pct = (a: number, b: number) => b ? `${Math.round((a / b) * 100)}%` : "—";
   const trialState = (ends: Date, ext: number) => { const ms = ends.getTime() - Date.now(); return ms > 0 ? (ms < 3 * 86400_000 ? <Pill tone="warn">закінчується {date(ends)}</Pill> : <Pill tone="good">до {date(ends)}</Pill>) : ext > 0 ? <Pill tone="mute">завершено</Pill> : <Pill tone="warn">14 днів минули</Pill>; };
@@ -23,6 +33,11 @@ export default async function Onboarding({ searchParams }: { searchParams: Promi
     <Shell title="Онбординг" counts={counts}>
       <div className="ph" style={{ marginBottom: 6 }}><span className="ph-ico"><ClipboardList size={16} /></span><h2 className="ph-title">Платформа онбордингу</h2>{configured ? <Pill tone="good">підключено</Pill> : <Pill tone="crit">ONBOARDING_URL не задано</Pill>}<span className="spacer" />
         <div className="row-actions">{configured && <a href={onboardingUrl()} target="_blank" rel="noreferrer" className="btn sm ghost"><ExternalLink size={14} /> Відкрити платформу</a>}</div></div>
+      {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}
+      {club && <Section title="Кабінети учасниць клубу" description="Кожна учасниця клубу (чинна підписка ZenEdu або Hub) має кабінет. Кабінети створюються мовчки, без пароля: перший вхід — кнопкою «Увійти через Telegram» на платформі або за посиланням з Hub-бота, після чого платформа просить створити пароль. Нові учасниці отримують кабінет автоматично щодня.">
+        <KV items={[{ k: "Учасниць без кабінету", v: n(club.missing), mono: true }, { k: "Створено для клубу", v: n(club.total), mono: true }, { k: "Створили пароль", v: `${n(club.withPassword)} (${pct(club.withPassword, club.total)})`, mono: true }]} />
+        {club.missing > 0 && <form action={createClubCabinetsAction} style={{ marginTop: 12 }}><ConfirmSubmitButton className="btn pri" title="Створити кабінети" confirmLabel={`Створити ${club.missing}`} message={`Кабінет отримають ${club.missing} учасниць клубу, у яких його ще немає. Людям нічого не надсилається; увійти вони зможуть через Telegram і одразу створять пароль.`}>Створити кабінети ({n(club.missing)})</ConfirmSubmitButton></form>}
+      </Section>}
       {!configured && <Alert tone="warn">Додайте ONBOARDING_URL у Vercel: адресу, де розгорнуто кабінет. Без неї бот і картка людини не можуть видавати посилання в кабінет; API для платформи працює й так.</Alert>}
       {st && <>
         <div className="grid g4" style={{ marginBottom: 16 }}>

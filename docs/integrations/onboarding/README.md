@@ -49,7 +49,9 @@
 | Метод | Що робить |
 |---|---|
 | `POST auth/register` `{name, contact, password?}` | акаунт + `session_token` + `user.telegram_link` для підтвердження через бот; 409, якщо контакт уже є |
-| `POST auth/login` `{contact, password}` | вхід за контактом і паролем |
+| `POST auth/login` `{contact, password}` | вхід за контактом і паролем; кабінет без пароля, прив'язаний до Telegram, повертає `password_not_set` — показати вхід через Telegram |
+| `POST auth/telegram` (дані Telegram Login Widget) | вхід через Telegram: підпис перевіряється ключем Hub-бота, кабінет знаходиться за Telegram ID або створюється; `user.must_set_password` |
+| `POST auth/set-password` (Bearer) `{password, current_password?}` | перший пароль без старого, зміна — зі старим; мінімум 6 символів |
 | `POST auth/magic-login` (Bearer `auth_token` або в тілі) | вхід за посиланням з бота: одноразовий токен, 48 годин |
 | `GET user/profile` (Bearer `session_token`) | профіль: тріал, підписка, квіз, тести, анкета, теги, `telegram_linked` |
 | `POST events/track` `{event_type, tag?, page?, payload?}` | подія матриці → тег у картку, запис в історію; `quiz_completed` додатково оновлює пам'ять «Щиро» |
