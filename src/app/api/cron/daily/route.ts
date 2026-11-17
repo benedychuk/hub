@@ -2,7 +2,7 @@ import { runIncrementalSync } from "@/lib/sync";
 import { reconcile } from "@/lib/telegram-access";
 import { dailyPayments } from "@/lib/payments";
 import { shchyroFullSync, shchyroSettings } from "@/lib/shchyro";
-import { onboardingDaily, createClubCabinets } from "@/lib/onboarding";
+import { createClubCabinets } from "@/lib/onboarding";
 import { hasDb } from "@/db";
 
 export const dynamic = "force-dynamic";
@@ -20,8 +20,7 @@ export async function GET(req: Request) {
     const shst = await shchyroSettings();
     const shchyro = shst.enabled && shst.fullSync ? await shchyroFullSync({ by: "cron" }).catch((e) => ({ error: String(e) })) : null;
     const cabinets = await createClubCabinets(500).catch((e) => ({ error: String(e) })); // кабінет кожній новій учасниці клубу (мовчки)
-    const onboarding = await onboardingDaily().catch((e) => ({ error: String(e) })); // стани тріалу кабінету: теги «закінчується», «14 днів минули», «доступ завершено»
-    return Response.json({ ok: true, stats, reconcile: rec, payments, shchyro, onboarding, cabinets });
+    return Response.json({ ok: true, stats, reconcile: rec, payments, shchyro, cabinets });
   }
   catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 500 }); }
 }

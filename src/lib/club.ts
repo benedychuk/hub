@@ -51,3 +51,21 @@ export async function clubAccess(personId: number | null | undefined): Promise<C
   }
   return { ...none, hadClub, refunded };
 }
+
+/**
+ * SQL-умова «людина <personIdExpr> — учасниця клубу зараз» за тим самим правилом, що clubAccess
+ * (для статистики й списків; команда й тестувальники — за переданими Telegram ID).
+ */
+export async function clubMemberSql(personIdExpr: string) {
+  const grace = await accessGraceHours();
+  const team = [...(await teamTelegramIds())];
+  const [t] = (await db().execute(sql`select value from settings where key = 'payments.testers'`)).rows as { value: unknown }[];
+  const ids = [...team, ...(Array.isArray(t?.value) ? (t.value as unknown[]).map(Number) : [])].filter((n) => Number.isSafeInteger(n) && n > 0);
+  const allow = subscriptionAllowsSql("s", grace);
+  return sql.raw(`(exists (select 1 from subscriptions s where s.person_id = ${personIdExpr} and ${allow}
+      and (s.source = 'zenedu' or (s.source = 'hub'
+        and exists (select 1 from plans pl, resources r where pl.id = s.plan_id and r.kind in ('telegram_channel','telegram_group') and pl.entitlements ? r.key)
+        and not (exists (select 1 from payment_attempts pa where pa.subscription_id = s.id and pa.mode = 'test') and not exists (select 1 from payment_attempts pa where pa.subscription_id = s.id and pa.mode = 'live')))))
+    or exists (select 1 from entitlements e join resources r on r.key = e.resource_key where e.person_id = ${personIdExpr} and r.kind in ('telegram_channel','telegram_group') and e.revoked_at is null and (e.valid_until is null or e.valid_until > now()))
+    ${ids.length ? `or exists (select 1 from persons tp where tp.id = ${personIdExpr} and tp.telegram_user_id in (${ids.join(",")}))` : ""})`);
+}
