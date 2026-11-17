@@ -119,20 +119,38 @@ export async function registerAccount(input: { name: string; contact: string; pa
   await logEvent(a, "onboarding_registered", { contact: input.contact, source: input.source ?? "web", via: "web" });
   return { ok: true as const, account: a };
 }
+/**
+ * Вхід за логіном і паролем. Логін — те, що людина пам'ятає: @username чи username, Telegram ID, телефон або email.
+ * Кабінетів під один логін може бути кілька (вебреєстрація з тим самим @username і кабінет, створений після входу через
+ * Telegram), тому пароль перевіряється в кожному кандидаті; спершу — прив'язані до Telegram. Раніше брався лише перший
+ * знайдений, і пароль, створений після входу через Telegram, «не підходив».
+ */
 export async function loginAccount(contact: string, password: string) {
   const norm = normalizeContact(contact);
-  const [a] = norm ? await db().select().from(onboardingAccounts).where(eq(onboardingAccounts.contactNorm, norm)) : [];
-  if (!a) return { ok: false as const, error: "not_found" };
-  if (a.passwordHash) {
-    if (!verifyPassword(password, a.passwordHash)) return { ok: false as const, error: "bad_password" };
-    return { ok: true as const, account: a };
-  }
+  if (!norm) return { ok: false as const, error: "not_found" };
+  const raw = String(contact ?? "").trim();
+  const tgId = /^\d{5,15}$/.test(raw) ? raw : null; // Telegram ID — лише цифри (телефон з цифр теж перевіряється окремо)
+  const rows = (await db().execute(sql`
+    select oa.id from onboarding_accounts oa left join persons p on p.id = oa.person_id
+    where oa.contact_norm = ${norm}
+      or lower(p.username) = ${norm}
+      or (${norm.includes("@")} and lower(p.email) = ${norm})
+      or (${/^\d{9}$/.test(norm)} and right(regexp_replace(coalesce(p.phone, ''), '\D', '', 'g'), 9) = ${norm})
+      or (${tgId !== null} and p.telegram_user_id::text = ${tgId ?? ""})
+    order by (oa.person_id is not null) desc, (oa.password_hash is not null) desc, oa.last_seen_at desc nulls last
+    limit 10`)).rows as { id: number }[];
+  if (!rows.length) return { ok: false as const, error: "not_found" };
+  const cands = (await Promise.all(rows.map((r) => accountById(r.id)))).filter(Boolean) as Account[];
+  const withPw = cands.filter((a) => a.passwordHash);
+  for (const a of withPw) if (verifyPassword(password, a.passwordHash)) return { ok: true as const, account: a };
+  if (withPw.length) return { ok: false as const, error: "bad_password" };
   // кабінет без пароля, прив'язаний до Telegram (створений Hub: оплата, бот, клуб): за контактом його не можна «зайняти»,
-  // бо @username знає будь-хто. Перший вхід — через Telegram (віджет або посилання з бота), далі людина створює пароль.
-  if (a.personId || a.source !== "web") return { ok: false as const, error: "password_not_set" };
+  // бо @username знає будь-хто. Перший вхід — через Telegram (кнопка або посилання з бота), далі людина створює пароль.
+  const web = cands.find((a) => !a.personId && a.source === "web");
+  if (!web) return { ok: false as const, error: "password_not_set" };
   // власна вебреєстрація без пароля (ще без Telegram): як і раніше, перший вхід задає пароль
-  if (password) await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password) }).where(eq(onboardingAccounts.id, a.id));
-  return { ok: true as const, account: a };
+  if (password) await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password) }).where(eq(onboardingAccounts.id, web.id));
+  return { ok: true as const, account: web };
 }
 /** Вхід за magic link з бота: акаунт для людини Hub створюється або знаходиться, Telegram одразу підтверджений. */
 export async function magicLogin(token: string) {
@@ -395,6 +413,8 @@ export async function profilePayload(acc: Account) {
     shchyro_url: SHCHYRO_BOT_URL,
     // пароль: кабінети, створені Hub (клуб, оплата, бот), спершу без пароля — платформа просить створити його після першого входу
     password_set: Boolean(acc.passwordHash), must_set_password: !acc.passwordHash,
+    // логін для входу з паролем: показати людині після створення пароля («Ваш логін: …»)
+    login: acc.contact ?? (p?.username ? "@" + p.username : p?.telegramUserId ? String(p.telegramUserId) : null),
   };
 }
 
