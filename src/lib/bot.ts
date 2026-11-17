@@ -149,8 +149,10 @@ export function getBot() {
     const r = await botLoginConfirm(ctx.match[1], ctx.from);
     await ctx.answerCallbackQuery(r.ok ? { text: "Вхід підтверджено" } : { text: "Посилання застаріло", show_alert: true });
     if (!r.ok) { await ctx.editMessageText("Посилання для входу застаріло. Поверніться на сайт і натисніть «Увійти через Telegram» ще раз.").catch(() => null); return; }
-    const kb = onboardingConfigured() && r.personId ? new InlineKeyboard().url("Відкрити кабінет", magicLinkFor(r.personId, r.next)) : undefined;
-    await ctx.editMessageText("Вхід підтверджено. Поверніться у браузер — кабінет відкриється сам, або натисніть кнопку нижче.", { reply_markup: kb }).catch(() => null);
+    // людина входила зі сторінки етеру (next = efir.html) — кнопка веде одразу на етер, а не на головну кабінету
+    const efir = r.next === "efir.html";
+    const kb = onboardingConfigured() && r.personId ? new InlineKeyboard().url(efir ? "Відкрити етер" : "Відкрити кабінет", magicLinkFor(r.personId, r.next)) : undefined;
+    await ctx.editMessageText(`Вхід підтверджено. Поверніться у браузер — ${efir ? "сторінка етеру відкриється сама" : "кабінет відкриється сам"}, або натисніть кнопку нижче.`, { reply_markup: kb }).catch(() => null);
   });
   bot.callbackQuery("subs", async (ctx) => { await ctx.answerCallbackQuery(); await showSubs(ctx as unknown as Ctx); });
 

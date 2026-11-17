@@ -357,7 +357,10 @@ export async function profilePayload(acc: Account) {
   const club = await clubAccess(acc.personId);
   const live = club.member;
   const botUser = (await d.select({ u: schema.bots.username }).from(schema.bots).where(eq(schema.bots.key, "hub")))[0]?.u ?? null;
+  // актуальний етер разом із профілем: банер і сторінка етеру показуються одразу, без окремого запиту (лише учасницям)
+  const stream = live ? await import("./streams").then((m) => m.cabinetStream()).catch(() => null) : null;
   return {
+    stream,
     account_id: acc.id, user_id: p?.telegramUserId ?? null, telegram_linked: Boolean(acc.personId), telegram_link: botUser ? `https://t.me/${botUser}?start=ob_${acc.linkCode}` : null,
     first_name: acc.name ?? p?.firstName ?? null, name: acc.name ?? ([p?.firstName, p?.lastName].filter(Boolean).join(" ") || null), telegram_username: p?.username ?? null, contact: acc.contact,
     subscription_status: live ? "active" : club.hadClub ? "ended" : "none", subscription_plan: live ? club.plan : null, subscription_until: live && club.until ? club.until.toISOString() : null,
