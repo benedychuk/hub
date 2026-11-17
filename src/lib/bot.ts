@@ -9,7 +9,7 @@ import { grantByLink, priceLabel, accessLabel } from "./offers";
 import { coverFile, escapeHtml } from "./funnels";
 import { enroll, matchEntry, matchStartLink, onButtonClick, stopAllForPerson, enrollDirectAccess, onFreeText, onCommand, processDue, sendIntro } from "./funnels";
 import { onChatMember, onJoinRequest, onMyChatMember } from "./telegram-access";
-import { linkAccountToPerson, magicLinkFor, onboardingConfigured, ensureAccountForPerson } from "./onboarding";
+import { linkAccountToPerson, magicLinkFor, onboardingConfigured, ensureAccountForPerson, botLoginPending, botLoginConfirm } from "./onboarding";
 import { fillVars, hasVars } from "./vars";
 import { recordStreamVisit } from "./streams";
 import { mediaOf, saveMedia, startRecording, recordMessage, REC_KEYS, type RecKeyboard } from "./funnel-recorder";
@@ -70,6 +70,12 @@ export function getBot() {
       const r = await linkAccountToPerson(payload.slice(3), personId);
       const kb = onboardingConfigured() ? new InlineKeyboard().url("Відкрити кабінет", magicLinkFor(personId)) : undefined;
       await ctx.reply(r.ok ? `Готово, ${ctx.from.first_name ?? ""}! Особистий кабінет підключено до Telegram: тепер він відкривається з будь-якого пристрою, а результати тестів зберігаються.` : r.error === "linked_to_other" ? "Цей кабінет уже підключено до іншого Telegram-акаунта. Напишіть у підтримку, і ми розберемось." : "Посилання для підтвердження застаріло. Відкрийте кабінет і натисніть «Підтвердити через Telegram» ще раз.", { reply_markup: kb, link_preview_options: { is_disabled: true } });
+      return;
+    }
+    if (payload.startsWith("login_")) { // вхід у кабінет на сайті: потрібне явне підтвердження кнопкою
+      const code = payload.slice(6);
+      if (!(await botLoginPending(code))) { await ctx.reply("Посилання для входу застаріло. Поверніться на сайт і натисніть «Увійти через Telegram» ще раз."); return; }
+      await ctx.reply("Підтвердіть вхід в особистий кабінет на сайті mariia-kravchuk.com.ua.\n\nЯкщо це не ви намагаєтесь увійти — просто нічого не натискайте.", { reply_markup: new InlineKeyboard().text("Так, це я входжу", `lgn:${code}`) });
       return;
     }
     if (payload.startsWith("ev_")) { // етер: записуємо, хто перейшов, і даємо кнопку на трансляцію
@@ -139,6 +145,13 @@ export function getBot() {
     if (ctx.match[1] === "cancel") await cancelAtEnd(hub.id, "bot"); else await resumeSub(hub.id, "bot");
   });
   bot.command("subscriptions", (ctx) => showSubs(ctx as unknown as Ctx));
+  bot.callbackQuery(/^lgn:([A-Za-z0-9_-]{20,60})$/, async (ctx) => {
+    const r = await botLoginConfirm(ctx.match[1], ctx.from);
+    await ctx.answerCallbackQuery(r.ok ? { text: "Вхід підтверджено" } : { text: "Посилання застаріло", show_alert: true });
+    if (!r.ok) { await ctx.editMessageText("Посилання для входу застаріло. Поверніться на сайт і натисніть «Увійти через Telegram» ще раз.").catch(() => null); return; }
+    const kb = onboardingConfigured() && r.personId ? new InlineKeyboard().url("Відкрити кабінет", magicLinkFor(r.personId, r.next)) : undefined;
+    await ctx.editMessageText("Вхід підтверджено. Поверніться у браузер — кабінет відкриється сам, або натисніть кнопку нижче.", { reply_markup: kb }).catch(() => null);
+  });
   bot.callbackQuery("subs", async (ctx) => { await ctx.answerCallbackQuery(); await showSubs(ctx as unknown as Ctx); });
 
   const showPlans = async (ctx: Ctx) => {

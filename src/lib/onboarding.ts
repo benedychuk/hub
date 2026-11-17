@@ -18,7 +18,7 @@ import { SHCHYRO_BOT_URL } from "./shchyro";
  * onboarding_accounts.tags). Результат квізу додатково записується в пам'ять бота «Щиро».
  */
 
-const { onboardingAccounts, persons, events, identities } = schema;
+const { onboardingAccounts, persons, events, identities } = schema; // settings — через schema.settings (коди входу через бота)
 export type Account = typeof onboardingAccounts.$inferSelect;
 
 export const TRIAL_DAYS = 14;
@@ -165,12 +165,62 @@ export function verifyTelegramLogin(data: Record<string, string | number | undef
 }
 export async function telegramLogin(data: Record<string, string | number | undefined>) {
   const u = verifyTelegramLogin(data); if (!u) return { ok: false as const, error: "bad_signature" };
+  return loginByTelegramUser(u, "telegram_login");
+}
+/** Кабінет людини за перевіреним Telegram-користувачем (віджет, бот, Mini App): знаходимо або створюємо. */
+export async function loginByTelegramUser(u: { id: number; first_name?: string; last_name?: string; username?: string }, via: string) {
   const d = db();
   const [p] = await d.insert(persons).values({ telegramUserId: u.id, firstName: u.first_name ?? null, lastName: u.last_name ?? null, username: u.username ?? null, lastActiveAt: new Date() })
     .onConflictDoUpdate({ target: persons.telegramUserId, set: { lastActiveAt: new Date(), updatedAt: new Date() } }).returning();
   const a = (await accountForPerson(p.id)) ?? await ensureAccountForPerson(p, "telegram");
-  await logEvent(a, "cabinet_opened", { via: "telegram_login" });
+  await logEvent(a, "cabinet_opened", { via });
   return { ok: true as const, account: a };
+}
+
+/**
+ * Вхід у кабінет в один дотик через Hub-бота (замість Telegram Login Widget).
+ * 1) сайт: POST auth/telegram-bot/start → одноразовий код (5 хв, 192 біти) і посилання t.me/<бот>?start=login_<код>;
+ * 2) бот: /start login_<код> → «Підтвердіть вхід у кабінет на сайті» з кнопкою; лише натискання кнопки підтверджує вхід
+ *    (простий Start не підтверджує: інакше чужий код, підсунутий людині, відкрив би її кабінет у чужому браузері);
+ * 3) сайт опитує GET auth/telegram-bot/status?code= → після підтвердження отримує session_token один раз.
+ * Стан коду — у settings (ключ tglogin:<код>), прострочені прибираються.
+ */
+const BOT_LOGIN_TTL_MS = 5 * 60_000;
+type BotLogin = { status: "pending" | "confirmed" | "used"; next: string; exp: number; accountId?: number };
+const loginKey = (code: string) => `tglogin:${code}`;
+const okCode = (c: string) => /^[A-Za-z0-9_-]{20,60}$/.test(c);
+const safeNext = (n: unknown) => typeof n === "string" && /^[a-z0-9_-]+\.html$/i.test(n) ? n : "cabinet.html";
+export async function botLoginStart(next?: string) {
+  const d = db();
+  await d.delete(schema.settings).where(and(sql`${schema.settings.key} like 'tglogin:%'`, lt(schema.settings.updatedAt, new Date(Date.now() - 3600_000))));
+  const code = randomBytes(24).toString("base64url");
+  await d.insert(schema.settings).values({ key: loginKey(code), value: { status: "pending", next: safeNext(next), exp: Date.now() + BOT_LOGIN_TTL_MS } satisfies BotLogin });
+  return { code, expiresIn: BOT_LOGIN_TTL_MS / 1000 };
+}
+async function readBotLogin(code: string) {
+  if (!okCode(code)) return null;
+  const [row] = await db().select().from(schema.settings).where(eq(schema.settings.key, loginKey(code)));
+  return (row?.value as BotLogin | undefined) ?? null;
+}
+/** Бот: чи код ще чекає підтвердження (для повідомлення з кнопкою). */
+export async function botLoginPending(code: string) { const v = await readBotLogin(code); return Boolean(v && v.status === "pending" && v.exp > Date.now()); }
+/** Бот: людина натиснула «Так, це я входжу» — прив'язуємо кабінет до коду. Повертає next для кнопки «Відкрити кабінет». */
+export async function botLoginConfirm(code: string, u: { id: number; first_name?: string; last_name?: string; username?: string }) {
+  const v = await readBotLogin(code);
+  if (!v || v.status !== "pending" || v.exp < Date.now()) return { ok: false as const, error: "expired" };
+  const r = await loginByTelegramUser(u, "telegram_bot");
+  await db().update(schema.settings).set({ value: { ...v, status: "confirmed", accountId: r.account.id }, updatedAt: new Date() }).where(eq(schema.settings.key, loginKey(code)));
+  return { ok: true as const, next: v.next, personId: r.account.personId };
+}
+/** Сайт: стан коду; після підтвердження один раз віддає сесію (далі код — used). */
+export async function botLoginStatus(code: string) {
+  const v = await readBotLogin(code);
+  if (!v) return { status: "expired" as const };
+  if (v.status === "pending") return v.exp > Date.now() ? { status: "pending" as const } : { status: "expired" as const };
+  if (v.status === "used" || !v.accountId) return { status: "expired" as const };
+  const a = await accountById(v.accountId); if (!a) return { status: "expired" as const };
+  await db().update(schema.settings).set({ value: { ...v, status: "used" }, updatedAt: new Date() }).where(eq(schema.settings.key, loginKey(code)));
+  return { status: "confirmed" as const, account: a };
 }
 /** Пароль кабінету: перший раз — без старого (людина вже увійшла через Telegram чи посилання), далі — лише зі старим. */
 export async function setAccountPassword(a: Account, password: string, current?: string) {
