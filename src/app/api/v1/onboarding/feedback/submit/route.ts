@@ -15,5 +15,5 @@ export async function POST(req: Request) {
     token = sessionTokenFor(a.id);
   }
   const r = await submitFeedback(a, b.answers);
-  return json(req, { success: true, extended: r.extended, trial_expires_at: r.account.trialEndsAt.toISOString(), extended_end_time: r.account.trialEndsAt.getTime(), extension_count: r.account.extensionCount, tags: r.account.tags, ...(token ? { session_token: token } : {}) });
+  return json(req, { success: true, extended: r.extended, extension_count: 0, tags: r.account.tags, ...(token ? { session_token: token } : {}) });
 }

@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { db, schema } from "@/db";
 import { hashPassword, verifyPassword } from "./auth";
@@ -6,7 +6,7 @@ import { appUrl, botToken } from "./bot";
 import { shchyroConfigured, shchyroRequestPublic } from "./shchyro";
 import { accessGraceHours, subscriptionAllowsSql } from "./access-rule";
 import { SHCHYRO_BOT_URL } from "./shchyro";
-import { clubAccess } from "./club";
+import { clubAccess, clubMemberSql } from "./club";
 
 /**
  * Платформа онбордингу (кабінет кандидатки) як частина Hub.
@@ -22,9 +22,7 @@ import { clubAccess } from "./club";
 const { onboardingAccounts, persons, events, identities } = schema; // settings — через schema.settings (коди входу через бота)
 export type Account = typeof onboardingAccounts.$inferSelect;
 
-export const TRIAL_DAYS = 14;
-export const EXTENSION_DAYS = 7;
-const DAY = 86400_000;
+// Пробного періоду кабінету немає: доступ до платформи дає лише чинна підписка клубу (lib/club). Поле trial_ends_at у базі лишається заради сумісності, не використовується.
 const MAGIC_TTL_SEC = 48 * 3600;
 const SESSION_TTL_SEC = 30 * 86400;
 
@@ -42,13 +40,14 @@ export const EVENT_TAGS: Record<string, string | null> = {
   onboarding_registered: "onboarding_registered", quiz_started: "quiz_started", quiz_completed: "quiz_completed",
   deep_quiz_test_completed: null, deep_quiz_completed: "deep_quiz_completed", diagnostic_completed: "diagnostic_completed",
   feedback_completed: "feedback_completed", cta_club_clicked: "cta_club_clicked", cta_schyro_clicked: "cta_schyro_clicked",
-  trial_expiring_soon: "trial_expiring_soon", trial_14_expired: "trial_14_expired", trial_extended_7_days: "trial_extended_7_days", trial_fully_expired: "trial_fully_expired",
+  // пробного періоду більше немає: старі події тріалу приймаються (сумісність), але тегів не ставлять
+  trial_expiring_soon: null, trial_14_expired: null, trial_extended_7_days: null, trial_fully_expired: null,
   cabinet_opened: null, telegram_confirmed: "onboarding_registered",
 };
 export const TAG_LABELS: Record<string, string> = {
   onboarding_registered: "зареєструвалась у кабінеті", quiz_started: "почала квіз", quiz_completed: "пройшла квіз", deep_quiz_completed: "пройшла глибинний тест", diagnostic_completed: "пройшла діагностику",
-  feedback_completed: "заповнила анкету", cta_club_clicked: "цікавилась клубом", cta_schyro_clicked: "відкривала «Щиро»", trial_expiring_soon: "тріал закінчується", trial_14_expired: "14 днів минули",
-  trial_extended_7_days: "бонус +7 днів", trial_fully_expired: "доступ завершено", crisis_acute: "Гостра криза", crisis_lost_boundaries: "Втрата себе і кордони", crisis_emotional_cold: "Емоційний холод",
+  feedback_completed: "заповнила анкету", cta_club_clicked: "цікавилась клубом", cta_schyro_clicked: "відкривала «Щиро»",
+  crisis_acute: "Гостра криза", crisis_lost_boundaries: "Втрата себе і кордони", crisis_emotional_cold: "Емоційний холод",
   crisis_toxic_dynamics: "Токсична динаміка", crisis_breakup_recovery: "Відновлення після розриву", crisis_total_exhaustion: "Загальне виснаження",
 };
 
@@ -116,7 +115,7 @@ export async function registerAccount(input: { name: string; contact: string; pa
   const [exists] = await d.select().from(onboardingAccounts).where(eq(onboardingAccounts.contactNorm, norm));
   if (exists) return { ok: false as const, error: "account_exists", account: exists };
   const now = new Date();
-  const [a] = await d.insert(onboardingAccounts).values({ name: input.name.trim().slice(0, 120), contact: input.contact.trim().slice(0, 120), contactNorm: norm, passwordHash: input.password ? hashPassword(input.password) : null, linkCode: newLinkCode(), source: input.source ?? "web", utm: input.utm ?? {}, trialEndsAt: new Date(now.getTime() + TRIAL_DAYS * DAY), tags: ["onboarding_registered"], lastSeenAt: now }).returning();
+  const [a] = await d.insert(onboardingAccounts).values({ name: input.name.trim().slice(0, 120), contact: input.contact.trim().slice(0, 120), contactNorm: norm, passwordHash: input.password ? hashPassword(input.password) : null, linkCode: newLinkCode(), source: input.source ?? "web", utm: input.utm ?? {}, trialEndsAt: now, tags: ["onboarding_registered"], lastSeenAt: now }).returning();
   await logEvent(a, "onboarding_registered", { contact: input.contact, source: input.source ?? "web", via: "web" });
   return { ok: true as const, account: a };
 }
@@ -265,7 +264,7 @@ export async function createClubCabinets(limit = 5000) {
 export async function ensureAccountForPerson(person: typeof persons.$inferSelect, source: string) {
   const d = db(); const cur = await accountForPerson(person.id); if (cur) return cur;
   const now = new Date();
-  const [a] = await d.insert(onboardingAccounts).values({ personId: person.id, name: [person.firstName, person.lastName].filter(Boolean).join(" ") || person.username || null, contact: person.username ? "@" + person.username : person.phone ?? null, contactNorm: person.username ? person.username.toLowerCase() : person.phone ? normalizeContact(person.phone) : null, linkCode: newLinkCode(), source, trialEndsAt: new Date(now.getTime() + TRIAL_DAYS * DAY), tags: ["onboarding_registered"], confirmedAt: now, lastSeenAt: now }).returning();
+  const [a] = await d.insert(onboardingAccounts).values({ personId: person.id, name: [person.firstName, person.lastName].filter(Boolean).join(" ") || person.username || null, contact: person.username ? "@" + person.username : person.phone ?? null, contactNorm: person.username ? person.username.toLowerCase() : person.phone ? normalizeContact(person.phone) : null, linkCode: newLinkCode(), source, trialEndsAt: now, tags: ["onboarding_registered"], confirmedAt: now, lastSeenAt: now }).returning();
   await addPersonTags(person.id, ["onboarding_registered"]);
   await logEvent(a, "onboarding_registered", { via: source });
   return a;
@@ -344,16 +343,13 @@ export async function trackEvent(acc: Account, input: TrackInput) {
 }
 const sanitize = (p: Record<string, unknown>) => Object.fromEntries(Object.entries(p).filter(([k]) => !["answers", "password"].includes(k)).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 500) : v]));
 
-/** Анкета зворотного зв'язку: зберегти, тег, +7 днів один раз (ТЗ 4.3, рядки 8 і 11.3). */
+/** Анкета зворотного зв'язку: зберегти й поставити тег. Бонусу днів немає — доступ дає лише підписка клубу. */
 export async function submitFeedback(acc: Account, answers: Record<string, unknown>) {
   const d = db(); const now = new Date();
-  const extend = acc.extensionCount === 0;
-  const base = acc.trialEndsAt > now ? acc.trialEndsAt : now;
-  const [u] = await d.update(onboardingAccounts).set({ feedback: answers, feedbackAt: now, lastSeenAt: now, updatedAt: now, ...(extend ? { trialEndsAt: new Date(base.getTime() + EXTENSION_DAYS * DAY), extensionCount: 1 } : {}) }).where(eq(onboardingAccounts.id, acc.id)).returning();
-  const tagged = await addAccountTags(u, extend ? ["feedback_completed", "trial_extended_7_days"] : ["feedback_completed"]);
-  await logEvent(tagged, "feedback_completed", { answers: sanitizeFeedback(answers), extended: extend });
-  if (extend) await logEvent(tagged, "trial_extended_7_days", { until: tagged.trialEndsAt });
-  return { ok: true as const, account: tagged, extended: extend };
+  const [u] = await d.update(onboardingAccounts).set({ feedback: answers, feedbackAt: now, lastSeenAt: now, updatedAt: now }).where(eq(onboardingAccounts.id, acc.id)).returning();
+  const tagged = await addAccountTags(u, ["feedback_completed"]);
+  await logEvent(tagged, "feedback_completed", { answers: sanitizeFeedback(answers) });
+  return { ok: true as const, account: tagged, extended: false };
 }
 const sanitizeFeedback = (a: Record<string, unknown>) => Object.fromEntries(Object.entries(a).slice(0, 20).map(([k, v]) => [k.slice(0, 40), typeof v === "string" ? v.slice(0, 1000) : v]));
 
@@ -378,22 +374,22 @@ export async function profilePayload(acc: Account) {
   // доступ до платформи: єдине правило «учасниця клубу» (lib/club): чинна підписка клубу ZenEdu чи Hub, право на канал клубу або команда
   const club = await clubAccess(acc.personId);
   const live = club.member;
-  // колишня учасниця (мала підписку клубу, зараз немає) або повернення коштів — без пробного періоду: доступ закрито
-  const closed = !live && (club.hadClub || club.refunded);
-  const now = Date.now(); const ends = acc.trialEndsAt.getTime();
   const botUser = (await d.select({ u: schema.bots.username }).from(schema.bots).where(eq(schema.bots.key, "hub")))[0]?.u ?? null;
   return {
     account_id: acc.id, user_id: p?.telegramUserId ?? null, telegram_linked: Boolean(acc.personId), telegram_link: botUser ? `https://t.me/${botUser}?start=ob_${acc.linkCode}` : null,
     first_name: acc.name ?? p?.firstName ?? null, name: acc.name ?? ([p?.firstName, p?.lastName].filter(Boolean).join(" ") || null), telegram_username: p?.username ?? null, contact: acc.contact,
     subscription_status: live ? "active" : club.hadClub ? "ended" : "none", subscription_plan: live ? club.plan : null, subscription_until: live && club.until ? club.until.toISOString() : null,
     club_member: live, club_access_via: club.via, // zenedu | hub | grant | team
-    // доступ до кабінету: учасниці клубу — безстроково, поки діє підписка; кандидатки — тріал 14 + 7 днів; колишні учасниці — «доступ завершено»
-    access_mode: live ? "subscription" : club.hadClub ? "subscription_ended" : "trial",
-    access_until: live ? (club.until ? club.until.toISOString() : null) : closed ? null : acc.trialEndsAt.toISOString(),
-    access_active: live || (!closed && ends > now),
+    // доступ до платформи — лише за чинною підпискою клубу (ZenEdu чи Hub) і поки вона діє; пробного періоду немає.
+    // access_mode: subscription — є доступ; subscription_ended — підписка була й закінчилась; no_subscription — підписки клубу не було
+    access_mode: live ? "subscription" : club.hadClub ? "subscription_ended" : "no_subscription",
+    access_until: live && club.until ? club.until.toISOString() : null,
+    access_active: live,
     subscription_ended_at: null,
-    registered_at: acc.registeredAt.toISOString(), registration_time: acc.registeredAt.getTime(), trial_expires_at: acc.trialEndsAt.toISOString(), extended_end_time: ends, extension_count: acc.extensionCount,
-    trial_state: live ? "subscription" : closed ? "fully_expired" : ends > now ? (ends - now < 72 * 3600_000 ? "expiring_soon" : "active") : acc.extensionCount > 0 ? "fully_expired" : "expired_14",
+    registered_at: acc.registeredAt.toISOString(), registration_time: acc.registeredAt.getTime(),
+    // сумісність зі старою версією платформи: поля тріалу повторюють доступ за підпискою
+    trial_expires_at: live && club.until ? club.until.toISOString() : null, extended_end_time: live && club.until ? club.until.getTime() : null, extension_count: 0,
+    trial_state: live ? "subscription" : club.hadClub ? "subscription_ended" : "no_subscription",
     quiz_completed: Boolean(acc.quizCompletedAt), quiz_result_id: acc.quizResultId, quiz_scenario: acc.quizScenario, quiz: acc.quiz ?? {}, deep_quiz: acc.deepQuiz ?? {}, diagnostic_completed: Boolean(acc.diagnosticCompletedAt),
     feedback_completed: Boolean(acc.feedbackAt), feedback: acc.feedback ?? null, feedback_at: acc.feedbackAt?.toISOString() ?? null, tags: acc.tags ?? [],
     shchyro_url: SHCHYRO_BOT_URL,
@@ -402,32 +398,13 @@ export async function profilePayload(acc: Account) {
   };
 }
 
-// ---------- щоденний крон: стани тріалу (ТЗ, рядки 11.1–11.4) ----------
-export async function onboardingDaily() {
-  const d = db(); const now = new Date(); const soon = new Date(now.getTime() + 72 * 3600_000);
-  let expiring = 0, expired14 = 0, expiredFinal = 0;
-  const rows = await d.select().from(onboardingAccounts).where(or(and(gt(onboardingAccounts.trialEndsAt, now), lte(onboardingAccounts.trialEndsAt, soon)), lt(onboardingAccounts.trialEndsAt, now)));
-  for (const a of rows) {
-    const tags = a.tags ?? [];
-    if (a.personId) { // учасниця з підпискою: тріал не має значення, теги станів тріалу не ставимо
-      const club = await clubAccess(a.personId);
-      if (club.member || club.hadClub) continue; // учасниця або колишня учасниця: станів тріалу не ставимо
-    }
-    if (a.trialEndsAt > now) { if (!tags.includes("trial_expiring_soon")) { await trackEvent(a, { event_type: "trial_expiring_soon", payload: { days: 3, by: "cron" } }); expiring++; } continue; }
-    if (a.extensionCount > 0) { if (!tags.includes("trial_fully_expired")) { await trackEvent(a, { event_type: "trial_fully_expired", payload: { by: "cron" } }); expiredFinal++; } }
-    else if (!tags.includes("trial_14_expired")) { await trackEvent(a, { event_type: "trial_14_expired", payload: { by: "cron" } }); expired14++; }
-  }
-  return { checked: rows.length, expiring, expired14, expiredFinal };
-}
-
 // ---------- для панелі Hub ----------
-export type OnboardingStats = { total: number; confirmed: number; linked: number; quiz: number; deep: number; diagnostic: number; feedback: number; trial_active: number; expiring: number; expired: number; new7: number; shchyro: number; cta_club: number; cta_schyro: number; byScenario: { id: number; name: string; c: number }[] };
+export type OnboardingStats = { total: number; confirmed: number; linked: number; quiz: number; deep: number; diagnostic: number; feedback: number; members: number; no_access: number; new7: number; shchyro: number; cta_club: number; cta_schyro: number; byScenario: { id: number; name: string; c: number }[] };
 export async function onboardingStats(): Promise<OnboardingStats> {
-  const d = db();
+  const d = db(); const member = await clubMemberSql("onboarding_accounts.person_id");
   const [r] = (await d.execute(sql`select count(*)::int as total, count(*) filter (where confirmed_at is not null)::int as confirmed, count(*) filter (where person_id is not null)::int as linked,
     count(*) filter (where quiz_completed_at is not null)::int as quiz, count(*) filter (where deep_quiz_completed_at is not null)::int as deep, count(*) filter (where diagnostic_completed_at is not null)::int as diagnostic,
-    count(*) filter (where feedback_at is not null)::int as feedback, count(*) filter (where trial_ends_at > now())::int as trial_active, count(*) filter (where trial_ends_at > now() and trial_ends_at <= now() + interval '3 days')::int as expiring,
-    count(*) filter (where trial_ends_at <= now())::int as expired, count(*) filter (where registered_at >= now() - interval '7 days')::int as new7, count(*) filter (where shchyro_synced_at is not null)::int as shchyro,
+    count(*) filter (where feedback_at is not null)::int as feedback, count(*) filter (where ${member})::int as members, count(*) filter (where not ${member})::int as no_access, count(*) filter (where registered_at >= now() - interval '7 days')::int as new7, count(*) filter (where shchyro_synced_at is not null)::int as shchyro,
     count(*) filter (where tags ? 'cta_club_clicked')::int as cta_club, count(*) filter (where tags ? 'cta_schyro_clicked')::int as cta_schyro from onboarding_accounts`)).rows as Record<string, number>[];
   const byScenario = (await d.select({ id: onboardingAccounts.quizResultId, c: sql<number>`count(*)::int` }).from(onboardingAccounts).where(isNotNull(onboardingAccounts.quizResultId)).groupBy(onboardingAccounts.quizResultId)).map((x) => ({ id: x.id!, name: SCENARIOS[x.id!]?.name ?? String(x.id), c: x.c }));
   return { ...(r as Omit<OnboardingStats, "byScenario">), byScenario };
@@ -437,13 +414,13 @@ export async function onboardingList(f: ObFilter) {
   const d = db(); const per = 50; const page = Math.max(1, f.page ?? 1); const conds = [];
   if (f.q) { const q = `%${f.q.trim()}%`; conds.push(or(sql`${onboardingAccounts.name} ilike ${q}`, sql`${onboardingAccounts.contact} ilike ${q}`, sql`exists (select 1 from persons p where p.id = ${onboardingAccounts.personId} and (p.username ilike ${q} or p.telegram_user_id::text = ${f.q.trim()}))`)); }
   if (f.scenario) conds.push(eq(onboardingAccounts.quizResultId, f.scenario));
-  if (f.state === "active") conds.push(gt(onboardingAccounts.trialEndsAt, new Date()));
-  else if (f.state === "expiring") conds.push(and(gt(onboardingAccounts.trialEndsAt, new Date()), lte(onboardingAccounts.trialEndsAt, new Date(Date.now() + 3 * DAY))));
-  else if (f.state === "expired") conds.push(lte(onboardingAccounts.trialEndsAt, new Date()));
+  const member = await clubMemberSql("onboarding_accounts.person_id");
+  if (f.state === "member") conds.push(member);
+  else if (f.state === "no_access") conds.push(sql`not ${member}`);
   else if (f.state === "unlinked") conds.push(isNull(onboardingAccounts.personId));
   else if (f.state === "noquiz") conds.push(isNull(onboardingAccounts.quizCompletedAt));
   const where = conds.length ? and(...conds) : undefined;
-  const rows = await d.select({ a: onboardingAccounts, p: { id: persons.id, firstName: persons.firstName, lastName: persons.lastName, username: persons.username, telegramUserId: persons.telegramUserId } }).from(onboardingAccounts).leftJoin(persons, eq(persons.id, onboardingAccounts.personId)).where(where).orderBy(desc(onboardingAccounts.lastSeenAt), desc(onboardingAccounts.id)).limit(per).offset((page - 1) * per);
+  const rows = await d.select({ a: onboardingAccounts, member: sql<boolean>`${member}`, p: { id: persons.id, firstName: persons.firstName, lastName: persons.lastName, username: persons.username, telegramUserId: persons.telegramUserId } }).from(onboardingAccounts).leftJoin(persons, eq(persons.id, onboardingAccounts.personId)).where(where).orderBy(desc(onboardingAccounts.lastSeenAt), desc(onboardingAccounts.id)).limit(per).offset((page - 1) * per);
   const [t] = await d.select({ c: sql<number>`count(*)::int` }).from(onboardingAccounts).where(where);
   return { rows, total: t.c, page, per };
 }
