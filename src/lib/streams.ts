@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { accessGraceHours, subscriptionAllowsSql } from "./access-rule";
 import { addTag } from "./funnels";
+import { clubAccess } from "./club";
 
 /**
  * Етери клубу: посилання-прокладка фіксує Telegram ID кожного, хто перейшов на трансляцію.
@@ -128,10 +129,7 @@ export async function cabinetStream(now = new Date()): Promise<CabinetStream | n
 }
 /** Чи учасниця клубу зараз (чинна підписка ZenEdu чи Hub) — етери лише для учасниць. */
 export async function isClubMember(personId: number | null) {
-  if (!personId) return false;
-  const grace = await accessGraceHours();
-  const r = await db().execute(sql`select 1 from subscriptions s where s.person_id = ${personId} and ${sql.raw(subscriptionAllowsSql("s", grace))} limit 1`);
-  return r.rows.length > 0;
+  return (await clubAccess(personId)).member; // те саме правило, що й для кабінету платформи
 }
 /** Перехід на етер із кабінету: людина вже увійшла (сесія платформи), записуємо і віддаємо посилання на YouTube. */
 export async function watchFromCabinet(personId: number, telegramUserId: number, code?: string) {
