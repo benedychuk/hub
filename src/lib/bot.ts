@@ -233,7 +233,11 @@ export function getBot() {
 
   bot.on("chat_member", async (ctx) => {
     const u = ctx.chatMember;
-    await onChatMember(u.chat.id, u.new_chat_member.user, u.new_chat_member.status, u.invite_link?.name);
+    // зняття блокування (kicked → left) людина не помічає, і це не вихід: інакше запис «запрошена» затерся б і посилання пішло б удруге
+    if (u.old_chat_member.status === "kicked" && u.new_chat_member.status === "left") return;
+    // хто змінив статус: інший адміністратор чи бот (напр., ZenEdu), не Hub і не сама людина — для «Конфліктів ZenEdu і Hub»
+    const by = u.from?.id; const other = by && by !== u.new_chat_member.user.id && by !== ctx.me.id ? by : null;
+    await onChatMember(u.chat.id, u.new_chat_member.user, u.new_chat_member.status, u.invite_link?.name, other);
   });
   bot.on("chat_join_request", async (ctx) => {
     await onJoinRequest(ctx.chatJoinRequest.chat.id, ctx.chatJoinRequest.from);

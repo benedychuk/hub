@@ -104,8 +104,43 @@ export async function syncEntitlementsFromSubscriptions() {
 
 /** Видає одноразове посилання в канал усім, хто має право, але ще не в каналі. */
 /** Одне запрошення в канал: одноразове посилання (або за заявкою), повідомлення в бот, запис у memberships. true — доставлено, false — бот не запущено, null — помилка Telegram. */
-async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, pid: number): Promise<boolean | null> {
+/**
+ * Перед запрошенням питаємо Telegram, у якому стані людина в чаті:
+ *  - уже в чаті — посилання не потрібне, лише виправляємо запис (дані Hub могли застаріти);
+ *  - заблокована (status kicked) — знімаємо блокування. Бот ZenEdu після кінця підписки блокує людину в каналі,
+ *    а заблокованій Telegram показує будь-яке запрошення як недійсне: так колишні учасниці ZenEdu, що оплатили в Hub,
+ *    отримували «неактивне» посилання. unbanChatMember з only_if_banned не чіпає тих, хто не заблокований.
+ * Telegram недоступний — повертаємо unknown, і далі все йде як раніше.
+ */
+export async function prepareForInvite(cfg: ChannelConfig, resourceKey: string, pid: number): Promise<"in_chat" | "unbanned" | "ok" | "unknown"> {
+  const d = db();
+  const [p] = await d.select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, pid));
+  const tg = Number(p?.tg ?? 0); if (!tg || !cfg.chatId) return "unknown";
+  let st: string;
+  try { st = (await getBot().api.getChatMember(cfg.chatId, tg)).status; } catch { return "unknown"; }
+  if (["member", "administrator", "creator", "restricted"].includes(st)) {
+    const now = new Date();
+    await d.insert(memberships).values({ personId: pid, resourceKey, status: "joined", joinedAt: now, lastCheckedAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: [memberships.personId, memberships.resourceKey], set: { status: "joined", lastCheckedAt: now, updatedAt: now } });
+    return "in_chat";
+  }
+  if (st === "kicked") {
+    try {
+      await getBot().api.unbanChatMember(cfg.chatId, tg, { only_if_banned: true });
+      await d.insert(events).values({ personId: pid, type: "channel.unbanned", source: "hub", payload: { resource: resourceKey, reason: "banned_before_invite" } });
+      return "unbanned";
+    } catch (e) {
+      await d.insert(events).values({ personId: pid, type: "channel.unban_failed", source: "hub", payload: { resource: resourceKey, error: String(e).slice(0, 200) } });
+      return "unknown";
+    }
+  }
+  return "ok";
+}
+
+async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, pid: number): Promise<boolean | null | "in_chat"> {
   const d = db(); const bot = getBot(); const now = new Date();
+  const state = await prepareForInvite(cfg, r.key, pid);
+  if (state === "in_chat") return "in_chat";
   try {
     const ttl = Number(cfg.inviteTtlHours ?? 24);
     const expire = Math.floor(now.getTime() / 1000) + ttl * 3600;
@@ -131,9 +166,11 @@ export async function enforcedChannelKeys(keys: string[]) {
 export async function inviteAfterPayment(personId: number, keys: string[]) {
   let sent = 0;
   for (const { r, cfg } of (await enforcedResources()).filter((x) => keys.includes(x.r.key))) {
-    const [m] = await db().select({ status: memberships.status }).from(memberships).where(and(eq(memberships.personId, personId), eq(memberships.resourceKey, r.key)));
-    if (m?.status === "joined" || !(await hasEntitlement(personId, r.key))) continue;
-    if (await inviteOne(r, cfg, personId)) sent++;
+    if (!(await hasEntitlement(personId, r.key))) continue;
+    // запис «у каналі» в Hub міг застаріти (людину виключив інший бот, напр. ZenEdu): стан перевіряє inviteOne в Telegram
+    const ok = await inviteOne(r, cfg, personId);
+    if (ok === "in_chat") await sendTo(personId, `Ви вже в «${r.name}» — доступ продовжено.`).catch(() => null);
+    else if (ok) sent++;
   }
   return sent;
 }
@@ -143,6 +180,7 @@ export async function inviteNow(personId: number, resourceKey: string) {
   if (!res?.cfg.chatId) return { ok: false as const, reason: "Канал не підключено" };
   if (!(await hasEntitlement(personId, resourceKey))) return { ok: false as const, reason: "У людини немає права на цей канал: спершу видайте доступ" };
   const ok = await inviteOne(res.r, res.cfg, personId);
+  if (ok === "in_chat") return { ok: false as const, reason: "Людина вже в каналі: посилання не потрібне" };
   return ok === true ? { ok: true as const } : ok === false ? { ok: false as const, reason: "Людина не запускала Hub-бот: посилання нікуди доставити" } : { ok: false as const, reason: "Telegram не дав створити посилання: перевірте права бота в каналі" };
 }
 
@@ -155,10 +193,12 @@ export async function processGrants(limit = 30) {
       left join memberships m on m.person_id = e.person_id and m.resource_key = e.resource_key
       where e.resource_key = ${r.key} and e.revoked_at is null and (e.valid_until is null or e.valid_until > now())
         and (m.id is null or m.status in ('none','left','kicked') or (m.status = 'invited' and m.invite_expires_at < now()))
+        -- виключив інший адміністратор (напр., бот ZenEdu) після нашого запрошення: автоматично не повторюємо, щоб не ходити по колу; видно в «Конфліктах ZenEdu і Hub»
+        and not exists (select 1 from events x where x.person_id = e.person_id and x.type = 'channel.removed_by_other' and x.payload->>'resource' = ${r.key} and x.created_at > coalesce(m.invited_at, '-infinity'::timestamptz))
       limit ${limit}`);
     for (const row of due.rows as { person_id: number }[]) {
       const ok = await inviteOne(r, cfg, row.person_id);
-      if (ok === true) invited++; else if (ok === false) skipped++; else failed++;
+      if (ok === true || ok === "in_chat") invited++; else if (ok === false) skipped++; else failed++;
       await new Promise((res) => setTimeout(res, 60));
     }
   }
@@ -240,7 +280,7 @@ export async function reconcile(limit = 200) {
 }
 
 /** Обробка апдейту chat_member: вступ або вихід учасника. */
-export async function onChatMember(chatId: number, user: { id: number; first_name?: string; last_name?: string; username?: string }, newStatus: string, inviteName?: string) {
+export async function onChatMember(chatId: number, user: { id: number; first_name?: string; last_name?: string; username?: string }, newStatus: string, inviteName?: string, removedByOther?: number | null) {
   const d = db();
   const list = await channelResources();
   const hit = list.find((x) => String(x.cfg.chatId) === String(chatId));
@@ -259,6 +299,10 @@ export async function onChatMember(chatId: number, user: { id: number; first_nam
   await d.insert(memberships).values({ personId: p.id, resourceKey: hit.r.key, status, joinedAt: inChat ? new Date() : null, leftAt: inChat ? null : new Date(), note, updatedAt: new Date() })
     .onConflictDoUpdate({ target: [memberships.personId, memberships.resourceKey], set: { status, joinedAt: inChat ? new Date() : sql`${memberships.joinedAt}`, leftAt: inChat ? null : new Date(), note, updatedAt: new Date() } });
   await d.insert(events).values({ personId: p.id, type: inChat ? "channel.joined" : "channel.left", source: "hub", payload: { resource: hit.r.key, via: inviteName ?? null, note } });
+  // виключив чи заблокував хтось інший, не Hub і не сама людина (бот ZenEdu або адміністратор каналу)
+  if (!inChat && removedByOther) {
+    await d.insert(events).values({ personId: p.id, type: "channel.removed_by_other", source: "telegram", payload: { resource: hit.r.key, by: removedByOther, banned: newStatus === "kicked", hadRight: await hasEntitlement(p.id, hit.r.key) } });
+  }
   if (inChat && !(await hasEntitlement(p.id, hit.r.key)) && hit.cfg.joinMode !== "request" && !(await isProtected(hit.cfg, p.id, user.id))) {
     // зайшов без права (переслане посилання, чужий інвайт, право забрано після повернення коштів):
     // з увімкненою автоматикою доступу виключаємо одразу, але лише людей Hub (див. HUB_MANAGED), інакше лише записуємо подію
