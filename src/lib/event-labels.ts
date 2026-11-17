@@ -64,6 +64,9 @@ export function describeEvent(e: EventRow, n: Names): Described {
     case "onboarding.onboarding_registered": return { title: "Зареєструвалась у кабінеті онбордингу", detail: p.via === "bot" || p.via === "magic" ? "через Telegram" : p.contact ? `контакт ${String(p.contact)}` : undefined, group: "funnel", tone: "moon" };
     case "onboarding.telegram_confirmed": return { title: "Підтвердила кабінет через Telegram", group: "funnel", tone: "good" };
     case "onboarding.cabinet_link_sent": return { title: "Отримала посилання в кабінет", detail: p.via === "admin" ? "з картки людини" : "у боті", group: "funnel" };
+    case "onboarding.password_set": return { title: "Створила пароль кабінету", detail: p.via === "telegram" ? "після входу через Telegram" : undefined, group: "funnel", tone: "good" };
+    case "onboarding.password_changed": return { title: "Змінила пароль кабінету", detail: p.via === "telegram" ? "після входу через Telegram (без старого пароля)" : "зі старим паролем", group: "funnel" };
+    case "onboarding.password_reset": return { title: "Пароль кабінету скинуто", detail: p.by ? `скинув: ${String(p.by)}` : undefined, group: "funnel", tone: "warn" };
     case "onboarding.magic_used": return { title: "Увійшла в кабінет за посиланням з бота", group: "funnel" };
     case "onboarding.quiz_started": return { title: "Почала базовий квіз", group: "funnel" };
     case "onboarding.quiz_completed": return { title: `Пройшла квіз: ${String(p.scenario_name ?? p.tag ?? "")}`.replace(/<[^>]+>/g, ""), detail: p.quiz_result_id ? `сценарій ${String(p.quiz_result_id)}` : undefined, group: "funnel", tone: "good" };

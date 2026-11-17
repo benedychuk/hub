@@ -1019,3 +1019,14 @@ export async function createClubCabinetsAction() {
   redirect("/onboarding?ok=" + encodeURIComponent(`Створено кабінетів: ${r.created}.${r.noContact ? ` ${r.noContact} — без @username для входу за контактом: вони входять через Telegram.` : ""} Перший вхід — через Telegram, далі платформа попросить створити пароль.`));
 }
 
+/** Скинути пароль кабінету людини (підтримка): далі вона входить через Telegram і створює новий. */
+export async function resetCabinetPassword(fd: FormData) {
+  const personId = Number(fd.get("personId"));
+  const { accountForPerson, resetAccountPassword } = await import("./onboarding");
+  const a = await accountForPerson(personId);
+  const me = await currentUser().catch(() => null);
+  const ok = a ? await resetAccountPassword(a.id, me?.email ?? "admin") : false;
+  revalidatePath(`/people/${personId}`);
+  redirect(`/people/${personId}?${ok ? "ok" : "err"}=` + encodeURIComponent(ok ? "Пароль кабінету скинуто. Людина входить через Telegram (кнопка на сайті) і одразу створює новий пароль." : "Кабінету немає."));
+}
+
