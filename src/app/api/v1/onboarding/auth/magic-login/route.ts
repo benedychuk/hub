@@ -9,5 +9,5 @@ export async function POST(req: Request) {
   if (!token) return json(req, { success: false, error: "auth_token is required" }, 400);
   const r = await magicLogin(token);
   if (!r.ok) return json(req, { success: false, error: r.error }, 401);
-  return json(req, { success: true, session_token: sessionTokenFor(r.account.id), user: await profilePayload(r.account) });
+  return json(req, { success: true, session_token: sessionTokenFor(r.account.id, { telegram: true }), user: await profilePayload(r.account) });
 }

@@ -83,7 +83,10 @@ export function magicLinkFor(personId: number, page = "cabinet.html") {
   const token = signToken({ t: "magic", p: personId }, MAGIC_TTL_SEC);
   return `${onboardingUrl() || appUrl() + "/app"}/${page}?auth_token=${token}`;
 }
-export const sessionTokenFor = (accountId: number) => signToken({ t: "session", a: accountId }, SESSION_TTL_SEC);
+/** Сесія кабінету. telegram: вхід підтвердив Telegram (бот, Mini App, посилання з бота) — тоді 30 хв можна задати новий пароль без старого. */
+export const sessionTokenFor = (accountId: number, opts: { telegram?: boolean } = {}) =>
+  signToken({ t: "session", a: accountId, ...(opts.telegram ? { tv: Math.floor(Date.now() / 1000) } : {}) }, SESSION_TTL_SEC);
+const RESET_WINDOW_SEC = 30 * 60;
 export function bearer(req: Request) { const h = req.headers.get("authorization") ?? ""; return h.startsWith("Bearer ") ? h.slice(7).trim() : null; }
 
 // ---------- контакти ----------
@@ -99,12 +102,15 @@ export function normalizeContact(c: string) {
 export async function accountById(id: number) { const [a] = await db().select().from(onboardingAccounts).where(eq(onboardingAccounts.id, id)); return a ?? null; }
 export async function accountForPerson(personId: number) { const [a] = await db().select().from(onboardingAccounts).where(eq(onboardingAccounts.personId, personId)); return a ?? null; }
 export async function accountByLinkCode(code: string) { const [a] = await db().select().from(onboardingAccounts).where(eq(onboardingAccounts.linkCode, code)); return a ?? null; }
-export async function accountBySession(req: Request) {
-  const p = verifyToken<{ t: string; a: number }>(bearer(req));
+export async function accountBySession(req: Request) { return (await sessionFrom(req))?.account ?? null; }
+/** Сесія з токена: кабінет і чи підтверджено вхід через Telegram нещодавно (для зміни пароля без старого). */
+export async function sessionFrom(req: Request) {
+  const p = verifyToken<{ t: string; a: number; tv?: number }>(bearer(req));
   if (!p || p.t !== "session" || !p.a) return null;
   const a = await accountById(Number(p.a));
-  if (a) await db().update(onboardingAccounts).set({ lastSeenAt: new Date() }).where(eq(onboardingAccounts.id, a.id)).catch(() => null);
-  return a;
+  if (!a) return null;
+  await db().update(onboardingAccounts).set({ lastSeenAt: new Date() }).where(eq(onboardingAccounts.id, a.id)).catch(() => null);
+  return { account: a, telegramVerifiedRecently: Boolean(p.tv && Date.now() / 1000 - p.tv < RESET_WINDOW_SEC) };
 }
 const newLinkCode = () => randomBytes(9).toString("base64url");
 
@@ -241,11 +247,23 @@ export async function botLoginStatus(code: string) {
   return { status: "confirmed" as const, account: a };
 }
 /** Пароль кабінету: перший раз — без старого (людина вже увійшла через Telegram чи посилання), далі — лише зі старим. */
-export async function setAccountPassword(a: Account, password: string, current?: string) {
+/**
+ * Пароль кабінету: перший — без старого; новий замість наявного — зі старим АБО без нього, якщо вхід щойно (до 30 хв)
+ * підтвердив Telegram (це і є «забула пароль»). Раніше без старого пароля зміна мовчки відхилялась і лишався старий.
+ */
+export async function setAccountPassword(a: Account, password: string, current?: string, telegramVerifiedRecently = false) {
   if (!password || password.length < 6) return { ok: false as const, error: "password_too_short" };
-  if (a.passwordHash && !verifyPassword(current ?? "", a.passwordHash)) return { ok: false as const, error: "bad_password" };
+  if (a.passwordHash && !telegramVerifiedRecently && !verifyPassword(current ?? "", a.passwordHash)) return { ok: false as const, error: current ? "bad_password" : "current_password_required" };
   await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password), updatedAt: new Date() }).where(eq(onboardingAccounts.id, a.id));
+  await logEvent(a, a.passwordHash ? "password_changed" : "password_set", { via: telegramVerifiedRecently ? "telegram" : current ? "current_password" : "first" });
   return { ok: true as const };
+}
+/** Підтримка: скинути пароль кабінету (з картки людини). Далі людина входить через Telegram і створює новий. */
+export async function resetAccountPassword(accountId: number, by: string) {
+  const a = await accountById(accountId); if (!a) return false;
+  await db().update(onboardingAccounts).set({ passwordHash: null, updatedAt: new Date() }).where(eq(onboardingAccounts.id, a.id));
+  await logEvent(a, "password_reset", { by });
+  return true;
 }
 
 /**

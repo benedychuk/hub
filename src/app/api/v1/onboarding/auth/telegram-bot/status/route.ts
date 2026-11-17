@@ -8,5 +8,5 @@ export async function GET(req: Request) {
   const code = new URL(req.url).searchParams.get("code") ?? "";
   const r = await botLoginStatus(code);
   if (r.status !== "confirmed") return json(req, { success: true, status: r.status });
-  return json(req, { success: true, status: "confirmed", session_token: sessionTokenFor(r.account.id), user: await profilePayload(r.account) });
+  return json(req, { success: true, status: "confirmed", session_token: sessionTokenFor(r.account.id, { telegram: true }), user: await profilePayload(r.account) });
 }

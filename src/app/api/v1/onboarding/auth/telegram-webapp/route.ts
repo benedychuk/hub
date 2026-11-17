@@ -10,5 +10,5 @@ export async function POST(req: Request) {
   const v = process.env.TELEGRAM_BOT_TOKEN ? verifyWebAppInitData(String(b?.init_data ?? ""), process.env.TELEGRAM_BOT_TOKEN) : null;
   if (!v) return json(req, { success: false, error: "bad_signature" }, 401);
   const r = await loginByTelegramUser(v.user, "telegram_webapp");
-  return json(req, { success: true, session_token: sessionTokenFor(r.account.id), user: await profilePayload(r.account) });
+  return json(req, { success: true, session_token: sessionTokenFor(r.account.id, { telegram: true }), user: await profilePayload(r.account) });
 }
