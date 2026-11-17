@@ -6,7 +6,7 @@ import { PageHeader, Section, Field, FormRow, Alert, EmptyState } from "@/compon
 import { CopyField } from "@/components/ui/copy-field";
 import { ColumnChart } from "@/components/ui/charts";
 import { navCounts, safe } from "@/lib/queries";
-import { streamList, streamLinks, hubBotUsername, miniAppName, defaultStreamTitle, defaultStreamTag } from "@/lib/streams";
+import { streamList, streamLinks, hubBotUsername, miniAppName, defaultStreamTitle, defaultStreamTag, platformStreamLink } from "@/lib/streams";
 import { createStream } from "@/lib/actions";
 import { appUrl } from "@/lib/bot";
 
@@ -35,8 +35,11 @@ export default async function StreamsPage() {
           <div className="row-actions" style={{ justifyContent: "flex-end" }}><button className="btn pri" type="submit">Створити посилання</button></div>
         </form>
       </Modal>} />
+      {platformStreamLink() && <Section title="Постійне посилання для каналу" description="Одне посилання на всі етери: відкриває сторінку етеру в особистому кабінеті, де учасниця бачить найближчий етер і кнопку «Дивитись». Закріпіть його в каналі один раз — щотижня достатньо створити етер тут і вставити посилання YouTube. Кабінет знає, хто перейшов, і записує це в етер.">
+        <CopyField value={platformStreamLink()!} open ariaLabel="Постійне посилання на етери в кабінеті" />
+      </Section>}
       {!botUser && <Alert tone="warn">Hub-бот ще не підключено: посилання на етер працюють через нього. Підключіть бота в «Система → Боти й меню».</Alert>}
-      {botUser && !app && <Alert tone="info">Зараз посилання веде в Hub-бот: людина натискає «Старт», бот записує її і дає кнопку на етер. Щоб етер відкривався одним дотиком, налаштуйте Mini App: у @BotFather → /newapp → бот @{botUser}, адреса <span className="mono">{appUrl()}/live</span>, коротка назва, напр. <span className="mono">live</span>; потім додайте у Vercel змінну TELEGRAM_MINIAPP_NAME з цією назвою.</Alert>}
+      {botUser && !app && !platformStreamLink() && <Alert tone="info">Зараз посилання веде в Hub-бот: людина натискає «Старт», бот записує її і дає кнопку на етер. Щоб етер відкривався одним дотиком, налаштуйте Mini App: у @BotFather → /newapp → бот @{botUser}, адреса <span className="mono">{appUrl()}/live</span>, коротка назва, напр. <span className="mono">live</span>; потім додайте у Vercel змінну TELEGRAM_MINIAPP_NAME з цією назвою.</Alert>}
       {recent.length > 1 && <Section title="Відвідуваність" description="Скільки людей перейшло на кожен етер; з них учасниць клубу (чинна підписка ZenEdu чи Hub зараз)">
         <ColumnChart ariaLabel="Відвідуваність етерів" format="int" height={200} cats={recent.map((s) => ({ key: String(s.id), label: new Date(s.starts_at).toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit" }) }))}
           values={Object.fromEntries(recent.map((s) => [String(s.id), { members: s.members, other: s.visitors - s.members }]))}

@@ -52,6 +52,8 @@
 | `POST auth/login` `{contact, password}` | вхід за контактом і паролем; кабінет без пароля, прив'язаний до Telegram, повертає `password_not_set` — показати вхід через Telegram |
 | `POST auth/telegram` (дані Telegram Login Widget) | вхід через Telegram: підпис перевіряється ключем Hub-бота, кабінет знаходиться за Telegram ID або створюється; `user.must_set_password` |
 | `POST auth/set-password` (Bearer) `{password, current_password?}` | перший пароль без старого, зміна — зі старим; мінімум 6 символів |
+| `GET streams/current` (Bearer необов'язково) | актуальний етер для банера й `efir.html`: назва, час, стан (upcoming/today/live/recent), чи додано посилання; `member` — чи учасниця клубу. Посилання YouTube не віддається |
+| `POST streams/watch` (Bearer) `{code?}` | записує перехід на етер і повертає посилання YouTube; помилки `not_member`, `no_link_yet`, `no_telegram` (див. `TZ-efir.md`) |
 | `POST auth/magic-login` (Bearer `auth_token` або в тілі) | вхід за посиланням з бота: одноразовий токен, 48 годин |
 | `GET user/profile` (Bearer `session_token`) | профіль: тріал, підписка, квіз, тести, анкета, теги, `telegram_linked` |
 | `POST events/track` `{event_type, tag?, page?, payload?}` | подія матриці → тег у картку, запис в історію; `quiz_completed` додатково оновлює пам'ять «Щиро» |

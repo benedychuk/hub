@@ -35,7 +35,7 @@ export function streamLinks(code: string, botUser: string | null) {
 }
 
 /** Запис переходу: одна людина — один рядок на етер (повтори рахуються), тег етеру при першому переході, подія в історії. */
-export async function recordStreamVisit(code: string, personId: number, telegramUserId: number, via: "bot" | "miniapp") {
+export async function recordStreamVisit(code: string, personId: number, telegramUserId: number, via: "bot" | "miniapp" | "cabinet") {
   const d = db();
   const [s] = await d.select().from(streams).where(eq(streams.code, code));
   if (!s) return null;
@@ -107,4 +107,43 @@ export async function streamDetail(id: number) {
     s, members: m?.c ?? 0,
     visitors: visitors.map((v): StreamVisitor => ({ personId: v.person_id, name: v.name, username: v.username, telegramUserId: Number(v.telegram_user_id), via: v.via, clicks: v.clicks, firstAt: v.first_at, zen: v.zen, hub: v.hub })),
   };
+}
+
+// ---------- етер у кабінеті платформи ----------
+/**
+ * Етер для кабінету: найближчий, що ще не завершився (до 3 год після початку), інакше — останній за 7 днів (запис).
+ * Стан для банера: upcoming — пізніше ніж за добу; today — протягом доби; live — від 15 хв до початку до 3 год після;
+ * recent — уже минув (можна дивитись запис, якщо посилання діє).
+ */
+export type CabinetStream = { code: string; title: string; starts_at: string; state: "upcoming" | "today" | "live" | "recent"; has_link: boolean; watch_from: string };
+const LIVE_BEFORE_MS = 15 * 60_000, LIVE_AFTER_MS = 3 * 3600_000;
+export async function cabinetStream(now = new Date()): Promise<CabinetStream | null> {
+  const d = db();
+  const [next] = await d.select().from(streams).where(sql`${streams.startsAt} > ${new Date(now.getTime() - LIVE_AFTER_MS)}`).orderBy(streams.startsAt).limit(1);
+  const s = next ?? (await d.select().from(streams).where(sql`${streams.startsAt} > ${new Date(now.getTime() - 7 * 86400_000)}`).orderBy(sql`${streams.startsAt} desc`).limit(1))[0];
+  if (!s) return null;
+  const t = s.startsAt.getTime(), n = now.getTime();
+  const state: CabinetStream["state"] = n >= t - LIVE_BEFORE_MS && n <= t + LIVE_AFTER_MS ? "live" : n > t + LIVE_AFTER_MS ? "recent" : t - n <= 86400_000 ? "today" : "upcoming";
+  return { code: s.code, title: s.title, starts_at: s.startsAt.toISOString(), state, has_link: Boolean(s.youtubeUrl), watch_from: new Date(t - LIVE_BEFORE_MS).toISOString() };
+}
+/** Чи учасниця клубу зараз (чинна підписка ZenEdu чи Hub) — етери лише для учасниць. */
+export async function isClubMember(personId: number | null) {
+  if (!personId) return false;
+  const grace = await accessGraceHours();
+  const r = await db().execute(sql`select 1 from subscriptions s where s.person_id = ${personId} and ${sql.raw(subscriptionAllowsSql("s", grace))} limit 1`);
+  return r.rows.length > 0;
+}
+/** Перехід на етер із кабінету: людина вже увійшла (сесія платформи), записуємо і віддаємо посилання на YouTube. */
+export async function watchFromCabinet(personId: number, telegramUserId: number, code?: string) {
+  const cur = code ? { code } : await cabinetStream();
+  if (!cur) return { ok: false as const, error: "no_stream" };
+  const s = await recordStreamVisit(cur.code, personId, telegramUserId, "cabinet");
+  if (!s) return { ok: false as const, error: "no_stream" };
+  if (!s.youtubeUrl) return { ok: false as const, error: "no_link_yet", starts_at: s.startsAt.toISOString() };
+  return { ok: true as const, url: s.youtubeUrl, title: s.title };
+}
+/** Постійне посилання для каналу й закріпленого поста: сторінка етеру в кабінеті, завжди відкриває актуальний етер. */
+export function platformStreamLink() {
+  const base = (process.env.ONBOARDING_URL ?? "").replace(/\/$/, "");
+  return base ? `${base}/efir.html` : null;
 }
