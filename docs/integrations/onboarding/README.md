@@ -36,7 +36,7 @@
 ## Дані
 
 Таблиця `onboarding_accounts` (міграція `0013`): акаунт кабінету з
-`person_id` (порожній до підтвердження Telegram), контактом, паролем (scrypt),
+`person_id` (порожній до підтвердження Telegram), контактом (паролів немає: вхід лише через Telegram; старе поле password_hash не використовується),
 кодом deep link, тріалом (`trial_ends_at`, `extension_count`), результатами
 квізу й тестів, анкетою, тегами. Події пишуться в `events` як
 `onboarding.<event_type>`, теги в `persons.tags` і `onboarding_accounts.tags`.
@@ -47,10 +47,10 @@
 
 | Метод | Що робить |
 |---|---|
-| `POST auth/register` `{name, contact, password?}` | акаунт + `session_token` + `user.telegram_link` для підтвердження через бот; 409, якщо контакт уже є |
-| `POST auth/login` `{contact, password}` | вхід за логіном і паролем. Логін: @username (або без @), Telegram ID, телефон чи email. Якщо під логін підходить кілька кабінетів (вебреєстрація і кабінет після входу через Telegram), пароль перевіряється в кожному. Кабінет без пароля, прив'язаний до Telegram, повертає `password_not_set` — показати вхід через Telegram. У профілі `login` — що показати людині як логін після створення пароля |
-| `POST auth/telegram` (дані Telegram Login Widget) | вхід через Telegram: підпис перевіряється ключем Hub-бота, кабінет знаходиться за Telegram ID або створюється; `user.must_set_password` |
-| `POST auth/set-password` (Bearer) `{password, current_password?}` | перший пароль без старого; новий замість наявного — зі старим або без нього протягом 30 хв після входу через Telegram («забула пароль»); мінімум 6 символів. Помилки: `password_too_short`, `current_password_required`, `bad_password` |
+| `POST auth/register` `{name, contact}` | акаунт + `session_token` + `user.telegram_link` для підтвердження через бот; 409, якщо контакт уже є (тоді — вхід через Telegram). Поле `password` ігнорується |
+| `POST auth/login` | **вимкнено** (2026-11-17): завжди 410 `password_login_disabled`. Вхід лише через Telegram |
+| `POST auth/telegram` (дані Telegram Login Widget) | вхід через Telegram: підпис перевіряється ключем Hub-бота, кабінет знаходиться за Telegram ID або створюється |
+| `POST auth/set-password` (Bearer) | **вимкнено**: нічого не зберігає, відповідає `success: true, ignored: true` (щоб стара форма не блокувала людину). У профілі `login_method: "telegram"`, `must_set_password: false` |
 | `POST auth/telegram-bot/start` `{next?}` | вхід в один дотик через Hub-бота: одноразовий код (5 хв) і `bot_url` = `t.me/<бот>?start=login_<код>` |
 | `GET auth/telegram-bot/status?code=` | `pending` → `confirmed` (`session_token`, `user` — віддаються один раз) або `expired`. Бот підтверджує вхід лише кнопкою «Так, це я входжу», не самим Start |
 | `POST auth/telegram-webapp` `{init_data}` | сайт відкрито всередині Telegram: підпис initData перевіряється ключем Hub-бота → `session_token`, `user` |

@@ -1,7 +1,6 @@
 import { and, desc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { db, schema } from "@/db";
-import { hashPassword, verifyPassword } from "./auth";
 import { appUrl, botToken } from "./bot";
 import { shchyroConfigured, shchyroRequestPublic } from "./shchyro";
 import { accessGraceHours, subscriptionAllowsSql } from "./access-rule";
@@ -83,10 +82,9 @@ export function magicLinkFor(personId: number, page = "cabinet.html") {
   const token = signToken({ t: "magic", p: personId }, MAGIC_TTL_SEC);
   return `${onboardingUrl() || appUrl() + "/app"}/${page}?auth_token=${token}`;
 }
-/** Сесія кабінету. telegram: вхід підтвердив Telegram (бот, Mini App, посилання з бота) — тоді 30 хв можна задати новий пароль без старого. */
+/** Сесія кабінету (30 днів). telegram: вхід підтвердив Telegram — позначка tv лишається для сумісності. */
 export const sessionTokenFor = (accountId: number, opts: { telegram?: boolean } = {}) =>
   signToken({ t: "session", a: accountId, ...(opts.telegram ? { tv: Math.floor(Date.now() / 1000) } : {}) }, SESSION_TTL_SEC);
-const RESET_WINDOW_SEC = 30 * 60;
 export function bearer(req: Request) { const h = req.headers.get("authorization") ?? ""; return h.startsWith("Bearer ") ? h.slice(7).trim() : null; }
 
 // ---------- контакти ----------
@@ -103,60 +101,27 @@ export async function accountById(id: number) { const [a] = await db().select().
 export async function accountForPerson(personId: number) { const [a] = await db().select().from(onboardingAccounts).where(eq(onboardingAccounts.personId, personId)); return a ?? null; }
 export async function accountByLinkCode(code: string) { const [a] = await db().select().from(onboardingAccounts).where(eq(onboardingAccounts.linkCode, code)); return a ?? null; }
 export async function accountBySession(req: Request) { return (await sessionFrom(req))?.account ?? null; }
-/** Сесія з токена: кабінет і чи підтверджено вхід через Telegram нещодавно (для зміни пароля без старого). */
+/** Сесія з токена: кабінет. */
 export async function sessionFrom(req: Request) {
   const p = verifyToken<{ t: string; a: number; tv?: number }>(bearer(req));
   if (!p || p.t !== "session" || !p.a) return null;
   const a = await accountById(Number(p.a));
   if (!a) return null;
   await db().update(onboardingAccounts).set({ lastSeenAt: new Date() }).where(eq(onboardingAccounts.id, a.id)).catch(() => null);
-  return { account: a, telegramVerifiedRecently: Boolean(p.tv && Date.now() / 1000 - p.tv < RESET_WINDOW_SEC) };
+  return { account: a };
 }
 const newLinkCode = () => randomBytes(9).toString("base64url");
 
-/** Реєстрація з форми платформи. Контакт унікальний: повторна реєстрація повертає помилку, якщо є пароль. */
-export async function registerAccount(input: { name: string; contact: string; password?: string; source?: string; utm?: Record<string, string> }) {
+/** Реєстрація з форми платформи (ім'я й контакт; паролів немає — далі людина підтверджує Telegram). Контакт унікальний: повторно — account_exists, вхід через Telegram. */
+export async function registerAccount(input: { name: string; contact: string; source?: string; utm?: Record<string, string> }) {
   const d = db(); const norm = normalizeContact(input.contact);
   if (!input.name.trim() || !norm) return { ok: false as const, error: "Вкажіть ім'я та контакт" };
   const [exists] = await d.select().from(onboardingAccounts).where(eq(onboardingAccounts.contactNorm, norm));
   if (exists) return { ok: false as const, error: "account_exists", account: exists };
   const now = new Date();
-  const [a] = await d.insert(onboardingAccounts).values({ name: input.name.trim().slice(0, 120), contact: input.contact.trim().slice(0, 120), contactNorm: norm, passwordHash: input.password ? hashPassword(input.password) : null, linkCode: newLinkCode(), source: input.source ?? "web", utm: input.utm ?? {}, trialEndsAt: now, tags: ["onboarding_registered"], lastSeenAt: now }).returning();
+  const [a] = await d.insert(onboardingAccounts).values({ name: input.name.trim().slice(0, 120), contact: input.contact.trim().slice(0, 120), contactNorm: norm, linkCode: newLinkCode(), source: input.source ?? "web", utm: input.utm ?? {}, trialEndsAt: now, tags: ["onboarding_registered"], lastSeenAt: now }).returning();
   await logEvent(a, "onboarding_registered", { contact: input.contact, source: input.source ?? "web", via: "web" });
   return { ok: true as const, account: a };
-}
-/**
- * Вхід за логіном і паролем. Логін — те, що людина пам'ятає: @username чи username, Telegram ID, телефон або email.
- * Кабінетів під один логін може бути кілька (вебреєстрація з тим самим @username і кабінет, створений після входу через
- * Telegram), тому пароль перевіряється в кожному кандидаті; спершу — прив'язані до Telegram. Раніше брався лише перший
- * знайдений, і пароль, створений після входу через Telegram, «не підходив».
- */
-export async function loginAccount(contact: string, password: string) {
-  const norm = normalizeContact(contact);
-  if (!norm) return { ok: false as const, error: "not_found" };
-  const raw = String(contact ?? "").trim();
-  const tgId = /^\d{5,15}$/.test(raw) ? raw : null; // Telegram ID — лише цифри (телефон з цифр теж перевіряється окремо)
-  const rows = (await db().execute(sql`
-    select oa.id from onboarding_accounts oa left join persons p on p.id = oa.person_id
-    where oa.contact_norm = ${norm}
-      or lower(p.username) = ${norm}
-      or (${norm.includes("@")} and lower(p.email) = ${norm})
-      or (${/^\d{9}$/.test(norm)} and right(regexp_replace(coalesce(p.phone, ''), '\D', '', 'g'), 9) = ${norm})
-      or (${tgId !== null} and p.telegram_user_id::text = ${tgId ?? ""})
-    order by (oa.person_id is not null) desc, (oa.password_hash is not null) desc, oa.last_seen_at desc nulls last
-    limit 10`)).rows as { id: number }[];
-  if (!rows.length) return { ok: false as const, error: "not_found" };
-  const cands = (await Promise.all(rows.map((r) => accountById(r.id)))).filter(Boolean) as Account[];
-  const withPw = cands.filter((a) => a.passwordHash);
-  for (const a of withPw) if (verifyPassword(password, a.passwordHash)) return { ok: true as const, account: a };
-  if (withPw.length) return { ok: false as const, error: "bad_password" };
-  // кабінет без пароля, прив'язаний до Telegram (створений Hub: оплата, бот, клуб): за контактом його не можна «зайняти»,
-  // бо @username знає будь-хто. Перший вхід — через Telegram (кнопка або посилання з бота), далі людина створює пароль.
-  const web = cands.find((a) => !a.personId && a.source === "web");
-  if (!web) return { ok: false as const, error: "password_not_set" };
-  // власна вебреєстрація без пароля (ще без Telegram): як і раніше, перший вхід задає пароль
-  if (password) await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password) }).where(eq(onboardingAccounts.id, web.id));
-  return { ok: true as const, account: web };
 }
 /** Вхід за magic link з бота: акаунт для людини Hub створюється або знаходиться, Telegram одразу підтверджений. */
 export async function magicLogin(token: string) {
@@ -174,7 +139,7 @@ export async function magicLogin(token: string) {
 /**
  * Вхід через Telegram Login Widget на платформі: Telegram підписує дані людини ключем бота (SHA-256 від токена).
  * Перевіряємо підпис і свіжість, знаходимо людину за Telegram ID (учасниці ZenEdu вже є з імпорту) і її кабінет;
- * якщо кабінету ще немає — створюємо. Пароль людина створює одразу після входу (must_set_password у профілі).
+ * якщо кабінету ще немає — створюємо. Паролів немає: це єдиний спосіб входу (разом із кнопкою в боті й Mini App).
  */
 export function verifyTelegramLogin(data: Record<string, string | number | undefined>, maxAgeSec = 24 * 3600) {
   const hash = String(data.hash ?? ""); if (!hash || !process.env.TELEGRAM_BOT_TOKEN) return null;
@@ -246,29 +211,10 @@ export async function botLoginStatus(code: string) {
   await db().update(schema.settings).set({ value: { ...v, status: "used" }, updatedAt: new Date() }).where(eq(schema.settings.key, loginKey(code)));
   return { status: "confirmed" as const, account: a };
 }
-/** Пароль кабінету: перший раз — без старого (людина вже увійшла через Telegram чи посилання), далі — лише зі старим. */
-/**
- * Пароль кабінету: перший — без старого; новий замість наявного — зі старим АБО без нього, якщо вхід щойно (до 30 хв)
- * підтвердив Telegram (це і є «забула пароль»). Раніше без старого пароля зміна мовчки відхилялась і лишався старий.
- */
-export async function setAccountPassword(a: Account, password: string, current?: string, telegramVerifiedRecently = false) {
-  if (!password || password.length < 6) return { ok: false as const, error: "password_too_short" };
-  if (a.passwordHash && !telegramVerifiedRecently && !verifyPassword(current ?? "", a.passwordHash)) return { ok: false as const, error: current ? "bad_password" : "current_password_required" };
-  await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password), updatedAt: new Date() }).where(eq(onboardingAccounts.id, a.id));
-  await logEvent(a, a.passwordHash ? "password_changed" : "password_set", { via: telegramVerifiedRecently ? "telegram" : current ? "current_password" : "first" });
-  return { ok: true as const };
-}
-/** Підтримка: скинути пароль кабінету (з картки людини). Далі людина входить через Telegram і створює новий. */
-export async function resetAccountPassword(accountId: number, by: string) {
-  const a = await accountById(accountId); if (!a) return false;
-  await db().update(onboardingAccounts).set({ passwordHash: null, updatedAt: new Date() }).where(eq(onboardingAccounts.id, a.id));
-  await logEvent(a, "password_reset", { by });
-  return true;
-}
 
 /**
  * Кабінети всім учасницям клубу, в яких їх ще немає: чинна підписка ZenEdu або чинна бойова підписка Hub на оффер клубу
- * (відкриває канал чи групу). Мовчки: без повідомлень, тегів і подій матриці. Без пароля — перший вхід через Telegram.
+ * (відкриває канал чи групу). Мовчки: без повідомлень, тегів і подій матриці. Вхід — лише через Telegram.
  * Контакт @username; якщо такий контакт уже має інший кабінет — без контакту для входу (щоб вхід за контактом не плутав людей).
  */
 export async function clubMembersWithoutCabinet(limit = 5000) {
@@ -429,10 +375,8 @@ export async function profilePayload(acc: Account) {
     quiz_completed: Boolean(acc.quizCompletedAt), quiz_result_id: acc.quizResultId, quiz_scenario: acc.quizScenario, quiz: acc.quiz ?? {}, deep_quiz: acc.deepQuiz ?? {}, diagnostic_completed: Boolean(acc.diagnosticCompletedAt),
     feedback_completed: Boolean(acc.feedbackAt), feedback: acc.feedback ?? null, feedback_at: acc.feedbackAt?.toISOString() ?? null, tags: acc.tags ?? [],
     shchyro_url: SHCHYRO_BOT_URL,
-    // пароль: кабінети, створені Hub (клуб, оплата, бот), спершу без пароля — платформа просить створити його після першого входу
-    password_set: Boolean(acc.passwordHash), must_set_password: !acc.passwordHash,
-    // логін для входу з паролем: показати людині після створення пароля («Ваш логін: …»)
-    login: acc.contact ?? (p?.username ? "@" + p.username : p?.telegramUserId ? String(p.telegramUserId) : null),
+    // вхід лише через Telegram (рішення 2026-11): паролів немає, форму пароля платформа не показує
+    login_method: "telegram", password_set: false, must_set_password: false,
   };
 }
 
