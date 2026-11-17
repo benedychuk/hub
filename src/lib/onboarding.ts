@@ -1,10 +1,10 @@
 import { and, desc, eq, gt, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { db, schema } from "@/db";
 import { hashPassword, verifyPassword } from "./auth";
 import { appUrl, botToken } from "./bot";
 import { shchyroConfigured, shchyroRequestPublic } from "./shchyro";
-import { accessGraceHours, accessEnd, subscriptionAllows } from "./access-rule";
+import { accessGraceHours, accessEnd, subscriptionAllows, subscriptionAllowsSql } from "./access-rule";
 import { SHCHYRO_BOT_URL } from "./shchyro";
 
 /**
@@ -123,8 +123,15 @@ export async function loginAccount(contact: string, password: string) {
   const norm = normalizeContact(contact);
   const [a] = norm ? await db().select().from(onboardingAccounts).where(eq(onboardingAccounts.contactNorm, norm)) : [];
   if (!a) return { ok: false as const, error: "not_found" };
-  if (a.passwordHash && !verifyPassword(password, a.passwordHash)) return { ok: false as const, error: "bad_password" };
-  if (!a.passwordHash && password) await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password) }).where(eq(onboardingAccounts.id, a.id)); // старий акаунт без пароля: перший вхід задає його
+  if (a.passwordHash) {
+    if (!verifyPassword(password, a.passwordHash)) return { ok: false as const, error: "bad_password" };
+    return { ok: true as const, account: a };
+  }
+  // кабінет без пароля, прив'язаний до Telegram (створений Hub: оплата, бот, клуб): за контактом його не можна «зайняти»,
+  // бо @username знає будь-хто. Перший вхід — через Telegram (віджет або посилання з бота), далі людина створює пароль.
+  if (a.personId || a.source !== "web") return { ok: false as const, error: "password_not_set" };
+  // власна вебреєстрація без пароля (ще без Telegram): як і раніше, перший вхід задає пароль
+  if (password) await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password) }).where(eq(onboardingAccounts.id, a.id));
   return { ok: true as const, account: a };
 }
 /** Вхід за magic link з бота: акаунт для людини Hub створюється або знаходиться, Telegram одразу підтверджений. */
@@ -140,6 +147,69 @@ export async function magicLogin(token: string) {
   await d.insert(events).values({ personId: person.id, type: "onboarding.magic_used", source: "onboarding", payload: { jti: p.jti, account_id: a.id } });
   return { ok: true as const, account: a };
 }
+/**
+ * Вхід через Telegram Login Widget на платформі: Telegram підписує дані людини ключем бота (SHA-256 від токена).
+ * Перевіряємо підпис і свіжість, знаходимо людину за Telegram ID (учасниці ZenEdu вже є з імпорту) і її кабінет;
+ * якщо кабінету ще немає — створюємо. Пароль людина створює одразу після входу (must_set_password у профілі).
+ */
+export function verifyTelegramLogin(data: Record<string, string | number | undefined>, maxAgeSec = 24 * 3600) {
+  const hash = String(data.hash ?? ""); if (!hash || !process.env.TELEGRAM_BOT_TOKEN) return null;
+  const check = Object.keys(data).filter((k) => k !== "hash" && data[k] !== undefined && data[k] !== null && data[k] !== "").sort().map((k) => `${k}=${data[k]}`).join("\n");
+  const key = createHash("sha256").update(botToken()).digest();
+  const calc = createHmac("sha256", key).update(check).digest("hex");
+  if (calc.length !== hash.length || !timingSafeEqual(Buffer.from(calc), Buffer.from(hash))) return null;
+  const authDate = Number(data.auth_date ?? 0);
+  if (!authDate || Date.now() / 1000 - authDate > maxAgeSec) return null;
+  const id = Number(data.id); if (!Number.isSafeInteger(id) || id <= 0) return null;
+  return { id, first_name: data.first_name ? String(data.first_name) : undefined, last_name: data.last_name ? String(data.last_name) : undefined, username: data.username ? String(data.username) : undefined };
+}
+export async function telegramLogin(data: Record<string, string | number | undefined>) {
+  const u = verifyTelegramLogin(data); if (!u) return { ok: false as const, error: "bad_signature" };
+  const d = db();
+  const [p] = await d.insert(persons).values({ telegramUserId: u.id, firstName: u.first_name ?? null, lastName: u.last_name ?? null, username: u.username ?? null, lastActiveAt: new Date() })
+    .onConflictDoUpdate({ target: persons.telegramUserId, set: { lastActiveAt: new Date(), updatedAt: new Date() } }).returning();
+  const a = (await accountForPerson(p.id)) ?? await ensureAccountForPerson(p, "telegram");
+  await logEvent(a, "cabinet_opened", { via: "telegram_login" });
+  return { ok: true as const, account: a };
+}
+/** Пароль кабінету: перший раз — без старого (людина вже увійшла через Telegram чи посилання), далі — лише зі старим. */
+export async function setAccountPassword(a: Account, password: string, current?: string) {
+  if (!password || password.length < 6) return { ok: false as const, error: "password_too_short" };
+  if (a.passwordHash && !verifyPassword(current ?? "", a.passwordHash)) return { ok: false as const, error: "bad_password" };
+  await db().update(onboardingAccounts).set({ passwordHash: hashPassword(password), updatedAt: new Date() }).where(eq(onboardingAccounts.id, a.id));
+  return { ok: true as const };
+}
+
+/**
+ * Кабінети всім учасницям клубу, в яких їх ще немає: чинна підписка ZenEdu або чинна бойова підписка Hub на оффер клубу
+ * (відкриває канал чи групу). Мовчки: без повідомлень, тегів і подій матриці. Без пароля — перший вхід через Telegram.
+ * Контакт @username; якщо такий контакт уже має інший кабінет — без контакту для входу (щоб вхід за контактом не плутав людей).
+ */
+export async function clubMembersWithoutCabinet(limit = 5000) {
+  const grace = await accessGraceHours();
+  return (await db().execute(sql`
+    select p.id, p.first_name, p.last_name, p.username, p.phone from persons p
+    where not exists (select 1 from onboarding_accounts oa where oa.person_id = p.id)
+      and exists (select 1 from subscriptions s where s.person_id = p.id and ${sql.raw(subscriptionAllowsSql("s", grace))}
+        and (s.source = 'zenedu' or (s.source = 'hub'
+          and exists (select 1 from payment_attempts pa where pa.subscription_id = s.id and pa.mode = 'live' and pa.status = 'approved')
+          and exists (select 1 from plans pl, resources r where pl.id = s.plan_id and r.kind in ('telegram_channel','telegram_group') and pl.entitlements ? r.key))))
+    order by p.id limit ${limit}`)).rows as { id: number; first_name: string | null; last_name: string | null; username: string | null; phone: string | null }[];
+}
+export async function createClubCabinets(limit = 5000) {
+  const d = db(); const rows = await clubMembersWithoutCabinet(limit); const now = new Date();
+  let created = 0, noContact = 0;
+  for (const p of rows) {
+    const contact = p.username ? "@" + p.username : p.phone ?? null;
+    let norm = p.username ? p.username.toLowerCase() : p.phone ? normalizeContact(p.phone) : null;
+    if (norm) { const [taken] = await d.select({ id: onboardingAccounts.id }).from(onboardingAccounts).where(eq(onboardingAccounts.contactNorm, norm)).limit(1); if (taken) norm = null; }
+    if (!norm) noContact++;
+    const ins = await d.insert(onboardingAccounts).values({ personId: p.id, name: [p.first_name, p.last_name].filter(Boolean).join(" ") || p.username || null, contact, contactNorm: norm, linkCode: newLinkCode(), source: "club", trialEndsAt: now, tags: [], confirmedAt: now }).onConflictDoNothing().returning({ id: onboardingAccounts.id });
+    created += ins.length;
+  }
+  return { created, noContact };
+}
+
 /** Акаунт для людини Hub (бот, magic link, картка): створює з ім'ям і @username, Telegram підтверджено. */
 export async function ensureAccountForPerson(person: typeof persons.$inferSelect, source: string) {
   const d = db(); const cur = await accountForPerson(person.id); if (cur) return cur;
@@ -278,6 +348,8 @@ export async function profilePayload(acc: Account) {
     quiz_completed: Boolean(acc.quizCompletedAt), quiz_result_id: acc.quizResultId, quiz_scenario: acc.quizScenario, quiz: acc.quiz ?? {}, deep_quiz: acc.deepQuiz ?? {}, diagnostic_completed: Boolean(acc.diagnosticCompletedAt),
     feedback_completed: Boolean(acc.feedbackAt), feedback: acc.feedback ?? null, feedback_at: acc.feedbackAt?.toISOString() ?? null, tags: acc.tags ?? [],
     shchyro_url: SHCHYRO_BOT_URL,
+    // пароль: кабінети, створені Hub (клуб, оплата, бот), спершу без пароля — платформа просить створити його після першого входу
+    password_set: Boolean(acc.passwordHash), must_set_password: !acc.passwordHash,
   };
 }
 

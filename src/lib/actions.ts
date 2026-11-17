@@ -1010,3 +1010,12 @@ export async function deleteStream(fd: FormData) {
   revalidatePath("/streams");
   redirect("/streams");
 }
+
+/** Кабінети платформи всім учасницям клубу (ZenEdu і Hub), у яких їх ще немає. Мовчки, без повідомлень. */
+export async function createClubCabinetsAction() {
+  const { createClubCabinets } = await import("./onboarding");
+  const r = await createClubCabinets();
+  revalidatePath("/onboarding");
+  redirect("/onboarding?ok=" + encodeURIComponent(`Створено кабінетів: ${r.created}.${r.noContact ? ` ${r.noContact} — без @username для входу за контактом: вони входять через Telegram.` : ""} Перший вхід — через Telegram, далі платформа попросить створити пароль.`));
+}
+
