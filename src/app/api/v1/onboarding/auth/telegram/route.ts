@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 export const OPTIONS = (req: Request) => preflight(req);
 /**
  * POST — дані з Telegram Login Widget ({ id, first_name, last_name?, username?, photo_url?, auth_date, hash }) → session_token, user.
- * Підпис перевіряється ключем Hub-бота; кабінет знаходиться за Telegram ID або створюється. user.must_set_password — показати форму пароля.
+ * Підпис перевіряється ключем Hub-бота; кабінет знаходиться за Telegram ID або створюється. Паролів немає: це основний спосіб входу.
  */
 export async function POST(req: Request) {
   const nr = notReady(req); if (nr) return nr;

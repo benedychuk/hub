@@ -1,13 +1,11 @@
-import { json, preflight, notReady, body } from "../../_lib";
-import { loginAccount, sessionTokenFor, profilePayload } from "@/lib/onboarding";
+import { json, preflight, notReady } from "../../_lib";
 export const dynamic = "force-dynamic";
 export const OPTIONS = (req: Request) => preflight(req);
-/** POST { contact, password } → session_token, user. */
+/**
+ * Вхід за паролем вимкнено: кабінет відкривається лише через Telegram (кнопка «Увійти через Telegram» з ботом,
+ * Mini App, посилання з бота). Стара версія платформи отримує зрозумілу помилку з підказкою.
+ */
 export async function POST(req: Request) {
   const nr = notReady(req); if (nr) return nr;
-  const b = await body<{ contact?: string; password?: string }>(req);
-  if (!b?.contact) return json(req, { success: false, error: "contact is required" }, 400);
-  const r = await loginAccount(b.contact, b.password ?? "");
-  if (!r.ok) return json(req, { success: false, error: r.error }, r.error === "not_found" ? 404 : 401);
-  return json(req, { success: true, session_token: sessionTokenFor(r.account.id), user: await profilePayload(r.account) });
+  return json(req, { success: false, error: "password_login_disabled", message: "Вхід за паролем більше не потрібен. Увійдіть через Telegram." }, 410);
 }
