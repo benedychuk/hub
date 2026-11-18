@@ -568,6 +568,7 @@ export const streams = pgTable("streams", {
   code: text("code").notNull(),                       // у посиланні: t.me/<bot>?start=ev_<code> або ?startapp=ev_<code>
   title: text("title").notNull(),
   youtubeUrl: text("youtube_url"),                    // можна додати пізніше: посилання-прокладка не змінюється
+  recordingUrl: text("recording_url"),                // запис після етеру (якщо інше посилання); порожнє — запис за youtube_url
   startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
   tag: text("tag"),                                   // тег, який отримують ті, хто перейшов (напр. етер_10.11.2026)
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
