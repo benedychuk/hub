@@ -48,34 +48,6 @@ export async function buildDashboard(offerKey?: string) {
   const accessEnd = sql`(case when s.source = 'zenedu' then s.current_period_end + (case when s.status = 'cancelled' then interval '0 days' else interval '3 days' end)
       else s.current_period_end + (${Math.max(0, Math.round(grace))} * interval '1 hour') end)`;
 
-  // ---------- учасниці ----------
-  const subs = (await d.execute(sql`
-    select s.id, s.person_id, s.source, s.kind, s.status, s.price::text as price, s.currency, s.period_days, s.current_period_end, s.next_charge_at, s.cancel_at_period_end, s.plan_id, s.offer_id,
-      pl.name as plan_name, zo.name as offer_name
-    from subscriptions s left join plans pl on pl.id = s.plan_id left join offers zo on zo.id = s.offer_id
-    where ${clubSub} and ${notTestSub} and ${live}`)).rows as SubRow[];
-  const bySource = new Map<number, Set<string>>();
-  for (const s of subs) { const set = bySource.get(s.person_id) ?? new Set<string>(); set.add(s.source); bySource.set(s.person_id, set); }
-  const members = bySource.size;
-  const both = [...bySource.values()].filter((x) => x.size > 1).length;
-  const zenOnly = [...bySource.values()].filter((x) => x.size === 1 && x.has("zenedu")).length;
-  const hubOnly = members - both - zenOnly;
-  const autoRenews = (s: SubRow) => s.source === "zenedu" ? ["active", "trialing"].includes(s.status) : s.kind === "subscription" && ["active", "trialing", "past_due"].includes(s.status) && !s.cancel_at_period_end;
-  const renewingPersons = new Set(subs.filter(autoRenews).map((s) => s.person_id));
-  const noRenew = [...bySource.keys()].filter((p) => !renewingPersons.has(p)).length;
-  const trialing = new Set(subs.filter((s) => s.status === "trialing").map((s) => s.person_id)).size;
-  const pastDue = new Set(subs.filter((s) => s.status === "past_due").map((s) => s.person_id)).size;
-
-  // пішли за 30 днів: доступ закінчився за останні 30 днів, і чинної підписки клубу зараз немає
-  const [left] = (await d.execute(sql`
-    select count(distinct s.person_id)::int as c from subscriptions s
-    where ${clubSub} and ${notTestSub} and not ${live} and ${accessEnd} between now() - interval '30 days' and now()
-      and not exists (select 1 from subscriptions s2 where s2.person_id = s.person_id and s2.id <> s.id and ${liveFor("s2", grace)} and ${clubFor("s2", sc, clubPlanIds)})`)).rows as { c: number }[];
-
-  // ---------- платежі: нові й продовження ----------
-  // разова оплата клубу в Hub — нова, якщо раніше людина клуб не оплачувала, інакше продовження
-  // дата платежу — момент оплати (paid_at), а не створення замовлення: замовлення ZenEdu може бути створене раніше, ніж оплачене
-  // пробний: старт ZenEdu-оффера «2 тижні»/«пробн…» або перша оплата Hub дешевша за половину ціни оффера
   const classified = sql`
     select o.id, o.source, o.price * ${rateSql("o")} as price, o.price as raw_price, o.currency, coalesce(o.paid_at, o.created_at) as created_at, o.person_id,
       case when o.type in ('subscription_start','subscription_renew') then o.type
@@ -86,20 +58,6 @@ export async function buildDashboard(offerKey?: string) {
       (case when o.source = 'zenedu' then ${sql.raw(zenPeriodSql("o.offer_name", "o.type"))} in (14, 31)
             else exists (select 1 from plans pl where pl.id = o.plan_id and pl.payment_type = 'subscription' and pl.period = 'month' and pl.interval_count = 1) end) as monthly
     from orders o where o.status = 'paid' and ${clubOrder("o")} and ${notTestOrder("o")}`;
-  const period = (await d.execute(sql`
-    with c as (${classified})
-    select
-      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '30 days')::int as starts,
-      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '30 days' and source = 'zenedu')::int as starts_zen,
-      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '30 days' and source = 'hub')::int as starts_hub,
-      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '60 days' and created_at < now() - interval '30 days')::int as starts_prev,
-      count(*) filter (where kind = 'subscription_renew' and created_at >= now() - interval '30 days')::int as renews,
-      coalesce(sum(price) filter (where created_at >= now() - interval '30 days'), 0)::text as club_uah
-    from c`)).rows[0] as { starts: number; starts_zen: number; starts_hub: number; starts_prev: number; renews: number; club_uah: string };
-  // ---------- динаміка по місяцях (за оплатами) ----------
-  // кожна оплата клубу покриває період (місяць / 3 міс. / рік / пробні 2 тижні); +3 дні на продовження.
-  // нова — перша оплата людини; повернулась — оплата після перерви (попередній доступ скінчився понад 3 дні тому);
-  // продовження — оплата без перерви. Пішла — доступ скінчився (+3 дні) і наступної оплати не було.
   const cover = sql`
     with c as (${classified}),
     cv as (select c.*, (case
@@ -114,7 +72,29 @@ export async function buildDashboard(offerKey?: string) {
     fl as (select sq.*, case when prev_end is null then 'new' when prev_end + interval '3 days' < created_at then 'returned' else 'renew' end as flow,
         case when next_at is null or next_at > run_end + interval '3 days' then run_end + interval '3 days' end as lapse_at
       from sq)`;
-  const flowRows = (await d.execute(sql`${cover},
+  const scopeO = sc ? scopeSql(sc, "o") : sql`true`;
+  // усі запити дашборда незалежні: запускаємо одночасно, а не по черзі (кожен — окремий запит до Neon)
+  const run = <T,>(q: PromiseLike<T>) => { const pr = Promise.resolve(q); pr.catch(() => null); return pr; };
+  const q1 = run(d.execute(sql`
+    select s.id, s.person_id, s.source, s.kind, s.status, s.price::text as price, s.currency, s.period_days, s.current_period_end, s.next_charge_at, s.cancel_at_period_end, s.plan_id, s.offer_id,
+      pl.name as plan_name, zo.name as offer_name
+    from subscriptions s left join plans pl on pl.id = s.plan_id left join offers zo on zo.id = s.offer_id
+    where ${clubSub} and ${notTestSub} and ${live}`));
+  const q2 = run(d.execute(sql`
+    select count(distinct s.person_id)::int as c from subscriptions s
+    where ${clubSub} and ${notTestSub} and not ${live} and ${accessEnd} between now() - interval '30 days' and now()
+      and not exists (select 1 from subscriptions s2 where s2.person_id = s.person_id and s2.id <> s.id and ${liveFor("s2", grace)} and ${clubFor("s2", sc, clubPlanIds)})`));
+  const q3 = run(d.execute(sql`
+    with c as (${classified})
+    select
+      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '30 days')::int as starts,
+      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '30 days' and source = 'zenedu')::int as starts_zen,
+      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '30 days' and source = 'hub')::int as starts_hub,
+      count(*) filter (where kind = 'subscription_start' and created_at >= now() - interval '60 days' and created_at < now() - interval '30 days')::int as starts_prev,
+      count(*) filter (where kind = 'subscription_renew' and created_at >= now() - interval '30 days')::int as renews,
+      coalesce(sum(price) filter (where created_at >= now() - interval '30 days'), 0)::text as club_uah
+    from c`));
+  const q4 = run(d.execute(sql`${cover},
     mo as (select g as m0, g + interval '1 month' as m1 from generate_series(date_trunc('month', now() at time zone 'Europe/Kyiv') - interval '11 months', date_trunc('month', now() at time zone 'Europe/Kyiv'), interval '1 month') g),
     mz as (select to_char(m0, 'YYYY-MM') as m, m0 at time zone 'Europe/Kyiv' as a, least(m1 at time zone 'Europe/Kyiv', now()) as b from mo)
     select mz.m,
@@ -128,25 +108,19 @@ export async function buildDashboard(offerKey?: string) {
       (select coalesce(sum(raw_price), 0) from fl where currency = 'USD' and created_at >= mz.a and created_at < mz.b)::text as usd,
       (select count(distinct person_id) from fl where lapse_at >= mz.a and lapse_at < mz.b and lapse_at <= now())::int as churned,
       (select count(distinct person_id) from fl where created_at <= mz.b and cover_end + interval '3 days' > mz.b)::int as members
-    from mz order by mz.m`)).rows as { m: string; new: number; new_trial: number; returned: number; renew: number; uah_new: string; uah_returned: string; uah_renew: string; usd: string; churned: number; members: number }[];
-  // ймовірності для прогнозу: частка тих, хто продовжив, серед доступів, що закінчились за останні 150 днів
-  const [rates] = (await d.execute(sql`${cover}
+    from mz order by mz.m`));
+  const q5 = run(d.execute(sql`${cover}
     select
       count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days')::int as due,
       count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days' and next_at is not null and next_at <= run_end + interval '10 days')::int as renewed,
       count(*) filter (where is_trial and cover_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days')::int as trial_due,
       count(*) filter (where is_trial and cover_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days' and next_at is not null and next_at <= cover_end + interval '10 days')::int as trial_paid
-    from fl`)).rows as { due: number; renewed: number; trial_due: number; trial_paid: number }[];
-  const pRenew = rates?.due ? rates.renewed / rates.due : 0.8;
-  const pTrial = rates?.trial_due ? rates.trial_paid / rates.trial_due : 0.5;
-  // ARPU за 90 днів: дохід клубу (у гривнях, долари за курсом) за 90 днів / люди, які мали доступ до клубу хоча б день за ці 90 днів
-  const [a90] = (await d.execute(sql`${cover}
+    from fl`));
+  const q6 = run(d.execute(sql`${cover}
     select coalesce(sum(price) filter (where created_at >= now() - interval '90 days'), 0)::text as uah,
       count(distinct person_id) filter (where created_at <= now() and cover_end + interval '3 days' > now() - interval '90 days')::int as people
-    from fl`)).rows as { uah: string; people: number }[];
-
-  // останні 14 днів по днях (київський час): нові й продовження
-  const daily = (await d.execute(sql`
+    from fl`));
+  const q7 = run(d.execute(sql`
     with c as (${classified})
     select to_char(created_at at time zone 'Europe/Kyiv', 'YYYY-MM-DD') as day,
       count(*) filter (where kind = 'subscription_start')::int as starts,
@@ -156,13 +130,8 @@ export async function buildDashboard(offerKey?: string) {
       count(*) filter (where kind = 'subscription_renew')::int as renews,
       coalesce(sum(price), 0)::text as uah
     from c where created_at >= (date_trunc('day', now() at time zone 'Europe/Kyiv') - interval '13 days') at time zone 'Europe/Kyiv'
-    group by 1`)).rows as { day: string; starts: number; starts_zen: number; starts_hub: number; trials: number; renews: number; uah: string }[];
-  const last14 = Array.from({ length: 14 }, (_, i) => kyivDay(Date.now() - i * DAY)).map((day) => daily.find((x) => x.day === day) ?? { day, starts: 0, starts_zen: 0, starts_hub: 0, trials: 0, renews: 0, uah: "0" });
-
-  // конверсії (когорти, щоб у кожної людини був час продовжити):
-  // пробний → 1-й повний місяць: пробні, розпочаті 17–90 днів тому; продовжила, якщо була наступна оплата клубу
-  // 1-й → 2-й місяць: перша повна місячна оплата (старт без пробного або перша оплата після пробного) 34–120 днів тому
-  const [conv] = (await d.execute(sql`
+    group by 1`));
+  const q8 = run(d.execute(sql`
     with c as (${classified}),
     seq as (select c.*, lead(created_at) over w as next_at, lag(is_trial) over w as prev_trial, lag(created_at) over w as prev_at from c window w as (partition by person_id order by created_at))
     select
@@ -170,22 +139,68 @@ export async function buildDashboard(offerKey?: string) {
       count(*) filter (where is_trial and created_at between now() - interval '90 days' and now() - interval '17 days' and next_at is not null and next_at <= created_at + interval '45 days')::int as trials_paid,
       count(*) filter (where first_full and created_at between now() - interval '120 days' and now() - interval '34 days')::int as firsts,
       count(*) filter (where first_full and created_at between now() - interval '120 days' and now() - interval '34 days' and next_at is not null and next_at <= created_at + interval '45 days')::int as firsts_paid
-    from (select seq.*, (not is_trial and monthly and (kind = 'subscription_start' or (prev_trial is true and prev_at > created_at - interval '45 days'))) as first_full from seq) x`)).rows as { trials: number; trials_paid: number; firsts: number; firsts_paid: number }[];
+    from (select seq.*, (not is_trial and monthly and (kind = 'subscription_start' or (prev_trial is true and prev_at > created_at - interval '45 days'))) as first_full from seq) x`));
+  const q9 = run(d.execute(sql`select o.currency as cur, o.source, coalesce(sum(o.price),0)::text as sum, coalesce(sum(o.price * ${rateSql("o")}),0)::text as uah, count(*)::int as c from orders o
+    where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= now() - interval '30 days' and ${scopeO} and ${notTestOrder("o")} group by 1, 2`));
+  const q10 = run(d.execute(sql`select count(*)::int as total,
+      count(*) filter (where started_at >= now() - interval '30 days')::int as d30,
+      count(*) filter (where started_at >= now() - interval '60 days' and started_at < now() - interval '30 days')::int as prev
+    from identities where bot_key = 'hub'`));
+  const q11 = run(d.execute(sql`select
+      (select max(finished_at) from sync_runs where kind like 'zenedu%' and status = 'done') as ok_at,
+      (select row_to_json(x) from (select kind, status, error, started_at, stats from sync_runs where kind like 'zenedu%' order by started_at desc limit 1) x) as last`));
+  // ---------- учасниці ----------
+  const subs = (await q1).rows as SubRow[];
+  const bySource = new Map<number, Set<string>>();
+  for (const s of subs) { const set = bySource.get(s.person_id) ?? new Set<string>(); set.add(s.source); bySource.set(s.person_id, set); }
+  const members = bySource.size;
+  const both = [...bySource.values()].filter((x) => x.size > 1).length;
+  const zenOnly = [...bySource.values()].filter((x) => x.size === 1 && x.has("zenedu")).length;
+  const hubOnly = members - both - zenOnly;
+  const autoRenews = (s: SubRow) => s.source === "zenedu" ? ["active", "trialing"].includes(s.status) : s.kind === "subscription" && ["active", "trialing", "past_due"].includes(s.status) && !s.cancel_at_period_end;
+  const renewingPersons = new Set(subs.filter(autoRenews).map((s) => s.person_id));
+  const noRenew = [...bySource.keys()].filter((p) => !renewingPersons.has(p)).length;
+  const trialing = new Set(subs.filter((s) => s.status === "trialing").map((s) => s.person_id)).size;
+  const pastDue = new Set(subs.filter((s) => s.status === "past_due").map((s) => s.person_id)).size;
+
+  // пішли за 30 днів: доступ закінчився за останні 30 днів, і чинної підписки клубу зараз немає
+  const [left] = (await q2).rows as { c: number }[];
+
+  // ---------- платежі: нові й продовження ----------
+  // разова оплата клубу в Hub — нова, якщо раніше людина клуб не оплачувала, інакше продовження
+  // дата платежу — момент оплати (paid_at), а не створення замовлення: замовлення ZenEdu може бути створене раніше, ніж оплачене
+  // пробний: старт ZenEdu-оффера «2 тижні»/«пробн…» або перша оплата Hub дешевша за половину ціни оффера
+  const period = (await q3).rows[0] as { starts: number; starts_zen: number; starts_hub: number; starts_prev: number; renews: number; club_uah: string };
+  // ---------- динаміка по місяцях (за оплатами) ----------
+  // кожна оплата клубу покриває період (місяць / 3 міс. / рік / пробні 2 тижні); +3 дні на продовження.
+  // нова — перша оплата людини; повернулась — оплата після перерви (попередній доступ скінчився понад 3 дні тому);
+  // продовження — оплата без перерви. Пішла — доступ скінчився (+3 дні) і наступної оплати не було.
+  const flowRows = (await q4).rows as { m: string; new: number; new_trial: number; returned: number; renew: number; uah_new: string; uah_returned: string; uah_renew: string; usd: string; churned: number; members: number }[];
+  // ймовірності для прогнозу: частка тих, хто продовжив, серед доступів, що закінчились за останні 150 днів
+  const [rates] = (await q5).rows as { due: number; renewed: number; trial_due: number; trial_paid: number }[];
+  const pRenew = rates?.due ? rates.renewed / rates.due : 0.8;
+  const pTrial = rates?.trial_due ? rates.trial_paid / rates.trial_due : 0.5;
+  // ARPU за 90 днів: дохід клубу (у гривнях, долари за курсом) за 90 днів / люди, які мали доступ до клубу хоча б день за ці 90 днів
+  const [a90] = (await q6).rows as { uah: string; people: number }[];
+
+  // останні 14 днів по днях (київський час): нові й продовження
+  const daily = (await q7).rows as { day: string; starts: number; starts_zen: number; starts_hub: number; trials: number; renews: number; uah: string }[];
+  const last14 = Array.from({ length: 14 }, (_, i) => kyivDay(Date.now() - i * DAY)).map((day) => daily.find((x) => x.day === day) ?? { day, starts: 0, starts_zen: 0, starts_hub: 0, trials: 0, renews: 0, uah: "0" });
+
+  // конверсії (когорти, щоб у кожної людини був час продовжити):
+  // пробний → 1-й повний місяць: пробні, розпочаті 17–90 днів тому; продовжила, якщо була наступна оплата клубу
+  // 1-й → 2-й місяць: перша повна місячна оплата (старт без пробного або перша оплата після пробного) 34–120 днів тому
+  const [conv] = (await q8).rows as { trials: number; trials_paid: number; firsts: number; firsts_paid: number }[];
 
   // зібрано за 30 днів: усі оплачені замовлення (клуб і продукти), без тестових
-  const scopeO = sc ? scopeSql(sc, "o") : sql`true`;
-  const rev = (await d.execute(sql`select o.currency as cur, o.source, coalesce(sum(o.price),0)::text as sum, coalesce(sum(o.price * ${rateSql("o")}),0)::text as uah, count(*)::int as c from orders o
-    where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= now() - interval '30 days' and ${scopeO} and ${notTestOrder("o")} group by 1, 2`)).rows as { cur: string; source: string; sum: string; uah: string; c: number }[];
+  const rev = (await q9).rows as { cur: string; source: string; sum: string; uah: string; c: number }[];
   const revOf = (cur: string, source?: string) => rev.filter((r) => r.cur === cur && (!source || r.source === source)).reduce((a, r) => a + Number(r.sum), 0);
   /** У гривнях (долари за курсом), за джерелом або всього. */
   const revUahOf = (source?: string) => rev.filter((r) => !source || r.source === source).reduce((a, r) => a + Number(r.uah), 0);
   const revCount = rev.reduce((a, r) => a + r.c, 0);
 
   // ---------- Hub-бот ----------
-  const [bot] = (await d.execute(sql`select count(*)::int as total,
-      count(*) filter (where started_at >= now() - interval '30 days')::int as d30,
-      count(*) filter (where started_at >= now() - interval '60 days' and started_at < now() - interval '30 days')::int as prev
-    from identities where bot_key = 'hub'`)).rows as { total: number; d30: number; prev: number }[];
+  const [bot] = (await q10).rows as { total: number; d30: number; prev: number }[];
 
   // ---------- прогноз списань ----------
   // ціна продовження після пробного періоду ZenEdu: найчастіша ціна місячних підписок ZenEdu
@@ -239,9 +254,7 @@ export async function buildDashboard(offerKey?: string) {
   const mrrUsd = tariffRows.filter((t) => t.currency === "USD").reduce((a, t) => a + t.mrr, 0);
 
   // ---------- свіжість даних ZenEdu ----------
-  const [sync] = (await d.execute(sql`select
-      (select max(finished_at) from sync_runs where kind like 'zenedu%' and status = 'done') as ok_at,
-      (select row_to_json(x) from (select kind, status, error, started_at, stats from sync_runs where kind like 'zenedu%' order by started_at desc limit 1) x) as last`)).rows as { ok_at: string | null; last: { kind: string; status: string; error: string | null; started_at: string; stats: Record<string, number> } | null }[];
+  const [sync] = (await q11).rows as { ok_at: string | null; last: { kind: string; status: string; error: string | null; started_at: string; stats: Record<string, number> } | null }[];
 
   return {
     members, zenOnly, hubOnly, both, trialing, pastDue, noRenew, left: left?.c ?? 0,

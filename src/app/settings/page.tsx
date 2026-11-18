@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
-import { Section, Row, EmptyState, KV } from "@/components/ui/layout";
+import { Section, Row, EmptyState, KV, Alert } from "@/components/ui/layout";
 import { navCounts, syncRunList, settingsMap } from "@/lib/queries";
 import { dateTime } from "@/lib/format";
 import { hasDb } from "@/db";
@@ -10,6 +10,7 @@ import UsersTab from "./users-tab";
 import AccountTab from "./account-tab";
 import PaymentsTab from "./payments-tab";
 import { currentUser } from "@/lib/auth";
+import { perfInfo } from "@/lib/perf";
 
 export const dynamic = "force-dynamic";
 const TABS = [["general", "Загальні"], ["payments", "Оплати"], ["users", "Користувачі та доступ"], ["account", "Мій акаунт"]] as const;
@@ -41,9 +42,20 @@ export default async function Settings({ searchParams }: { searchParams: Promise
     ["ONBOARDING_URL", Boolean(process.env.ONBOARDING_URL), "адреса платформи онбордингу для посилань у кабінет, напр. https://mariia-kravchuk.com.ua/app"],
     ["ONBOARDING_TOKEN_SECRET", Boolean(process.env.ONBOARDING_TOKEN_SECRET), "секрет підпису токенів кабінету; якщо порожній, береться SESSION_SECRET"],
   ] as const;
+  const perf = hasDb() ? await perfInfo().catch(() => null) : null;
   return (
     <Shell title="Налаштування" counts={counts}>
       <div className="tabs">{TABS.map(([k, l]) => <Link key={k} href={`/settings?tab=${k}`} className={tab === k ? "on" : ""}>{l}</Link>)}</div>
+      {perf?.mismatch && <Alert tone="warn">Функції Hub працюють у регіоні {perf.fnRegion}, а база Neon — у {perf.dbRegion}. Кожен запит до бази йде між регіонами, тому сторінки відкриваються повільніше. Виправлення: Vercel → Settings → Functions → Function Region → {perf.suggest ?? "регіон бази"}, потім новий деплой. Дані й логіка не змінюються.</Alert>}
+      {perf && <Section title="Швидкодія" description="Де працює Hub і як швидко відповідає база. Якщо регіони різні, кожна сторінка чекає на базу довше.">
+        <KV items={[
+          { k: "Регіон функцій (Vercel)", v: perf.fnRegion ?? "невідомо (не Vercel)", mono: true },
+          { k: "Регіон бази (Neon)", v: perf.dbRegion ?? "невідомо", mono: true },
+          { k: "Запит до бази", v: `${perf.pingMs} мс`, mono: true },
+          { k: "Компіляція запитів (JIT)", v: perf.jitOn ? "увімкнена: важкі сторінки чекають на неї секундами" : "вимкнена", mono: true },
+        ]} />
+        <div style={{ marginTop: 8 }}>{perf.mismatch ? <Pill tone="warn">різні регіони</Pill> : perf.jitOn ? <Pill tone="warn">JIT увімкнено</Pill> : perf.pingMs > 40 ? <Pill tone="warn">база відповідає повільно</Pill> : <Pill tone="good">в нормі</Pill>}</div>
+      </Section>}
       <div className="grid g2">
         <Section title="Змінні оточення" description="Vercel → Settings → Environment Variables. Після зміни потрібен новий деплой.">
           {env.map(([k, ok, d]) => <Row key={k} tone={ok ? "on" : "off"} title={<span className="mono">{k}</span>} sub={d} right={<Pill tone={ok ? "good" : "mute"}>{ok ? "задано" : "немає"}</Pill>} />)}

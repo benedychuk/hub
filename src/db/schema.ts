@@ -193,7 +193,7 @@ export const entitlements = pgTable("entitlements", {
   validUntil: timestamp("valid_until", { withTimezone: true }),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index("ent_person_idx").on(t.personId), index("ent_res_idx").on(t.resourceKey)]);
+}, (t) => [index("ent_person_idx").on(t.personId), index("ent_res_idx").on(t.resourceKey), index("ent_person_res_idx").on(t.personId, t.resourceKey)]);
 
 // Події (оплата, повідомлення, вебхуки, дії адміна).
 export const memberships = pgTable("memberships", {
@@ -219,7 +219,7 @@ export const events = pgTable("events", {
   source: text("source").notNull().default("hub"),
   payload: jsonb("payload").$type<Record<string, unknown>>().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index("events_person_idx").on(t.personId), index("events_type_idx").on(t.type), index("events_created_idx").on(t.createdAt)]);
+}, (t) => [index("events_person_idx").on(t.personId), index("events_type_idx").on(t.type), index("events_created_idx").on(t.createdAt), index("events_type_created_idx").on(t.type, t.createdAt), index("events_person_type_idx").on(t.personId, t.type)]);
 
 // Папки воронок.
 export const funnelFolders = pgTable("funnel_folders", {
@@ -511,7 +511,7 @@ export const paymentAttempts = pgTable("payment_attempts", {
   raw: jsonb("raw"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
-}, (t) => [uniqueIndex("pa_ref_uidx").on(t.orderReference), index("pa_person_idx").on(t.personId), index("pa_status_idx").on(t.status, t.createdAt)]);
+}, (t) => [uniqueIndex("pa_ref_uidx").on(t.orderReference), index("pa_person_idx").on(t.personId), index("pa_status_idx").on(t.status, t.createdAt), index("pa_sub_idx").on(t.subscriptionId), index("pa_order_idx").on(t.orderId)]);
 
 // Посилання доступу до оффера без оплати (ZenEdu Access links): N людей, до дати, можна рахувати як оплату.
 export const accessLinks = pgTable("access_links", {

@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { and, eq, gt, isNull, sql, isNotNull } from "drizzle-orm";
 import { db, hasDb, schema } from "@/db";
 
@@ -81,7 +82,9 @@ export async function destroySession() {
   c.delete(COOKIE);
 }
 /** Поточний користувач за cookie сесії; null, якщо сесії немає, її відкликано або акаунт вимкнено. */
-export async function currentUser(): Promise<(User & { sessionId: number }) | null> {
+/** Поточний користувач панелі. Обгорнуто в cache(): кілька викликів за один запит сторінки — один запит до бази. */
+export const currentUser = cache(currentUserUncached);
+async function currentUserUncached(): Promise<(User & { sessionId: number }) | null> {
   if (!hasDb()) return null;
   const token = (await cookies()).get(COOKIE)?.value; if (!token) return null;
   const [row] = await db().select({ u: users, s: userSessions }).from(userSessions).innerJoin(users, eq(users.id, userSessions.userId))
