@@ -1003,8 +1003,9 @@ export async function saveStream(fd: FormData) {
   const id = Number(fd.get("id"));
   const at = kyivLocal(str(fd, "startsAt"));
   const raw = str(fd, "youtubeUrl"); const yt = ytUrl(raw);
-  if (raw && !yt) redirect(`/streams/${id}?err=` + encodeURIComponent("Посилання на YouTube має починатися з https://"));
-  await db().update(schema.streams).set({ title: str(fd, "title") || "Етер", youtubeUrl: yt, ...(at ? { startsAt: at } : {}), tag: str(fd, "tag") || null, updatedAt: new Date() }).where(eq(schema.streams.id, id));
+  const rawRec = str(fd, "recordingUrl"); const rec = ytUrl(rawRec);
+  if ((raw && !yt) || (rawRec && !rec)) redirect(`/streams/${id}?err=` + encodeURIComponent("Посилання на YouTube має починатися з https://"));
+  await db().update(schema.streams).set({ title: str(fd, "title") || "Етер", youtubeUrl: yt, recordingUrl: rec, ...(at ? { startsAt: at } : {}), tag: str(fd, "tag") || null, updatedAt: new Date() }).where(eq(schema.streams.id, id));
   revalidatePath("/streams"); revalidatePath(`/streams/${id}`);
   redirect(`/streams/${id}?saved=1`);
 }

@@ -113,6 +113,13 @@
       "when": 1794296629847,
       "tag": "0015_streams",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794993282075,
+      "tag": "0016_streams_recording",
+      "breakpoints": true
     }
   ]
 }

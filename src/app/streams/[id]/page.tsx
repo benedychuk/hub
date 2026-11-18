@@ -7,7 +7,7 @@ import { PageHeader, Section, Field, Alert, EmptyState, Stat } from "@/component
 import { Kebab, MenuAction, MenuLink, MenuSep } from "@/components/ui/controls";
 import { CopyField } from "@/components/ui/copy-field";
 import { navCounts, safe } from "@/lib/queries";
-import { streamDetail, streamLinks, hubBotUsername, platformStreamLink } from "@/lib/streams";
+import { streamDetail, streamLinks, hubBotUsername, platformStreamLink, cabinetArchive, ARCHIVE_DAYS } from "@/lib/streams";
 import { saveStream, deleteStream } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
@@ -20,11 +20,14 @@ export default async function StreamPage({ params, searchParams }: { params: Pro
   const [counts, d, botUser] = await Promise.all([navCounts(), safe(() => streamDetail(Number(id)), null), safe(() => hubBotUsername(), null)]);
   if (!d) notFound();
   const { s, visitors, members } = d;
+  const now = new Date(); const ended = now.getTime() > s.startsAt.getTime() + 3 * 3600_000;
+  const inArchive = ended && (await safe(() => cabinetArchive(now), [])).some((x) => x.code === s.code);
+  const archiveUntil = ended ? new Date(s.startsAt.getTime() + ARCHIVE_DAYS * 86400_000) : null;
   const links = streamLinks(s.code, botUser); const platform = platformStreamLink(); const main = links.miniapp ?? links.bot;
   const club = visitors.filter((v) => v.zen || v.hub).length;
   return (
     <Shell title="Етери" counts={counts}>
-      <PageHeader back="/streams" backLabel="Етери" icon={<Radio size={16} />} title={s.title} status={<Pill tone="moon">{when(s.startsAt)}</Pill>}
+      <PageHeader back="/streams" backLabel="Етери" icon={<Radio size={16} />} title={s.title} status={<><Pill tone="moon">{when(s.startsAt)}</Pill>{archiveUntil && (inArchive ? <Pill tone="good">запис у кабінеті до {archiveUntil.toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit" })}</Pill> : <Pill tone="mute">запис прибрано з кабінету</Pill>)}</>}
         actions={<Kebab><MenuLink href={`/api/export/streams?id=${s.id}`} icon={<Download />}>Завантажити список (CSV)</MenuLink><MenuSep /><MenuAction action={deleteStream} fields={{ id: s.id }} icon={<Trash2 />} danger confirm={`Видалити «${s.title}» разом зі списком тих, хто перейшов? Теги в людей лишаться.`}>Видалити етер</MenuAction></Kebab>} />
       {sp.created && <Alert tone="ok">Етер створено. Скопіюйте посилання нижче й опублікуйте в каналі (текстом або кнопкою під постом). Кожен, хто перейде, з'явиться в списку.</Alert>}
       {sp.saved && <Alert tone="ok">Збережено.</Alert>}
@@ -49,7 +52,7 @@ export default async function StreamPage({ params, searchParams }: { params: Pro
             {visitors.length ? <table><thead><tr><th>Людина</th><th>Telegram ID</th><th>Учасниця</th><th>Перейшла</th><th className="num">Переходів</th></tr></thead><tbody>
               {visitors.map((v) => <tr key={v.personId}><td><Link href={`/people/${v.personId}`}>{v.name}</Link>{v.username && <div className="fld-h">@{v.username}</div>}</td><td className="mono">{v.telegramUserId}</td>
                 <td>{v.zen && <Pill tone="moon">ZenEdu</Pill>}{v.hub && <Pill tone="acc">Hub</Pill>}{!v.zen && !v.hub && <Pill tone="mute">не з клубу</Pill>}</td>
-                <td className="mono">{when(v.firstAt)}{v.via !== "bot" && <div className="fld-h">{v.via === "cabinet" ? "з кабінету" : "Mini App"}</div>}</td><td className="num">{v.clicks}</td></tr>)}
+                <td className="mono">{when(v.firstAt)}{v.via !== "bot" && <div className="fld-h">{v.via === "cabinet" ? "з кабінету" : v.via === "recording" ? "запис у кабінеті" : "Mini App"}</div>}</td><td className="num">{v.clicks}</td></tr>)}
             </tbody></table> : <EmptyState icon={<Radio size={20} />} title="Ще ніхто не перейшов" text="Опублікуйте посилання в каналі: список оновлюється одразу після кожного переходу." />}
           </Section>
         </div>
@@ -58,6 +61,7 @@ export default async function StreamPage({ params, searchParams }: { params: Pro
             <Field label="Назва"><input name="title" defaultValue={s.title} /></Field>
             <Field label="Дата і час" hint="за київським часом"><input type="datetime-local" name="startsAt" defaultValue={kyivInput(s.startsAt)} /></Field>
             <Field label="Посилання на трансляцію YouTube" hint="Можна змінити будь-коли: посилання для каналу лишається тим самим."><input name="youtubeUrl" defaultValue={s.youtubeUrl ?? ""} placeholder="https://youtube.com/live/…" /></Field>
+            <Field label="Посилання на запис" hint="Якщо запис — окреме відео. Порожнє — запис відкривається за посиланням трансляції. Запис видно в кабінеті 30 днів після етеру."><input name="recordingUrl" defaultValue={s.recordingUrl ?? ""} placeholder="https://youtube.com/…" /></Field>
             <Field label="Тег для тих, хто перейде" hint="додається людині в картку при першому переході"><input name="tag" defaultValue={s.tag ?? ""} /></Field>
             <div className="row-actions" style={{ marginTop: 14 }}><button className="btn pri" type="submit"><Save size={15} /> Зберегти</button></div>
           </Section>

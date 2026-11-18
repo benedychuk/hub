@@ -36,7 +36,7 @@ export function streamLinks(code: string, botUser: string | null) {
 }
 
 /** Запис переходу: одна людина — один рядок на етер (повтори рахуються), тег етеру при першому переході, подія в історії. */
-export async function recordStreamVisit(code: string, personId: number, telegramUserId: number, via: "bot" | "miniapp" | "cabinet") {
+export async function recordStreamVisit(code: string, personId: number, telegramUserId: number, via: "bot" | "miniapp" | "cabinet" | "recording") {
   const d = db();
   const [s] = await d.select().from(streams).where(eq(streams.code, code));
   if (!s) return null;
@@ -127,18 +127,36 @@ export async function cabinetStream(now = new Date()): Promise<CabinetStream | n
   const state: CabinetStream["state"] = n >= t - LIVE_BEFORE_MS && n <= t + LIVE_AFTER_MS ? "live" : n > t + LIVE_AFTER_MS ? "recent" : t - n <= 86400_000 ? "today" : "upcoming";
   return { code: s.code, title: s.title, starts_at: s.startsAt.toISOString(), state, has_link: Boolean(s.youtubeUrl), watch_from: new Date(t - LIVE_BEFORE_MS).toISOString() };
 }
+/**
+ * Записи етерів для кабінету: етери, що вже завершились (понад 3 год після початку), за останні 30 днів, не більше 4,
+ * найновіші спершу. Через місяць етер зникає сам. Посилання YouTube тут немає — лише через POST streams/watch.
+ */
+export const ARCHIVE_DAYS = 30, ARCHIVE_MAX = 4;
+export type ArchiveStream = { code: string; title: string; starts_at: string; has_link: boolean; available_until: string };
+export async function cabinetArchive(now = new Date()): Promise<ArchiveStream[]> {
+  const rows = await db().select().from(streams)
+    .where(sql`${streams.startsAt} < ${new Date(now.getTime() - LIVE_AFTER_MS)} and ${streams.startsAt} > ${new Date(now.getTime() - ARCHIVE_DAYS * 86400_000)}`)
+    .orderBy(sql`${streams.startsAt} desc`).limit(ARCHIVE_MAX);
+  return rows.map((s) => ({ code: s.code, title: s.title, starts_at: s.startsAt.toISOString(), has_link: Boolean(s.recordingUrl || s.youtubeUrl), available_until: new Date(s.startsAt.getTime() + ARCHIVE_DAYS * 86400_000).toISOString() }));
+}
 /** Чи учасниця клубу зараз (чинна підписка ZenEdu чи Hub) — етери лише для учасниць. */
 export async function isClubMember(personId: number | null) {
   return (await clubAccess(personId)).member; // те саме правило, що й для кабінету платформи
 }
 /** Перехід на етер із кабінету: людина вже увійшла (сесія платформи), записуємо і віддаємо посилання на YouTube. */
-export async function watchFromCabinet(personId: number, telegramUserId: number, code?: string) {
-  const cur = code ? { code } : await cabinetStream();
+export async function watchFromCabinet(personId: number, telegramUserId: number, code?: string, now = new Date()) {
+  const cur = code ? { code } : await cabinetStream(now);
   if (!cur) return { ok: false as const, error: "no_stream" };
-  const s = await recordStreamVisit(cur.code, personId, telegramUserId, "cabinet");
+  const [st] = await db().select().from(streams).where(eq(streams.code, cur.code));
+  if (!st) return { ok: false as const, error: "no_stream" };
+  const ended = now.getTime() > st.startsAt.getTime() + LIVE_AFTER_MS;
+  // запис — лише поки він у списку кабінету (30 днів і не більше 4 найновіших); старіші на платформі вже не показуються
+  if (ended && !(await cabinetArchive(now)).some((x) => x.code === st.code)) return { ok: false as const, error: "expired" };
+  const url = ended ? st.recordingUrl || st.youtubeUrl : st.youtubeUrl;
+  if (!url) return { ok: false as const, error: "no_link_yet", starts_at: st.startsAt.toISOString() };
+  const s = await recordStreamVisit(st.code, personId, telegramUserId, ended ? "recording" : "cabinet");
   if (!s) return { ok: false as const, error: "no_stream" };
-  if (!s.youtubeUrl) return { ok: false as const, error: "no_link_yet", starts_at: s.startsAt.toISOString() };
-  return { ok: true as const, url: s.youtubeUrl, title: s.title };
+  return { ok: true as const, url, title: s.title, recording: ended };
 }
 /** Постійне посилання для каналу й закріпленого поста: сторінка етеру в кабінеті, завжди відкриває актуальний етер. */
 export function platformStreamLink() {

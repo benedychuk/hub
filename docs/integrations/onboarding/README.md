@@ -56,6 +56,7 @@
 | `POST auth/telegram-webapp` `{init_data}` | сайт відкрито всередині Telegram: підпис initData перевіряється ключем Hub-бота → `session_token`, `user` |
 | профіль (`user` у відповіді входу й `GET user/profile`) | містить `stream` — актуальний етер (як `streams/current`) для учасниць, щоб банер і `efir.html` показувались одразу; `auth/telegram-webapp` також повертає `next` |
 | `GET streams/current` (Bearer необов'язково) | актуальний етер для банера й `efir.html`: назва, час, стан (upcoming/today/live/recent), чи додано посилання; `member` — чи учасниця клубу. Посилання YouTube не віддається |
+| `GET streams/archive` (Bearer) | найближчий етер (`current`) і записи завершених етерів за 30 днів, не більше 4, найновіші спершу (`archive`: code, title, starts_at, has_link, available_until). ТЗ: `TZ-efir-archive.md` |
 | `POST streams/watch` (Bearer) `{code?}` | записує перехід на етер і повертає посилання YouTube; помилки `not_member`, `no_link_yet`, `no_telegram` (див. `TZ-efir.md`) |
 | `POST auth/magic-login` (Bearer `auth_token` або в тілі) | вхід за посиланням з бота: одноразовий токен, 48 годин |
 | `GET user/profile` (Bearer `session_token`) | профіль: тріал, підписка, квіз, тести, анкета, теги, `telegram_linked` |

@@ -1,0 +1,1 @@
+ALTER TABLE "streams" ADD COLUMN "recording_url" text;
