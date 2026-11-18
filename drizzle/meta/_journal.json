@@ -120,6 +120,20 @@
       "when": 1794993282075,
       "tag": "0016_streams_recording",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795011028387,
+      "tag": "0017_perf_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795011329119,
+      "tag": "0018_db_jit_off",
+      "breakpoints": true
     }
   ]
 }

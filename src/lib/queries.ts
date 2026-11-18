@@ -14,13 +14,14 @@ export const ACTIVE = ["active", "trialing", "past_due"];
 
 export async function navCounts() {
   return safe(async () => {
-    const d = db();
-    const [p] = await d.select({ c: count() }).from(persons);
-    const [s] = await d.select({ c: count() }).from(subscriptions).where(inArray(subscriptions.status, ACTIVE));
-    const [f] = await d.select({ c: count() }).from(funnels).where(and(eq(funnels.isActive, true), eq(funnels.kind, "funnel")));
-    const [pr] = await d.select({ c: count() }).from(funnels).where(eq(funnels.kind, "product"));
-    const [c] = await d.select({ c: count() }).from(events).where(and(eq(events.type, "bot.message"), gte(events.createdAt, new Date(Date.now() - 7 * 86400000))));
-    return { people: p.c, subs: s.c, funnels: f.c, products: pr.c, chats: c.c };
+    // лічильники меню на кожній сторінці: один запит до бази замість п'яти по черзі (ті самі умови)
+    const [r] = (await db().execute(sql`select
+      (select count(*) from persons)::int as people,
+      (select count(*) from subscriptions where status in (${sql.join(ACTIVE.map((x) => sql`${x}`), sql`, `)}))::int as subs,
+      (select count(*) from funnels where is_active = true and kind = 'funnel')::int as funnels,
+      (select count(*) from funnels where kind = 'product')::int as products,
+      (select count(*) from events where type = 'bot.message' and created_at >= ${new Date(Date.now() - 7 * 86400000)})::int as chats`)).rows as { people: number; subs: number; funnels: number; products: number; chats: number }[];
+    return { people: r.people, subs: r.subs, funnels: r.funnels, products: r.products, chats: r.chats };
   }, {} as Record<string, number>);
 }
 

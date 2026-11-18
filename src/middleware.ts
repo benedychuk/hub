@@ -17,7 +17,10 @@ async function sessionValid(token: string | undefined) {
   const url = process.env.DATABASE_URL; if (!url) return true; // база ще не підключена: режим налаштування
   const sqlq = neon(url);
   try {
-    const [n] = await sqlq`select count(*)::int as c from users`;
+    // один запит замість двох: чи є акаунти і чи дійсна сесія (кожен запит до Neon — окрема мережева поїздка)
+    const th = token ? await sha256(token) : "";
+    const [n] = await sqlq`select (select count(*)::int from users) as c,
+      exists (select 1 from user_sessions s join users u on u.id = s.user_id where s.token_hash = ${th} and s.revoked_at is null and s.expires_at > now() and u.status = 'active') as ok`;
     if (Number(n?.c ?? 0) === 0) {
       // акаунтів ще немає: працює старий спільний пароль зі змінної ADMIN_PASSWORD
       if (!process.env.ADMIN_PASSWORD) return true;
@@ -25,8 +28,7 @@ async function sessionValid(token: string | undefined) {
       return Boolean(token) && token === (await hmac(secret, "session:" + process.env.ADMIN_PASSWORD));
     }
     if (!token) return false;
-    const rows = await sqlq`select 1 from user_sessions s join users u on u.id = s.user_id where s.token_hash = ${await sha256(token)} and s.revoked_at is null and s.expires_at > now() and u.status = 'active' limit 1`;
-    return rows.length > 0;
+    return n?.ok === true;
   } catch { return false; }
 }
 
