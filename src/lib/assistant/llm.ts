@@ -37,8 +37,33 @@ export async function chat(model: string, messages: ChatMsg[], tools: ToolDef[])
   throw last instanceof Error ? last : new Error(String(last));
 }
 
+const isEmoji = (g: string) => /\p{Extended_Pictographic}/u.test(g);
+/** Не більше max смайликів на повідомлення (зайві прибираються з кінця тексту); max = 0 — без смайликів. */
+export function limitEmoji(text: string, max = 2) {
+  const seg = new Intl.Segmenter("uk", { granularity: "grapheme" });
+  let n = 0; let out = "";
+  for (const { segment } of seg.segment(text)) {
+    if (isEmoji(segment)) { n++; if (n > max) continue; }
+    out += segment;
+  }
+  return out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,!?;:])/g, "$1").replace(/[ \t]+$/gm, "");
+}
+/** Без крапки в кінці абзацу (звучить різко): «текст.» → «текст», «текст. 🤍» → «текст 🤍». Три крапки й ?! лишаються. */
+export function dropFinalDots(text: string) {
+  return text.split("\n").map((line) => {
+    const m = line.match(/^(.*?)([\s\p{Extended_Pictographic}\uFE0F\u200D\u2640\u2642]*)$/u);
+    if (!m) return line;
+    let body = m[1]; const tail = m[2];
+    if (/[^.]\.$/.test(body) || body === ".") body = body.slice(0, -1).trimEnd();
+    return body + (tail.trim() ? " " + tail.trim() : "");
+  }).join("\n");
+}
+
 /** Чистка тексту за правилами тону (як редактор бота коментарів, але без другого запиту до моделі). */
-export function polish(text: string) {
+export function polish(text: string, opts: { maxEmoji?: number } = {}) {
+  return dropFinalDots(limitEmoji(polishRaw(text), opts.maxEmoji ?? 2));
+}
+function polishRaw(text: string) {
   return text
     .replace(/\*\*(.+?)\*\*/g, "$1").replace(/__(.+?)__/g, "$1")
     .replace(/[«»„“”"]/g, "")
