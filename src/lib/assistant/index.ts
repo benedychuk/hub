@@ -75,7 +75,7 @@ const TOOLS: ToolDef[] = [
 ];
 type Btn = { text: string; url: string };
 // after — окремі повідомлення (посилання в канал, оффер), які йдуть ПІСЛЯ тексту асистентки, щоб «кнопка нижче» було правдою
-type Ctx = { personId: number; card: CardData; buttons: Btn[]; handedOff: boolean; silent: boolean; did: string[]; after: (() => Promise<void>)[] };
+type Ctx = { personId: number; card: CardData; buttons: Btn[]; handedOff: boolean; silent: boolean; crisis?: boolean; did: string[]; after: (() => Promise<void>)[] };
 
 async function runTool(name: string, args: Record<string, unknown>, c: Ctx): Promise<string> {
   const d = db();
@@ -125,7 +125,7 @@ async function runTool(name: string, args: Record<string, unknown>, c: Ctx): Pro
       const priority = args.priority === "urgent" || kind === "crisis" ? "urgent" : "normal";
       const silent = Boolean(args.silent);
       const id = await createTicket(c.personId, { kind, priority, silent, summary: String(args.summary ?? "").trim() || "без опису" });
-      c.handedOff = true; if (silent) c.silent = true;
+      c.handedOff = true; if (silent) c.silent = true; if (kind === "crisis") c.crisis = true;
       return `Звернення #${id} передано команді${silent ? "; людині нічого не відповідай (фінальна відповідь порожня)" : ""}.`;
     }
   }
@@ -178,7 +178,8 @@ export async function handleThread(personId: number, reason: string | null, st: 
       msgs.push({ role: "tool", tool_call_id: tc.id, content: out });
     }
   }
-  const text = c.silent ? "" : polish(finalText);
+  // криза — без смайликів; інакше не більше 2, без крапок у кінці абзаців
+  const text = c.silent ? "" : polish(finalText, { maxEmoji: c.crisis ? 0 : 2 });
   if (text) {
     const { sendToPerson } = await import("../bot");
     const ok = await sendToPerson(personId, text, { buttons: c.buttons, disablePreview: true }).catch(() => false);
