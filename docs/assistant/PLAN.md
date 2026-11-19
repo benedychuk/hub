@@ -1,6 +1,6 @@
 # Асистентка Олеся: як вона живе в Hub (план)
 
-**Статус:** план на затвердження (2026-11-19). Інструкція поведінки — `INSTRUCTION.md`.
+**Статус:** затверджено; етап 1 реалізовано 2026-11-19 (`src/lib/assistant`, `/assistant`, `/api/cron/assistant`). Журнал дій — події `assistant.action` / `assistant.handoff` і відповіді `bot.reply` з source `assistant`; таблиці `assistant_threads`, `assistant_tickets`. Інструкція поведінки — `INSTRUCTION.md`.
 
 ## Як працює
 

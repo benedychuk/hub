@@ -134,6 +134,13 @@
       "when": 1795011329119,
       "tag": "0018_db_jit_off",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795092196653,
+      "tag": "0019_assistant",
+      "breakpoints": true
     }
   ]
 }

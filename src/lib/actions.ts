@@ -1023,3 +1023,36 @@ export async function createClubCabinetsAction() {
   redirect("/onboarding?ok=" + encodeURIComponent(`Створено кабінетів: ${r.created}.${r.noContact ? ` ${r.noContact} — без @username .` : ""} Вхід — лише через Telegram.`));
 }
 
+
+// ---------- асистентка підтримки «Олеся» ----------
+export async function assistantSaveSettings(fd: FormData) {
+  const { setAssistantSetting } = await import("./assistant");
+  if (fd.get("form") === "switch") await setAssistantSetting("enabled", fd.get("enabled") === "on");
+  else {
+    await setAssistantSetting("model", str(fd, "model").trim() || null);
+    await setAssistantSetting("notes", str(fd, "notes").slice(0, 4000));
+  }
+  revalidatePath("/assistant");
+  redirect("/assistant?tab=settings&ok=" + encodeURIComponent("Збережено"));
+}
+/** Рішення команди по зверненню: закрити / відхилити, або дати асистентці вказівку (вона обробить діалог знову). */
+export async function assistantTicketAction(fd: FormData) {
+  const id = Number(fd.get("id")); const op = str(fd, "op");
+  const me = await currentUser().catch(() => null);
+  const [t] = await db().select().from(schema.assistantTickets).where(eq(schema.assistantTickets.id, id));
+  if (!t) redirect("/assistant?err=" + encodeURIComponent("Звернення не знайдено"));
+  if (op === "note") {
+    const note = str(fd, "note").trim();
+    if (!note) redirect("/assistant?err=" + encodeURIComponent("Напишіть вказівку для асистентки"));
+    await db().update(schema.assistantTickets).set({ teamNote: note.slice(0, 2000) }).where(eq(schema.assistantTickets.id, id));
+    await db().insert(events).values({ personId: t.personId, type: "assistant.team_note", source: "hub", payload: { ticketId: id, note: note.slice(0, 500), by: me?.email ?? "admin" } });
+    const { assistantWake } = await import("./assistant");
+    await assistantWake(t.personId);
+    revalidatePath("/assistant");
+    redirect("/assistant?ok=" + encodeURIComponent("Вказівку передано: асистентка виконає її протягом хвилини"));
+  }
+  const status = op === "reject" ? "rejected" : "done";
+  await db().update(schema.assistantTickets).set({ status, resolvedBy: me?.email ?? "admin", resolvedAt: new Date() }).where(eq(schema.assistantTickets.id, id));
+  revalidatePath("/assistant");
+  redirect("/assistant?ok=" + encodeURIComponent(status === "done" ? "Звернення закрито" : "Звернення відхилено"));
+}

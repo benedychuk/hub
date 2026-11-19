@@ -586,3 +586,29 @@ export const streamVisits = pgTable("stream_visits", {
   firstAt: timestamp("first_at", { withTimezone: true }).notNull().defaultNow(),
   lastAt: timestamp("last_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex("stream_visits_uidx").on(t.streamId, t.personId), index("stream_visits_person_idx").on(t.personId)]);
+
+// ---------- асистентка підтримки «Олеся» (docs/assistant) ----------
+// Стан діалогу людини з асистенткою: черга необроблених повідомлень (буфер ~20 с), тиша після відповіді команди.
+export const assistantThreads = pgTable("assistant_threads", {
+  personId: integer("person_id").primaryKey().references(() => persons.id, { onDelete: "cascade" }),
+  pendingSince: timestamp("pending_since", { withTimezone: true }),   // перше необроблене повідомлення; null — черги немає
+  lastInAt: timestamp("last_in_at", { withTimezone: true }),           // останнє повідомлення людини
+  reason: text("reason"),                                              // message | team_note
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("assistant_threads_pending_idx").on(t.pendingSince)]);
+
+// Звернення команді від асистентки: що просить людина, що вже зроблено, що потрібно від команди.
+export const assistantTickets = pgTable("assistant_tickets", {
+  id: serial("id").primaryKey(),
+  personId: integer("person_id").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  priority: text("priority").notNull().default("normal"),             // urgent | normal
+  silent: boolean("silent").notNull().default(false),                  // людині нічого не відповідали
+  kind: text("kind").notNull().default("other"),                       // crisis | personal | refund | zenedu | access | payment | tech | other
+  summary: text("summary").notNull(),
+  status: text("status").notNull().default("open"),                    // open | done | rejected
+  teamNote: text("team_note"),                                         // вказівка команди асистентці
+  resolvedBy: text("resolved_by"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("assistant_tickets_status_idx").on(t.status, t.createdAt), index("assistant_tickets_person_idx").on(t.personId)]);
