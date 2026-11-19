@@ -84,6 +84,11 @@ export async function buildDashboard(offerKey?: string) {
     select count(distinct s.person_id)::int as c from subscriptions s
     where ${clubSub} and ${notTestSub} and not ${live} and ${accessEnd} between now() - interval '30 days' and now()
       and not exists (select 1 from subscriptions s2 where s2.person_id = s.person_id and s2.id <> s.id and ${liveFor("s2", grace)} and ${clubFor("s2", sc, clubPlanIds)})`));
+  // для порівняння на плитці: пішли в попередні 30 днів (доступ закінчився 30–60 днів тому і досі немає)
+  const q14 = run(d.execute(sql`
+    select count(distinct s.person_id)::int as c from subscriptions s
+    where ${clubSub} and ${notTestSub} and not ${live} and ${accessEnd} between now() - interval '60 days' and now() - interval '30 days'
+      and not exists (select 1 from subscriptions s2 where s2.person_id = s.person_id and s2.id <> s.id and ${liveFor("s2", grace)} and ${clubFor("s2", sc, clubPlanIds)})`));
   const q3 = run(d.execute(sql`
     with c as (${classified})
     select
@@ -118,7 +123,9 @@ export async function buildDashboard(offerKey?: string) {
     from fl`));
   const q6 = run(d.execute(sql`${cover}
     select coalesce(sum(price) filter (where created_at >= now() - interval '90 days'), 0)::text as uah,
-      count(distinct person_id) filter (where created_at <= now() and cover_end + interval '3 days' > now() - interval '90 days')::int as people
+      count(distinct person_id) filter (where created_at <= now() and cover_end + interval '3 days' > now() - interval '90 days')::int as people,
+      coalesce(sum(price) filter (where created_at >= now() - interval '180 days' and created_at < now() - interval '90 days'), 0)::text as uah_prev,
+      count(distinct person_id) filter (where created_at <= now() - interval '90 days' and cover_end + interval '3 days' > now() - interval '180 days')::int as people_prev
     from fl`));
   const q7 = run(d.execute(sql`
     with c as (${classified})
@@ -154,6 +161,9 @@ export async function buildDashboard(offerKey?: string) {
         and coalesce(o.paid_at, o.created_at) < (b.m0 - interval '1 month' + b.passed) at time zone 'Europe/Kyiv'), 0)::text as prev
     from orders o, b
     where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= (b.m0 - interval '1 month') at time zone 'Europe/Kyiv' and ${scopeO} and ${notTestOrder("o")}`));
+  // зібрано за попередні 30 днів (30–60 днів тому) — для порівняння на плитці
+  const q13 = run(d.execute(sql`select coalesce(sum(o.price * ${rateSql("o")}), 0)::text as uah from orders o
+    where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= now() - interval '60 days' and coalesce(o.paid_at, o.created_at) < now() - interval '30 days' and ${scopeO} and ${notTestOrder("o")}`));
   const q10 = run(d.execute(sql`select count(*)::int as total,
       count(*) filter (where started_at >= now() - interval '30 days')::int as d30,
       count(*) filter (where started_at >= now() - interval '60 days' and started_at < now() - interval '30 days')::int as prev
@@ -193,7 +203,9 @@ export async function buildDashboard(offerKey?: string) {
   const pRenew = rates?.due ? rates.renewed / rates.due : 0.8;
   const pTrial = rates?.trial_due ? rates.trial_paid / rates.trial_due : 0.5;
   // ARPU за 90 днів: дохід клубу (у гривнях, долари за курсом) за 90 днів / люди, які мали доступ до клубу хоча б день за ці 90 днів
-  const [a90] = (await q6).rows as { uah: string; people: number }[];
+  const [a90] = (await q6).rows as { uah: string; people: number; uah_prev: string; people_prev: number }[];
+  const [revPrev] = (await q13).rows as { uah: string }[];
+  const [leftPrev] = (await q14).rows as { c: number }[];
 
   // останні 14 днів по днях (київський час): нові й продовження
   const daily = (await q7).rows as { day: string; starts: number; starts_zen: number; starts_hub: number; trials: number; renews: number; uah: string }[];
@@ -276,6 +288,7 @@ export async function buildDashboard(offerKey?: string) {
     // ARPU: щомісячний дохід (MRR) на учасницю з автопродовженням; і фактичний дохід клубу за 30 днів на активну учасницю
     arpu: renewingPersons.size ? Math.round(mrrUah / renewingPersons.size) : 0,
     arpu30: bySource.size ? Math.round(Number(period.club_uah) / bySource.size) : 0,
+    arpu90Prev: a90?.people_prev ? Math.round(Number(a90.uah_prev) / a90.people_prev) : 0, revPrevUah: Number(revPrev?.uah ?? 0), leftPrev: leftPrev?.c ?? 0,
     arpu90: a90?.people ? Math.round(Number(a90.uah) / a90.people) : 0, arpu90People: a90?.people ?? 0, arpu90Uah: Number(a90?.uah ?? 0),
     starts30: period.starts, startsZen: period.starts_zen, startsHub: period.starts_hub, startsPrev: period.starts_prev, renews30: period.renews,
     month, revUah: revUahOf(), revUsd: revOf("USD"), revZen: revUahOf("zenedu"), revHub: revUahOf("hub"), revCount, usdRate: USD_UAH,

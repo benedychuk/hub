@@ -718,3 +718,9 @@ details.chart-table { margin-top: 12px; } details.chart-table summary { cursor: 
    і чатах відступ дає gap, тому там правило не діє. */
 .page > :is(.card, .grid, form:has(> .card, > .grid)) + :is(.card, .grid, form:has(> .card, > .grid)),
 .page :not(.grid, .form, .chat, .row-actions, .chart-pair, .fgrid, .mgrid, .tabs) > :is(.card, .grid, form:has(> .card, > .grid)) + :is(.card, .grid, form:has(> .card, > .grid)) { margin-top: 18px; }
+
+/* Зміна показника на плитці: зелена — краще, червона — гірше, сіра — без змін / нема з чим порівняти */
+.stat b .chg { display: inline-flex; align-items: center; gap: 2px; margin-left: 8px; padding: 2px 7px; border-radius: 999px; font-family: var(--sans); font-size: 12px; font-weight: 600; vertical-align: middle; position: relative; top: -2px; }
+.stat b .chg.up { background: var(--good-soft); color: var(--good); }
+.stat b .chg.down { background: var(--crit-soft); color: var(--crit); }
+.stat b .chg.flat { background: var(--surface-2); color: var(--ink-3); }

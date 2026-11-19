@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, Check, Info } from "lucide-react";
+import { ArrowLeft, Check, Info, ArrowUpRight, ArrowDownRight, Minus } from "lucide-react";
 import { Tip } from "./controls";
 
 /** Заголовок сторінки об’єкта: назад, назва, статус, дії. */
@@ -54,8 +54,20 @@ export function FormRow({ cols = 2, children }: { cols?: 2 | 3; children: React.
 
 /** Велика цифра з підписом. */
 /** Плитка показника. info — пояснення «що це і як рахується», спливає при наведенні на «i» у куті. */
-export function Stat({ label, value, hint, tone, info }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: "good" | "warn" | "crit"; info?: string }) {
-  return <div className={`stat ${tone ?? ""}`}><small>{label}</small><b>{value}</b>{hint && <span className="pct">{hint}</span>}
+/**
+ * Зміна показника у відсотках: now проти prev. Зелена — стало краще, червона — гірше, сіра — без змін або нема з чим порівняти.
+ * lowerIsBetter — для показників, де зростання погане (напр., «Пішли»). title — з чим порівнюємо (підказка при наведенні).
+ */
+export type StatChange = { now: number; prev: number | null | undefined; lowerIsBetter?: boolean; title: string };
+function ChangeBadge({ c }: { c: StatChange }) {
+  const prev = c.prev ?? 0;
+  if (!prev) return <span className="chg flat" title={`${c.title}: немає даних для порівняння`}>—</span>;
+  const p = Math.round(((c.now - prev) / prev) * 100);
+  const dir = p === 0 ? "flat" : (p > 0) !== Boolean(c.lowerIsBetter) ? "up" : "down";
+  return <span className={`chg ${dir}`} title={c.title}>{p > 0 ? <ArrowUpRight size={12} /> : p < 0 ? <ArrowDownRight size={12} /> : <Minus size={12} />}{p > 0 ? "+" : ""}{p}%</span>;
+}
+export function Stat({ label, value, hint, tone, info, change }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: "good" | "warn" | "crit"; info?: string; change?: StatChange }) {
+  return <div className={`stat ${tone ?? ""}`}><small>{label}</small><b>{value}{change && <ChangeBadge c={change} />}</b>{hint && <span className="pct">{hint}</span>}
     {info && <Tip text={info}><button type="button" className="stat-i" aria-label={`Як рахується: ${label}`}><Info size={14} /></button></Tip>}</div>;
 }
 /** Компактний підсумок «підпис: значення» у рядок. */
