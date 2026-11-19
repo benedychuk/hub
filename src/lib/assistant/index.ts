@@ -74,7 +74,8 @@ const TOOLS: ToolDef[] = [
   { type: "function", function: { name: "handoff", description: "Передати звернення команді в Hub. silent=true - людині нічого не відповідати. priority=urgent - криза чи загроза.", parameters: { type: "object", properties: { kind: { type: "string", enum: KINDS }, priority: { type: "string", enum: ["normal", "urgent"] }, silent: { type: "boolean" }, summary: { type: "string", description: "Що просить людина; що ти перевірила і зробила; що потрібно від команди." } }, required: ["kind", "summary"] } } },
 ];
 type Btn = { text: string; url: string };
-type Ctx = { personId: number; card: CardData; buttons: Btn[]; handedOff: boolean; silent: boolean; did: string[] };
+// after — окремі повідомлення (посилання в канал, оффер), які йдуть ПІСЛЯ тексту асистентки, щоб «кнопка нижче» було правдою
+type Ctx = { personId: number; card: CardData; buttons: Btn[]; handedOff: boolean; silent: boolean; did: string[]; after: (() => Promise<void>)[] };
 
 async function runTool(name: string, args: Record<string, unknown>, c: Ctx): Promise<string> {
   const d = db();
@@ -84,13 +85,16 @@ async function runTool(name: string, args: Record<string, unknown>, c: Ctx): Pro
       const [n] = (await d.execute(sql`select count(*)::int as c from events where person_id = ${c.personId} and type = 'assistant.action' and payload->>'kind' = 'channel_link' and created_at > now() - interval '1 day'`)).rows as { c: number }[];
       if ((n?.c ?? 0) >= MAX_CHANNEL_LINKS_PER_DAY) return "Не виконано: за добу вже надіслано 2 посилання. Передай команді (handoff kind=tech).";
       const { inviteNow } = await import("../telegram-access");
-      const out: string[] = [];
-      for (const key of c.card.channelKeys) {
-        const r = await inviteNow(c.personId, key);
-        out.push(r.ok ? "посилання надіслано окремим повідомленням вище" : `не вдалося: ${r.reason}`);
-        if (r.ok) { await logAction(c.personId, "channel_link", "Надіслала нове посилання в канал", { resource: key }); c.did.push("посилання в канал"); }
-      }
-      return out.join("; ");
+      const keys = [...c.card.channelKeys];
+      c.after.push(async () => {
+        for (const key of keys) {
+          const r = await inviteNow(c.personId, key);
+          if (r.ok) await logAction(c.personId, "channel_link", "Надіслала нове посилання в канал", { resource: key });
+          else await createTicket(c.personId, { kind: "tech", summary: `Асистентка пообіцяла нове посилання в канал, але його не вдалося створити: ${r.reason}. Надішліть посилання вручну.` });
+        }
+      });
+      c.did.push("посилання в канал");
+      return "Посилання в канал буде надіслано окремим повідомленням одразу ПІСЛЯ твоєї відповіді (тобто нижче).";
     }
     case "send_cabinet_link": {
       const { onboardingConfigured, magicLinkFor } = await import("../onboarding");
@@ -112,9 +116,9 @@ async function runTool(name: string, args: Record<string, unknown>, c: Ctx): Pro
       const [idn] = await d.select().from(identities).where(and(eq(identities.personId, c.personId), eq(identities.botKey, "hub")));
       if (!idn?.chatId) return "Не виконано: немає чату з людиною.";
       const { sendOfferMessage } = await import("../bot");
-      await sendOfferMessage(Number(idn.chatId), c.personId, planId);
-      await logAction(c.personId, "offer", `Надіслала оффер «${offer.name}»`, { planId }); c.did.push(`оффер «${offer.name}»`);
-      return "Оффер з кнопкою оплати надіслано окремим повідомленням вище.";
+      c.after.push(async () => { await sendOfferMessage(Number(idn.chatId), c.personId, planId); await logAction(c.personId, "offer", `Надіслала оффер «${offer.name}»`, { planId }); });
+      c.did.push(`оффер «${offer.name}»`);
+      return "Оффер з кнопкою оплати буде надіслано окремим повідомленням одразу ПІСЛЯ твоєї відповіді (тобто нижче).";
     }
     case "handoff": {
       const kind = KINDS.includes(String(args.kind)) ? String(args.kind) : "other";
@@ -160,7 +164,7 @@ export async function handleThread(personId: number, reason: string | null, st: 
       : { role: "assistant", content: `${h.source === "hub" ? "[відповідь команди] " : ""}${h.text ?? ""}` }),
     ...(reason === "team_note" ? [{ role: "system" as const, content: "Команда щойно дала вказівку у зверненні (див. ВКАЗІВКА КОМАНДИ в картці). Виконай її і коротко повідом людині результат, якщо це доречно." }] : []),
   ];
-  const c: Ctx = { personId, card: data, buttons: [], handedOff: false, silent: false, did: [] };
+  const c: Ctx = { personId, card: data, buttons: [], handedOff: false, silent: false, did: [], after: [] };
   let finalText = "";
   for (let i = 0; i < 6; i++) {
     const r = await chat(st.model, msgs, TOOLS);
@@ -182,6 +186,8 @@ export async function handleThread(personId: number, reason: string | null, st: 
   } else if (!c.handedOff) {
     await createTicket(personId, { kind: "other", silent: true, summary: "Асистентка не сформувала відповідь: подивіться діалог у «Чатах»." });
   }
+  // окремі повідомлення (посилання в канал, оффер) — після тексту; і навіть якщо тексту немає, обіцяне не губиться
+  for (const f of c.after) await f().catch((e) => createTicket(personId, { kind: "tech", summary: `Не вдалося надіслати обіцяне повідомлення: ${String(e).slice(0, 160)}` }));
   return { replied: Boolean(text), handedOff: c.handedOff, did: c.did };
 }
 
