@@ -9,6 +9,7 @@ import { navCounts, resourceList, settingsMap, botList } from "@/lib/queries";
 import { connectChat, saveResource, refreshChatInfo, toggleResource, deleteResource, runAccessTickNow, runReconcileNow } from "@/lib/actions";
 import { botRightsIn, channelStats, type ChannelConfig } from "@/lib/telegram-access";
 import { dateTime } from "@/lib/format";
+import { zenHubConflicts, CONFLICT_LABELS, type Conflict, type ConflictKind } from "@/lib/conflicts";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -21,6 +22,10 @@ export default async function Resources({ searchParams }: { searchParams: Promis
   const [counts, res, st, bl] = await Promise.all([navCounts(), resourceList(), settingsMap(), botList()]);
   const botUser = bl.find((b) => b.key === "hub")?.username ?? null;
   const tab = sp.tab === "digital" ? "digital" : "channels";
+  // конфлікти ZenEdu і Hub (перенесено з дашборда): хто оплатив у Hub, але не може зайти, або платить двічі
+  const conflicts = tab === "channels" ? await zenHubConflicts().catch(() => [] as Conflict[]) : [];
+  const conflictChan = conflicts.find((c) => c.resourceKey)?.resourceKey;
+  const conflictKinds = (Object.keys(CONFLICT_LABELS) as ConflictKind[]).map((k) => ({ k, n: conflicts.filter((c) => c.kind === k).length })).filter((x) => x.n);
   const known = (st["known_chats"] as { id: number; title: string; type: string; status: string; at: string }[] | undefined) ?? [];
   const hasToken = Boolean(process.env.TELEGRAM_BOT_TOKEN);
   const isChat = (k: string) => k === "telegram_channel" || k === "telegram_group";
@@ -36,6 +41,7 @@ export default async function Resources({ searchParams }: { searchParams: Promis
   return (
     <Shell title={tab === "channels" ? "Канали і групи" : "Цифрові продукти"} counts={counts}>
       {sp.err && <Alert tone="bad">{sp.err}</Alert>}
+      {conflicts.length > 0 && <Alert tone="bad"><b>Конфлікти ZenEdu і Hub у каналі клубу: {conflicts.length}</b> ({conflictKinds.map((x) => `${CONFLICT_LABELS[x.k].title.toLowerCase()} — ${x.n}`).join(", ")}). Хто оплатив у Hub, але не може зайти, або платить двічі, і що зробити — на сторінці {conflictChan ? <Link href={`/resources/${conflictChan}`}>каналу</Link> : "каналу"}.</Alert>}
       <div className="tabs"><Link href="/resources" className={tab === "channels" ? "on" : ""}>Канали і групи · {res.filter((r) => isChat(r.kind)).length}</Link><Link href="/resources?tab=digital" className={tab === "digital" ? "on" : ""}>Функції бота й посилання · {res.filter((r) => !isChat(r.kind)).length}</Link></div>
       <Toolbar actions={tab === "channels" ? <ConnectChatDialog chats={free.map((c) => ({ id: c.id, title: c.title, type: c.type }))} botUsername={botUser} action={connectChat} /> : (
         <Modal title="Новий цифровий продукт" width={480} trigger={<button type="button" className="btn pri"><Plus size={15} /> Цифровий продукт</button>}>

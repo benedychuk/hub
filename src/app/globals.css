@@ -712,3 +712,9 @@ details.chart-table { margin-top: 12px; } details.chart-table summary { cursor: 
 @media (max-width: 1100px) { .chart-pair { grid-template-columns: 1fr; } }
 
 .pre-wrap { white-space: pre-wrap; word-break: break-word; }
+
+/* Відступ між блоками, що стоять один під одним (картки, сітки карток, форми з картками) — однаковий у всіх розділах.
+   Раніше картки поза сіткою стояли впритул (дашборд «Склад клубу», воронки, налаштування каналу). У сітках, колонках .form
+   і чатах відступ дає gap, тому там правило не діє. */
+.page > :is(.card, .grid, form:has(> .card, > .grid)) + :is(.card, .grid, form:has(> .card, > .grid)),
+.page :not(.grid, .form, .chat, .row-actions, .chart-pair, .fgrid, .mgrid, .tabs) > :is(.card, .grid, form:has(> .card, > .grid)) + :is(.card, .grid, form:has(> .card, > .grid)) { margin-top: 18px; }
