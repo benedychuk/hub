@@ -711,3 +711,4 @@ details.chart-table { margin-top: 12px; } details.chart-table summary { cursor: 
 .chart-pair h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--ink); }
 @media (max-width: 1100px) { .chart-pair { grid-template-columns: 1fr; } }
 
+.pre-wrap { white-space: pre-wrap; word-break: break-word; }

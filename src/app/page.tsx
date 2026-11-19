@@ -13,7 +13,8 @@ import { onboardingConfigured } from "@/lib/onboarding";
 import { buildDashboard, kyivMonth, USD_UAH } from "@/lib/dashboard";
 import { dateTime, fullName, money } from "@/lib/format";
 import { describeEvent } from "@/lib/event-labels";
-import { hasDb } from "@/db";
+import { hasDb, db } from "@/db";
+import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   // конфлікти ZenEdu і Hub у каналах (оплатила в Hub, але заблокована чи виключена іншим ботом, не зайшла, платить двічі)
   const conflicts = hasDb() ? await safe(() => zenHubConflicts(), [] as Conflict[]) : [];
   const conflictChan = conflicts.find((c) => c.resourceKey)?.resourceKey;
+  // термінові звернення асистентки (криза) — одразу на головній
+  const urgent = hasDb() ? await safe(async () => Number(((await db().execute(sql`select count(*)::int as c from assistant_tickets where status = 'open' and priority = 'urgent'`)).rows[0] as { c: number })?.c ?? 0), 0) : 0;
   const gapShchyro = gaps.filter((g) => g.problems.some((p) => p !== "no_cabinet")).length, gapCabinet = gaps.filter((g) => g.problems.includes("no_cabinet")).length;
   const thisMonth = kyivMonth(Date.now());
   const staleHours = d?.syncOkAt ? (Date.now() - d.syncOkAt.getTime()) / 3600_000 : null;
@@ -86,6 +89,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {hasDb() && !d && <Alert tone="bad">Не вдалося порахувати показники. Оновіть сторінку; якщо не допоможе, напишіть розробнику.</Alert>}
       {d?.syncProblem && <Alert tone="bad"><b>{d.syncProblem.title}.</b> Показники ZenEdu можуть бути неповні. {d.syncProblem.what} <Link href="/settings">Налаштування</Link>{d.syncProblem.detail && <div className="mono fld-h">{d.syncProblem.detail}</div>}</Alert>}
       {d && !d.syncProblem && staleHours !== null && staleHours > 3 && <Alert tone="warn">Дані ZenEdu оновлені {dateTime(d.syncOkAt!)}: показники ZenEdu можуть відставати. Синхронізація йде щогодини; вручну — у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
+      {urgent > 0 && <Alert tone="bad"><b>Термінові звернення асистентки: {urgent}.</b> Людина може бути в кризі — відкрийте <Link href="/assistant">Асистент</Link>.</Alert>}
       {conflicts.length > 0 && <Alert tone="bad"><b>Конфлікти ZenEdu і Hub у каналі клубу: {conflicts.length}.</b> Хто оплатив у Hub, але не може зайти, або платить двічі — на сторінці {conflictChan ? <Link href={`/resources/${conflictChan}`}>каналу</Link> : "каналу"}.</Alert>}
       {(gapShchyro > 0 || gapCabinet > 0) && <Alert tone="bad"><b>Оплатили через Hub, але не отримали доступ:</b>{gapShchyro ? ` без «Щиро» — ${gapShchyro}` : ""}{gapShchyro && gapCabinet ? ";" : ""}{gapCabinet ? ` без кабінету платформи — ${gapCabinet}` : ""}. Причина й що зробити — на сторінці <Link href="/shchyro?tab=access">Бот «Щиро» → Доступ</Link>.</Alert>}
       <Toolbar><form method="get" className="row-actions"><AutoSubmitSelect name="offer" defaultValue={sp.offer ?? ""} className="btn" ariaLabel="Оффер"><option value="">Клуб: усі оффери</option>{offers.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}</AutoSubmitSelect>

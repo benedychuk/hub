@@ -20,8 +20,9 @@ export async function navCounts() {
       (select count(*) from subscriptions where status in (${sql.join(ACTIVE.map((x) => sql`${x}`), sql`, `)}))::int as subs,
       (select count(*) from funnels where is_active = true and kind = 'funnel')::int as funnels,
       (select count(*) from funnels where kind = 'product')::int as products,
-      (select count(*) from events where type = 'bot.message' and created_at >= ${new Date(Date.now() - 7 * 86400000)})::int as chats`)).rows as { people: number; subs: number; funnels: number; products: number; chats: number }[];
-    return { people: r.people, subs: r.subs, funnels: r.funnels, products: r.products, chats: r.chats };
+      (select count(*) from events where type = 'bot.message' and created_at >= ${new Date(Date.now() - 7 * 86400000)})::int as chats,
+      (select count(*) from assistant_tickets where status = 'open')::int as assistant`)).rows as { people: number; subs: number; funnels: number; products: number; chats: number; assistant: number }[];
+    return { people: r.people, subs: r.subs, funnels: r.funnels, products: r.products, chats: r.chats, assistant: r.assistant };
   }, {} as Record<string, number>);
 }
 

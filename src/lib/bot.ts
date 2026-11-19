@@ -230,6 +230,9 @@ export function getBot() {
     if (m.text?.startsWith("/")) { const r = await onCommand(personId, m.text.slice(1).split(/[\s@]/)[0]); if (r !== null) { if (r) await ctx.reply(r); return; } }
     if (m.text || m.caption || med) { if (await onFreeText(personId, m.text ?? m.caption ?? `[${med?.kind ?? "медіа"}]`)) { await ctx.reply("Дякую, відповідь збережено 🤍"); return; } }
     if (m.text) { const f = await matchEntry("keyword", m.text); if (f) { await enroll(f.id, personId, "keyword"); await processDue(5); return; } }
+    // асистентка «Олеся» (якщо увімкнена в «Асистент»): відповідає сама за ~20–80 с; інакше — як раніше
+    const { assistantTake } = await import("./assistant");
+    if (await assistantTake(personId)) return;
     await ctx.reply("Дякую! Повідомлення отримано, команда відповість у робочі години.");
   });
 
