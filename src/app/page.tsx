@@ -22,7 +22,6 @@ const monthLabel = (m: string) => MONTHS[Number(m.slice(5, 7)) - 1];
 const periodLabel = (d: number) => d >= 360 ? "рік" : d >= 89 ? "3 місяці" : d <= 15 ? "2 тижні" : d >= 28 && d <= 31 ? "місяць" : `${d} дн.`;
 const uah = (n: number) => money(Math.round(n), "UAH");
 const pct = (a: number, b: number) => b ? Math.round((a / b) * 100) : 0;
-const delta = (now: number, prev: number) => prev ? `${now >= prev ? "+" : ""}${pct(now - prev, prev)}% до попередніх 30 днів` : "попередні 30 днів: 0";
 const addMonth = (m: string, k: number) => { const [y, mm] = m.split("-").map(Number); const t = new Date(Date.UTC(y, mm - 1 + k, 1)); return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}`; };
 
 // пояснення до плиток: що це і як рахується (спливає при наведенні на «i»)
@@ -53,6 +52,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   // динаміка по місяцях: 12 місяців факту + 2 місяці прогнозу; поточний місяць — факт + прогноз до кінця
   const fc = new Map((d?.forecast ?? []).map((f) => [f.m, f]));
   const flow = d?.flow ?? [];
+  // учасниці за оплатами: зараз і на кінець минулого місяця — для плашки зміни на плитці «Активні учасниці»
+  const flowNow = flow.find((f) => f.m === kyivMonth(Date.now()));
+  const flowPrevMonth = flow.find((f) => f.m === addMonth(kyivMonth(Date.now()), -1));
   const months = [...flow.map((f) => f.m), addMonth(thisMonth, 1), addMonth(thisMonth, 2)];
   const mCats: Cat[] = months.map((m) => ({ key: m, label: monthLabel(m), sub: m.slice(5, 7) === "01" || m === months[0] ? m.slice(0, 4) : undefined, dim: m > thisMonth }));
   const revVals: Record<string, Record<string, number>> = {};
@@ -92,16 +94,23 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <span className="fld-h">{offerName ? `Показано лише «${offerName}»: підписки й платежі цього оффера (Hub і прив'язані оффери ZenEdu).` : `ZenEdu і Hub разом, без тестових оплат. Суми в гривнях, долари за курсом ${USD_UAH} грн.${d?.syncOkAt ? ` Дані ZenEdu на ${dateTime(d.syncOkAt)}.` : ""}`}</span></form></Toolbar>
 
       <div className="grid g4" style={{ marginBottom: 16 }}>
-        <Stat label="Активні учасниці клубу" info={INFO.members} value={d?.members ?? "—"} hint={d ? `ZenEdu ${d.zenOnly} · Hub ${d.hubOnly}${d.both ? ` · в обох ${d.both}` : ""} · з них пробних ${d.trialing}` : ""} />
-        <Stat label="Нових підписок за 30 днів" info={INFO.starts} value={d?.starts30 ?? "—"} hint={d ? `ZenEdu ${d.startsZen} · Hub ${d.startsHub} · ${delta(d.starts30, d.startsPrev)}` : ""} tone={d ? (d.starts30 < d.startsPrev ? "crit" : "good") : undefined} />
-        <Stat label="Зібрано за 30 днів" info={INFO.revenue} value={d ? uah(d.revUah) : "—"} hint={d ? `ZenEdu ${uah(d.revZen)} · Hub ${uah(d.revHub)}${d.revUsd ? ` · з них ${money(d.revUsd, "USD")} за курсом ${d.usdRate}` : ""} · ${d.revCount} оплат` : ""} />
-        <Stat label="Отримано за поточний місяць" info={INFO.month} value={d ? uah(d.month.uah) : "—"} hint={d ? `ZenEdu ${uah(d.month.zen)} · Hub ${uah(d.month.hub)} · ${d.month.prev ? `${d.month.uah >= d.month.prev ? "+" : ""}${pct(d.month.uah - d.month.prev, d.month.prev)}% до тих самих днів минулого місяця` : "минулого місяця за ці дні: 0"}` : ""} tone={d && d.month.prev ? (d.month.uah < d.month.prev ? "crit" : "good") : undefined} />
+        <Stat label="Активні учасниці клубу" info={INFO.members} value={d?.members ?? "—"} hint={d ? `ZenEdu ${d.zenOnly} · Hub ${d.hubOnly}${d.both ? ` · в обох ${d.both}` : ""} · з них пробних ${d.trialing}` : ""}
+          change={flowNow && flowPrevMonth ? { now: flowNow.members, prev: flowPrevMonth.members, title: `До кінця минулого місяця (${flowPrevMonth.members} учасниць за оплатами)` } : undefined} />
+        <Stat label="Нових підписок за 30 днів" info={INFO.starts} value={d?.starts30 ?? "—"} hint={d ? `ZenEdu ${d.startsZen} · Hub ${d.startsHub} · попередні 30 днів: ${d.startsPrev}` : ""}
+          change={d ? { now: d.starts30, prev: d.startsPrev, title: "До попередніх 30 днів" } : undefined} />
+        <Stat label="Зібрано за 30 днів" info={INFO.revenue} value={d ? uah(d.revUah) : "—"} hint={d ? `ZenEdu ${uah(d.revZen)} · Hub ${uah(d.revHub)}${d.revUsd ? ` · з них ${money(d.revUsd, "USD")} за курсом ${d.usdRate}` : ""} · ${d.revCount} оплат` : ""}
+          change={d ? { now: d.revUah, prev: d.revPrevUah, title: `До попередніх 30 днів (${uah(d.revPrevUah)})` } : undefined} />
+        <Stat label="Отримано за поточний місяць" info={INFO.month} value={d ? uah(d.month.uah) : "—"} hint={d ? `ZenEdu ${uah(d.month.zen)} · Hub ${uah(d.month.hub)} · минулого місяця за ці дні ${uah(d.month.prev)}` : ""}
+          change={d ? { now: d.month.uah, prev: d.month.prev, title: `До тих самих днів минулого місяця (${uah(d.month.prev)})` } : undefined} />
       </div>
       <div className="grid g4" style={{ marginBottom: 16 }}>
         <Stat label="Щомісячний дохід (MRR)" info={INFO.mrr} value={d ? uah(d.mrrUah) : "—"} hint={d ? `потенціал автопродовжень${d.mrrUsd ? ` · з них ${money(d.mrrUsd, "USD")} за курсом ${d.usdRate}` : ""}` : ""} />
-        <Stat label="ARPU за 90 днів" info={INFO.arpu} value={d ? uah(d.arpu90) : "—"} hint={d ? `≈ ${uah(d.arpu90 / 3)} на місяць · ${uah(d.arpu90Uah)} / ${d.arpu90People} учасниць` : ""} />
-        <Stat label="Пішли за 30 днів" info={INFO.left} value={d?.left ?? "—"} hint={d ? `${pct(d.left, d.members + d.left)}% від учасниць · нових за той час ${d.starts30}` : ""} tone={d && d.left > d.starts30 ? "crit" : undefined} />
-        <Stat label="Запустили Hub-бот за 30 днів" info={INFO.bot} value={d?.bot.d30 ?? "—"} hint={d ? `усього ${d.bot.total} · ${delta(d.bot.d30, d.bot.prev)}` : ""} />
+        <Stat label="ARPU за 90 днів" info={INFO.arpu} value={d ? uah(d.arpu90) : "—"} hint={d ? `≈ ${uah(d.arpu90 / 3)} на місяць · ${uah(d.arpu90Uah)} / ${d.arpu90People} учасниць` : ""}
+          change={d ? { now: d.arpu90, prev: d.arpu90Prev, title: `До попередніх 90 днів (${uah(d.arpu90Prev)})` } : undefined} />
+        <Stat label="Пішли за 30 днів" info={INFO.left} value={d?.left ?? "—"} hint={d ? `${pct(d.left, d.members + d.left)}% від учасниць · нових за той час ${d.starts30}` : ""}
+          change={d ? { now: d.left, prev: d.leftPrev, lowerIsBetter: true, title: `До попередніх 30 днів (${d.leftPrev}); зростання — погано` } : undefined} />
+        <Stat label="Запустили Hub-бот за 30 днів" info={INFO.bot} value={d?.bot.d30 ?? "—"} hint={d ? `усього ${d.bot.total} · попередні 30 днів: ${d.bot.prev}` : ""}
+          change={d ? { now: d.bot.d30, prev: d.bot.prev, title: "До попередніх 30 днів" } : undefined} />
       </div>
 
       <Section title="Динаміка клубу по місяцях" description={d ? `Оборот за оплатами ZenEdu і Hub (київський час). Нова — перша оплата людини; повернулась — оплата після перерви; продовження — без перерви. Прогноз — очікувані списання чинних підписок з урахуванням того, скільки зазвичай продовжують: ${pct(d.rates.renewed, d.rates.due)}% оплачених і ${pct(d.rates.trial_paid, d.rates.trial_due)}% пробних за останні 150 днів.` : ""}>
