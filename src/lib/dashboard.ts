@@ -142,6 +142,18 @@ export async function buildDashboard(offerKey?: string) {
     from (select seq.*, (not is_trial and monthly and (kind = 'subscription_start' or (prev_trial is true and prev_at > created_at - interval '45 days'))) as first_full from seq) x`));
   const q9 = run(d.execute(sql`select o.currency as cur, o.source, coalesce(sum(o.price),0)::text as sum, coalesce(sum(o.price * ${rateSql("o")}),0)::text as uah, count(*)::int as c from orders o
     where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= now() - interval '30 days' and ${scopeO} and ${notTestOrder("o")} group by 1, 2`));
+  // отримано за поточний календарний місяць (київський час), ті самі правила, що «Зібрано за 30 днів»; і минулий місяць до того самого дня
+  const q12 = run(d.execute(sql`with b as (select date_trunc('month', now() at time zone 'Europe/Kyiv') as m0,
+        (now() at time zone 'Europe/Kyiv') - date_trunc('month', now() at time zone 'Europe/Kyiv') as passed)
+    select
+      coalesce(sum(o.price * ${rateSql("o")}) filter (where coalesce(o.paid_at, o.created_at) >= b.m0 at time zone 'Europe/Kyiv'), 0)::text as uah,
+      coalesce(sum(o.price * ${rateSql("o")}) filter (where o.source = 'zenedu' and coalesce(o.paid_at, o.created_at) >= b.m0 at time zone 'Europe/Kyiv'), 0)::text as zen,
+      coalesce(sum(o.price * ${rateSql("o")}) filter (where o.source = 'hub' and coalesce(o.paid_at, o.created_at) >= b.m0 at time zone 'Europe/Kyiv'), 0)::text as hub,
+      count(*) filter (where coalesce(o.paid_at, o.created_at) >= b.m0 at time zone 'Europe/Kyiv')::int as c,
+      coalesce(sum(o.price * ${rateSql("o")}) filter (where coalesce(o.paid_at, o.created_at) >= (b.m0 - interval '1 month') at time zone 'Europe/Kyiv'
+        and coalesce(o.paid_at, o.created_at) < (b.m0 - interval '1 month' + b.passed) at time zone 'Europe/Kyiv'), 0)::text as prev
+    from orders o, b
+    where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= (b.m0 - interval '1 month') at time zone 'Europe/Kyiv' and ${scopeO} and ${notTestOrder("o")}`));
   const q10 = run(d.execute(sql`select count(*)::int as total,
       count(*) filter (where started_at >= now() - interval '30 days')::int as d30,
       count(*) filter (where started_at >= now() - interval '60 days' and started_at < now() - interval '30 days')::int as prev
@@ -198,6 +210,8 @@ export async function buildDashboard(offerKey?: string) {
   /** У гривнях (долари за курсом), за джерелом або всього. */
   const revUahOf = (source?: string) => rev.filter((r) => !source || r.source === source).reduce((a, r) => a + Number(r.uah), 0);
   const revCount = rev.reduce((a, r) => a + r.c, 0);
+  const [mo] = (await q12).rows as { uah: string; zen: string; hub: string; c: number; prev: string }[];
+  const month = { uah: Number(mo?.uah ?? 0), zen: Number(mo?.zen ?? 0), hub: Number(mo?.hub ?? 0), count: mo?.c ?? 0, prev: Number(mo?.prev ?? 0) };
 
   // ---------- Hub-бот ----------
   const [bot] = (await q10).rows as { total: number; d30: number; prev: number }[];
@@ -264,7 +278,7 @@ export async function buildDashboard(offerKey?: string) {
     arpu30: bySource.size ? Math.round(Number(period.club_uah) / bySource.size) : 0,
     arpu90: a90?.people ? Math.round(Number(a90.uah) / a90.people) : 0, arpu90People: a90?.people ?? 0, arpu90Uah: Number(a90?.uah ?? 0),
     starts30: period.starts, startsZen: period.starts_zen, startsHub: period.starts_hub, startsPrev: period.starts_prev, renews30: period.renews,
-    revUah: revUahOf(), revUsd: revOf("USD"), revZen: revUahOf("zenedu"), revHub: revUahOf("hub"), revCount, usdRate: USD_UAH,
+    month, revUah: revUahOf(), revUsd: revOf("USD"), revZen: revUahOf("zenedu"), revHub: revUahOf("hub"), revCount, usdRate: USD_UAH,
     bot: bot ?? { total: 0, d30: 0, prev: 0 },
     days14, flow: flowRows, pRenew, pTrial, rates: rates ?? { due: 0, renewed: 0, trial_due: 0, trial_paid: 0 }, forecast: [...forecast.entries()].map(([m, f]) => ({ m, ...f })).sort((a, b) => a.m.localeCompare(b.m)),
     tariffs: tariffRows, mrrUah, mrrUsd, zenRenewPrice,
