@@ -47,7 +47,7 @@ export async function saveOffer(fd: FormData) {
     row = { ...row,
       salesEndAt: dt(fd, "salesEndAt"), spotsLimit: Number(fd.get("spotsLimit") || 0) || null,
       settings: { ...old, removeContentOnEnd: on(fd, "removeContentOnEnd"), postPurchaseText: str(fd, "postPurchaseText").slice(0, 4000) || undefined, retries: on(fd, "retries"), reminder: on(fd, "reminder"),
-        expiryReminder: on(fd, "expiryReminder"), expiryDays: Math.max(1, Number(fd.get("expiryDays") || 3)), expiryText: str(fd, "expiryText").slice(0, 1000) || undefined, renewalOfferId: Number(fd.get("renewalOfferId") || 0) || undefined, collectEmail: on(fd, "collectEmail") },
+        expiryReminder: on(fd, "expiryReminder"), expiryDays: Math.max(1, Number(fd.get("expiryDays") || 3)), expiryText: str(fd, "expiryText").slice(0, 1000) || undefined, renewalOfferId: Number(fd.get("renewalOfferId") || 0) || undefined, collectEmail: on(fd, "collectEmail"), allowZenMembers: on(fd, "allowZenMembers") },
     };
   }
   let oid = id;
