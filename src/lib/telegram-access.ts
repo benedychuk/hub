@@ -194,7 +194,12 @@ export async function processGrants(limit = 30) {
       where e.resource_key = ${r.key} and e.revoked_at is null and (e.valid_until is null or e.valid_until > now())
         and (m.id is null or m.status in ('none','left','kicked') or (m.status = 'invited' and m.invite_expires_at < now()))
         -- виключив інший адміністратор (напр., бот ZenEdu) після нашого запрошення: автоматично не повторюємо, щоб не ходити по колу; видно в «Конфліктах ZenEdu і Hub»
-        and not exists (select 1 from events x where x.person_id = e.person_id and x.type = 'channel.removed_by_other' and x.payload->>'resource' = ${r.key} and x.created_at > coalesce(m.invited_at, '-infinity'::timestamptz))
+        and (not exists (select 1 from events x where x.person_id = e.person_id and x.type = 'channel.removed_by_other' and x.payload->>'resource' = ${r.key} and x.created_at > coalesce(m.invited_at, '-infinity'::timestamptz))
+          -- переведена з ZenEdu (дні перенесено в Hub): ZenEdu виключає її, коли закінчується скасована там підписка, — Hub запрошує знову,
+          -- але не більше одного разу після переведення, щоб не ходити по колу, якщо ZenEdu продовжить виключати
+          or (exists (select 1 from events cv where cv.person_id = e.person_id and cv.type = 'subscription.zen_carryover')
+            and (select count(*) from events x2 where x2.person_id = e.person_id and x2.type = 'channel.removed_by_other' and x2.payload->>'resource' = ${r.key}
+              and x2.created_at > (select max(cv2.created_at) from events cv2 where cv2.person_id = e.person_id and cv2.type = 'subscription.zen_carryover')) <= 1))
       limit ${limit}`);
     for (const row of due.rows as { person_id: number }[]) {
       const ok = await inviteOne(r, cfg, row.person_id);

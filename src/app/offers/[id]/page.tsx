@@ -119,6 +119,9 @@ export default async function OfferEditor({ params, searchParams }: { params: Pr
           <Section title="Обмеження продажів">
             <FormRow><Field label="Продажі до" hint="після цієї дати оплата недоступна"><input name="salesEndAt" type="datetime-local" defaultValue={toDateTimeInput(pl.salesEndAt)} /></Field><Field label="Кількість місць" hint={`зайнято ${d!.spots}; порожньо = без обмеження`}><input name="spotsLimit" type="number" min={0} defaultValue={pl.spotsLimit ?? ""} /></Field></FormRow>
           </Section>
+          <Section title="Учасниці ZenEdu" description="За замовчуванням людям з активною підпискою ZenEdu оплата в Hub не показується, щоб не було подвійних списань.">
+            <Switch name="allowZenMembers" defaultChecked={Boolean(st.allowZenMembers)} label="Доступно учасницям ZenEdu" hint="кнопку оплати бачать і ті, хто має активну підписку ZenEdu. Якщо оффер відкриває канал клубу, дні, що лишились у ZenEdu, додаються до періоду в Hub, а команда отримує звернення скасувати ZenEdu" />
+          </Section>
           <Section title="Доступ до продуктів">
             <Switch name="removeContentOnEnd" defaultChecked={Boolean(st.removeContentOnEnd)} label="Прибрати надіслані кроки з бота, коли доступ закінчиться" hint="повідомлення продуктів видаляються в чаті з ботом; канали закриваються за правилами каналу" />
           </Section>

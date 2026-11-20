@@ -86,6 +86,9 @@ export type OfferSettings = {
   expiryReminder?: boolean;       // нагадування про закінчення доступу (разова оплата з обмеженим доступом)
   expiryDays?: number; expiryText?: string; renewalOfferId?: number;
   collectEmail?: boolean;         // просити email на сторінці оплати
+  // учасниці з чинною підпискою ZenEdu теж бачать оплату цього оффера; якщо оффер відкриває клуб — дні ZenEdu переносяться в Hub,
+  // а команда отримує звернення скасувати ZenEdu (переведення в Hub без подвійних списань). Вмикає власник для конкретного оффера.
+  allowZenMembers?: boolean;
 };
 // Оффер Hub (ZenEdu Offer): те, що продається — набір продуктів і каналів, тип оплати, ціна, інтервал, тривалість доступу.
 export const plans = pgTable("plans", {

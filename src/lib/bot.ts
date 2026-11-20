@@ -162,10 +162,11 @@ export function getBot() {
     const list = await db().select().from(plans).where(and(eq(plans.isActive, true), eq(plans.showInBot, true))).orderBy(plans.sortOrder, plans.id);
     if (!list.length) { await ctx.reply("Тарифи ще не налаштовані."); return; }
     const text = list.map((p) => `${p.isFeatured ? "⭐ " : ""}${p.name} — ${priceLabel(p)}${p.paymentType === "one_time" ? ` разово · доступ ${accessLabel(p)}` : ""}` + (p.paymentType !== "one_time" && p.trialDays ? `\n  пробний: ${p.trialDays} дн${p.trialPrice ? ` за ${money(p.trialPrice, p.currency)}` : ""}` : "")).join("\n\n");
-    const allowed = await paymentsAllowedFor(personId);
-    if (!allowed) { await ctx.reply("Тарифи клубу:\n\n" + text + "\n\n" + await paymentBlockedText(personId)); return; }
+    // кнопки — лише для офферів, які людині можна оплатити (учасницям ZenEdu — офферам із «Доступно учасницям ZenEdu»)
+    const payable = (await Promise.all(list.map(async (p) => ((await paymentsAllowedFor(personId, p)) ? p : null)))).filter((p): p is (typeof list)[number] => Boolean(p));
+    if (!payable.length) { await ctx.reply("Тарифи клубу:\n\n" + text + "\n\n" + await paymentBlockedText(personId)); return; }
     const kb = new InlineKeyboard();
-    for (const p of list) kb.url(`${p.design?.buttonText || "Оплатити"}: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
+    for (const p of payable) kb.url(`${p.design?.buttonText || "Оплатити"}: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
     await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці WayForPay. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });
   };
   bot.command("plans", (ctx) => showPlans(ctx as unknown as Ctx));
@@ -270,7 +271,7 @@ export async function sendOfferMessage(chatId: number, personId: number, planId:
   if (!pl || !pl.isActive) { await api.sendMessage(chatId, "Цей оффер зараз недоступний."); return false; }
   const d = pl.design ?? {};
   const title = d.titleMode === "custom" && d.title ? d.title : pl.name;
-  const allowed = await paymentsAllowedFor(personId);
+  const allowed = await paymentsAllowedFor(personId, pl);
   const [who] = hasVars(d.description) ? await db().select().from(persons).where(eq(persons.id, personId)) : [];
   const text = `<b>${escapeHtml(title)}</b>` + (d.description ? "\n\n" + fillVars(d.description, who, { html: true }) : "") + `\n\n${escapeHtml(priceLabel(pl))}${pl.paymentType === "one_time" ? ` · доступ ${escapeHtml(accessLabel(pl))}` : ""}` + (allowed ? "" : "\n\n" + escapeHtml(await paymentBlockedText(personId)));
   const kb = allowed ? new InlineKeyboard().url(d.buttonText || "Оплатити", payLink(personId, pl.key, "first")) : undefined;

@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { createHmac } from "crypto";
 import { db, schema } from "@/db";
+import type { OfferSettings } from "@/db/schema";
 import { appUrl, botToken, sendToPerson } from "./bot";
 import { accessTick, syncEntitlementsFromSubscriptions, enforcedChannelKeys, inviteAfterPayment } from "./telegram-access";
 import { creds, charge as wfpCharge, refund as wfpRefund, purchaseForm, verifyResponse, type Creds, type WfpResponse } from "./wayforpay";
@@ -63,11 +64,13 @@ export async function hasActiveZenSub(personId: number) {
  * «Оплати увімкнено для учасниць» — усі; «Оплати для нових людей» — ті, у кого немає чинної підписки в ZenEdu.
  * Адміністратор (ADMIN_TELEGRAM_ID) і тестувальники бачать оплату завжди.
  */
-export async function paymentsAllowedFor(personId: number) {
+export async function paymentsAllowedFor(personId: number, plan?: { settings?: OfferSettings | null } | null) {
   const st = await paymentSettings(); if (st.enabled) return true;
   const [p] = await db().select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, personId));
   if (p && (p.tg === adminTelegramId() || st.testers.includes(p.tg))) return true;
-  return st.newPeople && !(await hasActiveZenSub(personId));
+  if (!st.newPeople) return false;
+  // учасниці ZenEdu — лише на офферах, де власник увімкнув «Доступно учасницям ZenEdu» (переведення в Hub)
+  return !(await hasActiveZenSub(personId)) || Boolean(plan?.settings?.allowZenMembers);
 }
 /** Що сказати людині, якій оплата в боті зараз недоступна. */
 export async function paymentBlockedText(personId: number) {
@@ -77,8 +80,8 @@ export async function paymentBlockedText(personId: number) {
 }
 export async function beginPayment(personId: number, planKey: string, kind: "first" | "card" | "migrate") {
   const d = db();
-  if (!(await paymentsAllowedFor(personId))) throw new Error("Оплати ще не увімкнені. Спробуйте пізніше.");
   const [pl] = await d.select().from(plans).where(eq(plans.key, planKey)); if (!pl || !pl.isActive) throw new Error("Тариф недоступний");
+  if (!(await paymentsAllowedFor(personId, kind === "first" ? pl : null))) throw new Error("Оплати ще не увімкнені. Спробуйте пізніше.");
   const [p] = await d.select().from(persons).where(eq(persons.id, personId)); if (!p) throw new Error("Людину не знайдено");
   const s = await paymentSettings(); const c = creds(s.mode);
   const av = await offerAvailability(pl); if (!av.ok) throw new Error(av.reason);
@@ -154,7 +157,11 @@ async function onApproved(a: Attempt, r: WfpResponse, c: Creds) {
     const oneTime = pl?.paymentType === "one_time";
     const trial = Boolean(pl && !oneTime && pl.trialDays > 0 && !hubSub && a.kind === "first");
     const extend = hubSub?.currentPeriodEnd && hubSub.currentPeriodEnd > now && (a.kind === "manual" || oneTime);
-    const base = extend ? hubSub!.currentPeriodEnd! : now;
+    // переведення з ZenEdu (оффер із «Доступно учасницям ZenEdu», що відкриває клуб): оплачені дні ZenEdu не губляться —
+    // період Hub починається з кінця підписки ZenEdu, а команда отримує звернення скасувати ZenEdu
+    const zenCarry = a.kind === "first" && pl?.settings?.allowZenMembers && (await opensClub(pl.entitlements)) ? await liveZenSub(a.personId) : null;
+    const base0 = extend ? hubSub!.currentPeriodEnd! : now;
+    const base = zenCarry?.currentPeriodEnd && zenCarry.currentPeriodEnd > base0 ? zenCarry.currentPeriodEnd : base0;
     const end = oneTime ? (pl ? accessEndFor(pl, base) : null) : addDays(base, trial ? pl!.trialDays : periodDays);
     const row = { planId: pl?.id ?? hubSub?.planId ?? null, kind: oneTime ? "one_time" : "subscription", accessLinkId: null, status: trial ? "trialing" : "active", price: pl ? String(pl.price) : hubSub?.price ?? a.amount, currency: a.currency, periodDays: oneTime ? (pl?.accessDays ?? 0) : periodDays, currentPeriodEnd: end, nextChargeAt: oneTime || !end ? null : chargeTime(end), nextRetryAt: null, retryCount: 0, cancelAtPeriodEnd: false, pausedAt: null, cancelledAt: null, paymentMethodId: pm?.id ?? hubSub?.paymentMethodId ?? null, lastPaymentAt: now, paymentsCount: (hubSub?.paymentsCount ?? 0) + 1, startedAt: hubSub?.startedAt ?? now, updatedAt: now };
     const [s] = hubSub ? await d.update(subscriptions).set(row).where(eq(subscriptions.id, hubSub.id)).returning() : await d.insert(subscriptions).values({ personId: a.personId, source: "hub", ...row }).returning();
@@ -164,7 +171,8 @@ async function onApproved(a: Attempt, r: WfpResponse, c: Creds) {
     // порядок повідомлень: підтвердження → одразу посилання в клуб (канал) → текст після покупки; кабінет створюється мовчки, посилання на нього дає воронка
     const channels = await enforcedChannelKeys(Object.keys(pl?.entitlements ?? {})).catch(() => [] as string[]);
     const what = channels.length ? "Нижче посилання для входу в клуб." : pl?.products?.length ? "Матеріали з'являться в цьому боті за хвилину." : "";
-    await notify(a.personId, `Оплату отримано: ${money(a.amount, a.currency)}. Доступ до «${pl?.name ?? "клубу"}» ${end ? `діє до ${end.toLocaleDateString("uk-UA")}` : "безстроковий"}.${pl?.accessMode === "none" && oneTime ? "" : what ? ` ${what}` : ""}`);
+    await notify(a.personId, `Оплату отримано: ${money(a.amount, a.currency)}. Доступ до «${pl?.name ?? "клубу"}» ${end ? `діє до ${end.toLocaleDateString("uk-UA")}` : "безстроковий"}.${pl?.accessMode === "none" && oneTime ? "" : what ? ` ${what}` : ""}${zenCarry && end ? ` Дні, що лишались у вашій попередній підписці, ми зберегли, тож доступ діє до ${end.toLocaleDateString("uk-UA")}. Попередню підписку скасуємо самі, щоб не було подвійних списань.` : ""}`);
+    if (zenCarry) await zenCarryover(a.personId, zenCarry, pl!.name, end, s.id).catch(() => null);
     if (channels.length) { await syncEntitlementsFromSubscriptions().catch(() => null); await inviteAfterPayment(a.personId, channels).catch(() => null); }
     const pp = pl?.settings?.postPurchaseText?.trim();
     if (pp) { try { await sendToPerson(a.personId, pp, { html: true }); } catch { /* бот не запущений */ } }
@@ -200,6 +208,29 @@ async function recordOrder(a: Attempt, s: Sub, name: string, type: string) {
   const [o] = await d.insert(orders).values({ source: "hub", personId: a.personId, planId: a.planId ?? s.planId ?? null, offerName: name, type, price: a.amount, currency: a.currency, status: "paid", paymentSystem: "wayforpay", paidAt: new Date() }).returning();
   await d.update(paymentAttempts).set({ orderId: o.id, subscriptionId: s.id }).where(eq(paymentAttempts.id, a.id));
   return o;
+}
+/** Чи відкриває оффер клуб (канал або групу). */
+async function opensClub(ents: Record<string, string> | null | undefined) {
+  const keys = Object.keys(ents ?? {}); if (!keys.length) return false;
+  const r = await db().select({ k: schema.resources.key }).from(schema.resources).where(and(inArray(schema.resources.key, keys), inArray(schema.resources.kind, ["telegram_channel", "telegram_group"])));
+  return r.length > 0;
+}
+/** Чинна підписка ZenEdu людини (оплачений період ще не закінчився) — найпізніша. */
+async function liveZenSub(personId: number) {
+  const [z] = await db().select().from(subscriptions).where(and(eq(subscriptions.personId, personId), eq(subscriptions.source, "zenedu"),
+    sql`${subscriptions.status} not in ('paused','refunded') and ${subscriptions.currentPeriodEnd} > now()`)).orderBy(desc(subscriptions.currentPeriodEnd)).limit(1);
+  return z ?? null;
+}
+/** Переведення з ZenEdu: подія в історії й звернення команді скасувати підписку ZenEdu (без повернення — дні вже зараховано в Hub). */
+async function zenCarryover(personId: number, zen: typeof subscriptions.$inferSelect, planName: string, hubEnd: Date | null, hubSubId: number) {
+  const days = zen.currentPeriodEnd ? Math.max(0, Math.round((zen.currentPeriodEnd.getTime() - Date.now()) / 86400_000)) : 0;
+  const fmt = (d: Date | null) => d ? d.toLocaleDateString("uk-UA", { timeZone: KYIV }) : "—";
+  await db().insert(events).values({ personId, type: "subscription.zen_carryover", source: "hub", payload: { zenSubId: zen.id, hubSubId, days, zenEnd: zen.currentPeriodEnd, hubEnd } });
+  const cancelled = zen.status === "cancelled" || zen.cancelAtPeriodEnd;
+  const { createTicket } = await import("./assistant");
+  await createTicket(personId, { kind: "zenedu", summary: cancelled
+    ? `Переведення в Hub: оплатила «${planName}». Підписка ZenEdu вже скасована (оплачено до ${fmt(zen.currentPeriodEnd)}), ${days} дн. зараховано в Hub: доступ до ${fmt(hubEnd)}. Дій у ZenEdu не потрібно; перевірте, що ZenEdu не виключить її з каналу.`
+    : `Переведення в Hub: оплатила «${planName}». Скасуйте підписку ZenEdu (оплачено до ${fmt(zen.currentPeriodEnd)}) БЕЗ повернення коштів: ${days} дн. уже зараховано в Hub, доступ до ${fmt(hubEnd)}. Людині сказано, що попередню підписку скасуємо самі.` });
 }
 async function notify(personId: number, text: string) { try { await sendToPerson(personId, text); } catch { /* бот не запущений */ } }
 /** Після оплати кабінет платформи створюється мовчки: посилання на нього людина отримує у воронці (кнопка «Особистий кабінет») або командою /cabinet. */
