@@ -72,7 +72,6 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const flowVals: Record<string, Record<string, number>> = Object.fromEntries(flow.map((f) => [f.m, { new: f.new, returned: f.returned, churned: f.churned }]));
   // поточний місяць — те саме число, що на плитці «Активні учасниці» (за чинними підписками); минулі — за оплатами на кінець місяця
   const memberPoints = flow.map((f) => ({ key: f.m, label: monthLabel(f.m), value: f.m === thisMonth && d ? d.members : f.members, note: f.m === thisMonth ? "станом на зараз" : "на кінець місяця" }));
-  const nextMonth = fc.get(addMonth(thisMonth, 1));
 
   const dayCats: Cat[] = [...(d?.last14 ?? [])].reverse().map((x) => ({ key: x.day, label: `${x.day.slice(8, 10)}.${x.day.slice(5, 7)}` }));
   const dayVals = Object.fromEntries((d?.last14 ?? []).map((x) => [x.day, { new: x.starts, renew: x.renews }]));
@@ -141,11 +140,10 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             <ShareBar ariaLabel="Учасниці за станом оплати" parts={[{ name: "платять з автопродовженням", value: paidRenewing, color: "var(--c2)" }, { name: "пробний період", value: d.trialing, color: "var(--c2)", hatch: true }, { name: "без автопродовження", value: d.noRenew, color: "var(--c-muted)" }]} />
           </> : <EmptyState title="Немає учасниць із чинним доступом" />}
         </Section>
-        <Section title="Конверсії" description="Когорти, у яких уже минув час продовжити: пробні 17–90 днів тому, перші повні місяці 34–120 днів тому.">
+        <Section title="Конверсії" description="Лише ті, у кого вже була спроба списання. Пробні — оплачені за 90 днів, пробний період закінчився; перші повні місяці — оплачені за 180 днів, настала дата другого списання. Продовження зараховується, якщо оплата прийшла протягом 14 днів після дати списання.">
           {d ? <HBars format="pct" max={100} rows={[
             { name: "Пробний → 1-й повний місяць", value: pct(d.conv.trials_paid, d.conv.trials), note: `${d.conv.trials_paid} з ${d.conv.trials} пробних оплатили повний місяць`, color: "var(--c1)" },
             { name: "1-й → 2-й місяць", value: pct(d.conv.firsts_paid, d.conv.firsts), note: `${d.conv.firsts_paid} з ${d.conv.firsts} оплатили другий місяць`, color: "var(--c1)" },
-            { name: "Продовжують щомісяця", value: pct(d.rates.renewed, d.rates.due), note: `${d.rates.renewed} з ${d.rates.due} оплачених періодів за 150 днів продовжено; ${nextMonth ? `на основі цього прогноз наступного місяця ${uah(nextMonth.uah)}` : ""}`, color: "var(--c2)" },
           ]} /> : null}
         </Section>
       </div>
