@@ -22,7 +22,12 @@ export const STEP_ICON: Record<string, string> = { message: "✉", lesson: "🎓
 
 export type SendTime = { mode: "no" | "immediately" | "after" | "exact" | "after_action"; value?: number; unit?: "minutes" | "hours" | "days"; day?: number; time?: string };
 export type AutoDelete = { mode: "never" | "in"; value?: number; unit?: "seconds" | "minutes" | "hours" };
-export type StepButton = { text: string; kind: "url" | "step" | "next" | "funnel" | "offer" | "tag" | "option" | "cabinet"; target?: string; tag?: string; correct?: boolean };
+/**
+ * subscribe — «Перевірити підписку на канал»: channel — ключ каналу з «Канали і групи» (Hub-бот має бути адміністратором);
+ * target — крок після успішної перевірки (порожньо = наступний); notice — текст віконця, якщо підписки немає;
+ * skip — крок із перевіркою не надсилається тим, хто вже підписаний: одразу йде крок target.
+ */
+export type StepButton = { text: string; kind: "url" | "step" | "next" | "funnel" | "offer" | "tag" | "option" | "cabinet" | "subscribe"; target?: string; tag?: string; correct?: boolean; channel?: string; notice?: string; skip?: boolean };
 export type StepConfig = {
   sendTime?: SendTime;
   autodelete?: AutoDelete;
@@ -295,7 +300,17 @@ async function afterSend(e: typeof funnelEnrollments.$inferSelect, step: typeof 
   return "next";
 }
 
-async function deliver(e: typeof funnelEnrollments.$inferSelect, step: typeof funnelSteps.$inferSelect, fs: FunnelSettings) {
+async function deliver(e: typeof funnelEnrollments.$inferSelect, step: typeof funnelSteps.$inferSelect, fs: FunnelSettings, depth = 0): Promise<boolean> {
+  // крок «Підпишіться на канал» із пропуском: хто вже підписаний, одразу отримує крок після перевірки
+  const gate = ((step.config ?? {}) as StepConfig).buttons?.find((b) => b.kind === "subscribe" && b.skip && b.channel);
+  if (gate && depth < 3 && (await isSubscribed(e.personId, gate.channel!)) === true) {
+    await db().insert(funnelDeliveries).values({ enrollmentId: e.id, stepId: step.id, personId: e.personId, telegramMessageId: null, extraMessageIds: [], deleteAt: null });
+    await addTag(e.personId, subscribedTag(gate), "funnel", { stepId: step.id, resource: gate.channel, skipped: true });
+    const next = await afterSubscribeStep(step, gate);
+    const [target] = next ? await db().select().from(funnelSteps).where(eq(funnelSteps.id, next)) : [];
+    if (target) return deliver(e, target, fs, depth + 1);
+    return true;
+  }
   const r = await sendStep(e.personId, step, Boolean(fs.contentProtection));
   if (!r) return false;
   const c = (step.config ?? {}) as StepConfig;
@@ -394,12 +409,50 @@ async function triggerAfterAction(funnelId: number, stepId: number, personId: nu
 }
 
 /** Клік по кнопці кроку. */
-export async function onButtonClick(stepId: number, btnIdx: number, personId: number): Promise<string | null> {
+/** Чи підписана людина на канал (Telegram дозволяє перевірити, лише якщо Hub-бот — адміністратор каналу). null — перевірити не вдалося. */
+export async function isSubscribed(personId: number, channelKey: string): Promise<boolean | null> {
+  const d = db();
+  const [r] = await d.select().from(schema.resources).where(eq(schema.resources.key, channelKey));
+  const chatId = (r?.config as { chatId?: string } | null)?.chatId;
+  const [p] = await d.select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, personId));
+  if (!chatId || !p?.tg) return null;
+  try {
+    const m = await getBot().api.getChatMember(chatId, Number(p.tg));
+    return ["member", "administrator", "creator"].includes(m.status) || (m.status === "restricted" && (m as { is_member?: boolean }).is_member === true);
+  } catch (e) {
+    await d.insert(events).values({ personId, type: "channel.subscribe_check_failed", source: "funnel", payload: { resource: channelKey, error: String(e).slice(0, 200) } });
+    return null;
+  }
+}
+/** Крок, який іде після успішної перевірки підписки: target або наступний за порядком. */
+async function afterSubscribeStep(step: typeof funnelSteps.$inferSelect, b: StepButton) {
+  if (b.target) return Number(b.target);
+  const steps = await activeSteps(step.funnelId);
+  const idx = steps.findIndex((s) => s.id === step.id);
+  return steps[idx + 1]?.id ?? null;
+}
+const subscribedTag = (b: StepButton) => b.tag || `підписка:${b.channel}`;
+
+export type ClickResult = string | { alert: string } | null;
+export async function onButtonClick(stepId: number, btnIdx: number, personId: number): Promise<ClickResult> {
   const d = db();
   const [step] = await d.select().from(funnelSteps).where(eq(funnelSteps.id, stepId));
   if (!step) return null;
   const c = (step.config ?? {}) as StepConfig;
   const b = c.buttons?.[btnIdx];
+  if (b?.kind === "subscribe") {
+    // перевірка підписки: стаття (наступний крок) — лише тим, хто справді в каналі
+    if (!b.channel) return { alert: "Перевірку ще не налаштовано. Напишіть нам, будь ласка" };
+    const ok = await isSubscribed(personId, b.channel);
+    if (ok === null) return { alert: "Не вдалося перевірити підписку. Спробуйте, будь ласка, ще раз за хвилину" };
+    await d.insert(events).values({ personId, type: ok ? "channel.subscribe_ok" : "channel.subscribe_missing", source: "funnel", payload: { resource: b.channel, stepId } });
+    if (!ok) return { alert: (b.notice || "Ще не бачу вашої підписки. Підпишіться на канал і натисніть кнопку ще раз").slice(0, 200) };
+    await d.update(funnelDeliveries).set({ clicked: true }).where(and(eq(funnelDeliveries.stepId, stepId), eq(funnelDeliveries.personId, personId)));
+    await addTag(personId, subscribedTag(b), "funnel", { stepId, resource: b.channel });
+    const next = await afterSubscribeStep(step, b);
+    if (next) await sendStepNow(step.funnelId, next, personId);
+    return null;
+  }
   const [f] = await d.select({ name: funnels.name }).from(funnels).where(eq(funnels.id, step.funnelId));
   const steps = await activeSteps(step.funnelId);
   const idx = steps.findIndex((s) => s.id === stepId);

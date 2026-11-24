@@ -116,12 +116,13 @@ const KINDS: { k: StepButton["kind"]; label: string; hint: string }[] = [
   { k: "funnel", label: "Запустити воронку", hint: "" },
   { k: "offer", label: "Оффер / оплата", hint: "" },
   { k: "cabinet", label: "Особистий кабінет", hint: "" },
+  { k: "subscribe", label: "Перевірка підписки", hint: "" },
   { k: "tag", label: "Лише поставити тег", hint: "" },
   { k: "option", label: "Варіант відповіді", hint: "" },
 ];
 
 /** Кнопки під кроком: до 10 рядків; для тестів і опитувань — варіанти відповіді. */
-export function ButtonsEditor({ initial, steps, funnels, offers, stepType }: { initial: StepButton[]; steps: { id: number; title: string | null; position: number }[]; funnels: { id: number; name: string }[]; offers: { id: number; name: string; url: string | null }[]; stepType: string }) {
+export function ButtonsEditor({ initial, steps, funnels, offers, stepType, channels = [] }: { initial: StepButton[]; steps: { id: number; title: string | null; position: number }[]; funnels: { id: number; name: string }[]; offers: { id: number; name: string; url: string | null }[]; stepType: string; channels?: { key: string; name: string }[] }) {
   const optionOnly = stepType === "survey" || stepType === "quiz";
   const [rows, setRows] = useState<StepButton[]>(initial.length ? initial : []);
   const json = useMemo(() => JSON.stringify(rows), [rows]);
@@ -139,6 +140,7 @@ export function ButtonsEditor({ initial, steps, funnels, offers, stepType }: { i
           {b.kind === "funnel" && <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value })}><option value="">Оберіть воронку</option>{funnels.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>}
           {b.kind === "offer" && <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value })}><option value="">Оберіть оффер</option>{offers.filter((o) => o.url).map((o) => <option key={o.id} value={o.url!}>{o.name}</option>)}</select>}
           {b.kind === "cabinet" && <span className="fld-h">особисте одноразове посилання кожної людини; кабінет створиться, якщо його ще немає</span>}
+          {b.kind === "subscribe" && <select value={b.channel ?? ""} onChange={(e) => upd(i, { channel: e.target.value })} aria-label="Канал"><option value="">Оберіть канал</option>{channels.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}</select>}
           {(b.kind === "next" || b.kind === "tag" || b.kind === "option") && <input value={b.tag ?? ""} onChange={(e) => upd(i, { tag: e.target.value })} placeholder="тег за клік (порожньо = автотег)" />}
           {stepType === "quiz" && b.kind === "option" ? <label className="ck" title="Правильна відповідь"><input type="checkbox" checked={Boolean(b.correct)} onChange={(e) => upd(i, { correct: e.target.checked })} /> правильна</label> : <span />}
           <span className="row-actions">
@@ -146,6 +148,13 @@ export function ButtonsEditor({ initial, steps, funnels, offers, stepType }: { i
             <button type="button" className="btn sm ghost" disabled={i === rows.length - 1} aria-label="Нижче" onClick={() => setRows((r) => { const a = [...r]; [a[i + 1], a[i]] = [a[i], a[i + 1]]; return a; })}><ArrowDown size={14} /></button>
             <button type="button" className="btn sm danger ghost" aria-label="Прибрати" onClick={() => setRows((r) => r.filter((_, j) => j !== i))}><X size={14} /></button>
           </span>
+          {b.kind === "subscribe" && <span className="btnrow-sub">
+            <select value={b.target ?? ""} onChange={(e) => upd(i, { target: e.target.value || undefined })} aria-label="Крок після перевірки"><option value="">Після перевірки: наступний крок</option>{steps.map((s, n) => <option key={s.id} value={s.id}>Після перевірки: {n + 1}. {s.title ?? "Крок"}</option>)}</select>
+            <input value={b.notice ?? ""} onChange={(e) => upd(i, { notice: e.target.value })} maxLength={200} placeholder="Якщо не підписана: «Ще не бачу вашої підписки…»" />
+            <input value={b.tag ?? ""} onChange={(e) => upd(i, { tag: e.target.value })} placeholder="тег після підписки (порожньо = підписка:канал)" />
+            <label className="ck"><input type="checkbox" checked={Boolean(b.skip)} onChange={(e) => upd(i, { skip: e.target.checked })} /> хто вже підписаний — одразу наступний крок</label>
+            <span className="fld-h">Крок після перевірки має бути з часом надсилання «Ні: лише за кнопкою», інакше він піде й без підписки. Hub-бот має бути адміністратором каналу.</span>
+          </span>}
         </div>
       ))}
       <div className="row-actions" style={{ marginTop: 6 }}>

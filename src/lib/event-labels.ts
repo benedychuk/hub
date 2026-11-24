@@ -49,6 +49,9 @@ export function describeEvent(e: EventRow, n: Names): Described {
     case "entitlement.revoked": return { title: `Забрано право на ${resourceLabel(String(p.key ?? ""), n)}`, group: "access", tone: "warn" };
     case "channel.invited": return { title: "Надіслано посилання в канал", detail: String(p.resource ?? ""), group: "access", tone: "good" };
     case "channel.invite_undelivered": return { title: "Посилання в канал не доставлено: бот не запущено", detail: String(p.resource ?? ""), group: "access", tone: "warn" };
+    case "channel.subscribe_ok": return { title: "Перевірка підписки: підписана", detail: String(p.resource ?? ""), group: "funnel", tone: "good" };
+    case "channel.subscribe_missing": return { title: "Перевірка підписки: ще не підписана", detail: String(p.resource ?? ""), group: "funnel", tone: "warn" };
+    case "channel.subscribe_check_failed": return { title: "Не вдалося перевірити підписку", detail: `${String(p.resource ?? "")}: Hub-бот має бути адміністратором каналу`, group: "funnel", tone: "warn" };
     case "channel.kicked": return { title: "Виключено з каналу", detail: String(p.resourceKey ?? p.key ?? ""), group: "access", tone: "warn" };
     case "channel.kick_failed": return { title: "Не вдалося виключити з каналу", detail: String(p.error ?? ""), group: "access", tone: "crit" };
     case "channel.joined_without_access": return { title: "Зайшла в канал без права", detail: String(p.resourceKey ?? ""), group: "access", tone: "warn" };

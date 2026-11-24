@@ -199,10 +199,14 @@ export function getBot() {
     await enroll(Number(ctx.match[1]), p[0].id, "intro", { tag: link?.link?.tag, linkId: link?.link?.id }); await processDue(5);
   });
   bot.callbackQuery(/^fs:(\d+)(?::(\d+))?$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.from) return;
+    if (!ctx.from) { await ctx.answerCallbackQuery().catch(() => null); return; }
     const p = await db().select({ id: persons.id }).from(persons).where(eq(persons.telegramUserId, ctx.from.id));
-    if (p[0]) { const reply = await onButtonClick(Number(ctx.match[1]), Number(ctx.match[2] ?? 0), p[0].id); if (reply) await ctx.reply(reply); }
+    if (!p[0]) { await ctx.answerCallbackQuery().catch(() => null); return; }
+    const reply = await onButtonClick(Number(ctx.match[1]), Number(ctx.match[2] ?? 0), p[0].id);
+    // перевірка підписки: «ще не бачу підписки» — віконцем у Telegram, а не повідомленням у чат
+    if (reply && typeof reply === "object") { await ctx.answerCallbackQuery({ text: reply.alert, show_alert: true }).catch(() => null); return; }
+    await ctx.answerCallbackQuery().catch(() => null);
+    if (reply) await ctx.reply(reply);
   });
 
   bot.on("message", async (ctx) => {

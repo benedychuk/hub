@@ -730,3 +730,8 @@ details.chart-table { margin-top: 12px; } details.chart-table summary { cursor: 
 .msg .msg-menu { float: right; margin: -4px -6px 0 8px; }
 .msg.deleted { opacity: .55; text-decoration: line-through; }
 .msg.deleted small { text-decoration: none; }
+
+/* Кнопка «Перевірити підписку на канал»: налаштування окремим рядком під кнопкою */
+.btnrow-sub { grid-column: 1 / -1; display: grid; grid-template-columns: 1.3fr 1.6fr 1.3fr; gap: 6px; align-items: center; padding: 8px 0 4px 12px; border-left: 2px solid var(--line-2); }
+.btnrow-sub .ck, .btnrow-sub .fld-h { grid-column: 1 / -1; }
+@media (max-width: 1000px) { .btnrow-sub { grid-template-columns: 1fr; } }
