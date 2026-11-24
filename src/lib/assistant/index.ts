@@ -2,7 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { ASSISTANT_PROMPT } from "./prompt";
 import { buildCard, type CardData } from "./card";
-import { chat, llmConfigured, polish, type ChatMsg, type ToolDef } from "./llm";
+import { chat, llmConfigured, polish, trimToSentence, type ChatMsg, type ToolDef } from "./llm";
 
 /**
  * Асистентка підтримки «Олеся» в Hub-боті (docs/assistant). Етап 1: відповіді, посилання (канал, кабінет, «Щиро», оффер)
@@ -170,7 +170,18 @@ export async function handleThread(personId: number, reason: string | null, st: 
   for (let i = 0; i < 6; i++) {
     const r = await chat(st.model, msgs, TOOLS);
     await addUsage(r.usage.input, r.usage.output).catch(() => null);
-    if (!r.toolCalls.length) { finalText = r.content ?? ""; break; }
+    if (!r.toolCalls.length) {
+      finalText = r.content ?? "";
+      if (r.truncated) {
+        // відповідь обрізано лімітом — повторюємо з більшим запасом; якщо знову обрізано, лишаємо лише повні речення
+        const again = await chat(st.model, msgs, TOOLS, 12000);
+        await addUsage(again.usage.input, again.usage.output).catch(() => null);
+        if (!again.toolCalls.length && again.content) finalText = again.truncated ? trimToSentence(again.content) : again.content;
+        else finalText = trimToSentence(finalText);
+        if (again.truncated || again.toolCalls.length) await setAssistantSetting("lastError", { at: new Date().toISOString(), personId, error: "Відповідь моделі обрізано лімітом довжини: людині надіслано лише повні речення" }).catch(() => null);
+      }
+      break;
+    }
     msgs.push({ role: "assistant", content: r.content ?? null, tool_calls: r.toolCalls, ...(r.reasoningDetails?.length ? { reasoning_details: r.reasoningDetails } : {}) });
     for (const tc of r.toolCalls) {
       let args: Record<string, unknown> = {};
