@@ -227,9 +227,23 @@ export async function revokeEntitlement(fd: FormData) {
 export async function replyToPerson(fd: FormData) {
   const id = Number(fd.get("personId")); const text = str(fd, "text");
   if (!text) return;
-  const ok = await sendToPerson(id, text);
-  await db().insert(events).values({ personId: id, type: ok ? "bot.reply" : "bot.reply_failed", source: "hub", payload: { text } });
+  const { sendToPersonMsg } = await import("./bot");
+  const mid = await sendToPersonMsg(id, text).catch(() => null);
+  await db().insert(events).values({ personId: id, type: mid ? "bot.reply" : "bot.reply_failed", source: "hub", payload: { text, message_id: mid } });
   revalidatePath(`/chats`); revalidatePath(`/people/${id}`);
+}
+/** «Чати»: видалити наше повідомлення в боті в людини (відповідь команди чи асистентки). У Hub лишається позначка «видалено». */
+export async function deleteChatMessage(fd: FormData) {
+  const eventId = Number(fd.get("eventId"));
+  const [e] = await db().select().from(events).where(eq(events.id, eventId));
+  const pl = (e?.payload ?? {}) as { message_id?: number; deleted_at?: string };
+  if (!e || e.type !== "bot.reply" || !e.personId || !pl.message_id) redirect("/chats?err=" + encodeURIComponent("Це повідомлення не можна видалити: Hub не знає його номера в Telegram"));
+  const { deleteBotMessage } = await import("./bot");
+  const r = await deleteBotMessage(e.personId, pl.message_id);
+  const me = await currentUser().catch(() => null);
+  if (r.ok) await db().update(events).set({ payload: { ...pl, ...(e.payload as object), deleted_at: new Date().toISOString(), deleted_by: me?.email ?? "admin" } }).where(eq(events.id, eventId));
+  revalidatePath("/chats");
+  redirect(`/chats?p=${e.personId}&${r.ok ? "ok=" + encodeURIComponent("Повідомлення видалено в Telegram") : "err=" + encodeURIComponent(r.reason)}`);
 }
 
 export async function setupWebhook() {
@@ -1046,10 +1060,11 @@ export async function assistantTicketAction(fd: FormData) {
     if (!note) redirect("/assistant?err=" + encodeURIComponent("Напишіть вказівку для асистентки"));
     await db().update(schema.assistantTickets).set({ teamNote: note.slice(0, 2000) }).where(eq(schema.assistantTickets.id, id));
     await db().insert(events).values({ personId: t.personId, type: "assistant.team_note", source: "hub", payload: { ticketId: id, note: note.slice(0, 500), by: me?.email ?? "admin" } });
-    const { assistantWake } = await import("./assistant");
-    await assistantWake(t.personId);
+    // за замовчуванням вказівка лише зберігається: асистентка врахує її, коли людина напише; «Написати людині зараз» — повідомити результат одразу
+    const now = fd.get("sendNow") === "on";
+    if (now) { const { assistantWake } = await import("./assistant"); await assistantWake(t.personId); }
     revalidatePath("/assistant");
-    redirect("/assistant?ok=" + encodeURIComponent("Вказівку передано: асистентка виконає її протягом хвилини"));
+    redirect("/assistant?ok=" + encodeURIComponent(now ? "Вказівку передано: асистентка напише людині результат протягом хвилини" : "Вказівку збережено: асистентка врахує її, коли людина напише"));
   }
   const status = op === "reject" ? "rejected" : "done";
   await db().update(schema.assistantTickets).set({ status, resolvedBy: me?.email ?? "admin", resolvedAt: new Date() }).where(eq(schema.assistantTickets.id, id));

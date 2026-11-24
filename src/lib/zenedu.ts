@@ -9,7 +9,7 @@ export type ZenSubscriber = {
 };
 export type ZenOrder = {
   id: number; uuid: string; number: number; offer_id: number; offer_name: string; price: number; currency: string;
-  type: "subscription_start" | "subscription_renew" | "one_time"; payment_system_type: string | null; payment_system_name: string | null;
+  type: "subscription_start" | "subscription_renew" | "subscription_card_update" | "one_time"; payment_system_type: string | null; payment_system_name: string | null;
   status: string; status_changed_at: string; created_at: string; subscriber?: ZenSubscriber;
 };
 export type ZenOffer = {

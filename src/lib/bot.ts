@@ -306,15 +306,30 @@ export async function webhookInfo() {
   try { return await getBot().api.getWebhookInfo(); } catch (e) { return { error: String(e) }; }
 }
 
-export async function sendToPerson(personId: number, text: string, opts: { buttons?: { text: string; url: string }[]; protect?: boolean; disablePreview?: boolean; html?: boolean } = {}) {
+type SendOpts = { buttons?: { text: string; url: string }[]; protect?: boolean; disablePreview?: boolean; html?: boolean };
+export async function sendToPerson(personId: number, text: string, opts: SendOpts = {}) {
+  return (await sendToPersonMsg(personId, text, opts)) !== null;
+}
+/** Те саме, що sendToPerson, але повертає id повідомлення в Telegram (щоб його можна було видалити з «Чатів»); null — не доставлено. */
+export async function sendToPersonMsg(personId: number, text: string, opts: SendOpts = {}): Promise<number | null> {
   const idn = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
-  if (!idn[0]?.chatId || idn[0].blockedAt) return false;
+  if (!idn[0]?.chatId || idn[0].blockedAt) return null;
   // змінні людини ({first_name}, {{name}}, поля картки) у будь-якому тексті, що Hub надсилає людині
   if (hasVars(text)) { const [p] = await db().select().from(persons).where(eq(persons.id, personId)); text = fillVars(text, p, { html: opts.html }); }
   const kb = opts.buttons?.length ? new InlineKeyboard() : undefined;
   opts.buttons?.forEach((b) => kb!.url(b.text, b.url).row());
-  await getBot().api.sendMessage(idn[0].chatId, text, { reply_markup: kb, protect_content: opts.protect, parse_mode: opts.html ? "HTML" : undefined, link_preview_options: { is_disabled: opts.disablePreview ?? true } });
-  return true;
+  const m = await getBot().api.sendMessage(idn[0].chatId, text, { reply_markup: kb, protect_content: opts.protect, parse_mode: opts.html ? "HTML" : undefined, link_preview_options: { is_disabled: opts.disablePreview ?? true } });
+  return m.message_id;
+}
+/** Видалити повідомлення бота в чаті з людиною (Telegram дозволяє лише протягом 48 годин після надсилання). */
+export async function deleteBotMessage(personId: number, messageId: number) {
+  const [idn] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, BOT_KEY)));
+  if (!idn?.chatId) return { ok: false as const, reason: "Людина не запускала Hub-бот" };
+  try { await getBot().api.deleteMessage(idn.chatId, messageId); return { ok: true as const }; }
+  catch (e) {
+    const m = String(e);
+    return { ok: false as const, reason: /can't be deleted|message to delete not found/i.test(m) ? "Telegram не дав видалити: бот може видаляти свої повідомлення лише протягом 48 годин, або людина вже видалила чат" : m.slice(0, 200) };
+  }
 }
 
 export { sql };

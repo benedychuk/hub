@@ -36,7 +36,7 @@ export async function buildDashboard(offerKey?: string) {
 
   const clubSub: SQL = sc ? scopeSql(sc, "s") : sql`(s.source = 'zenedu' or s.plan_id in (${idList(clubPlanIds)}))`;
   const clubOrder = (a: "o" | "p"): SQL => sc ? sql.raw(`(${scopeSqlText(sc, a)})`)
-    : sql.raw(`((${a}.source = 'zenedu' and ${a}.type in ('subscription_start','subscription_renew')) or (${a}.source = 'hub' and ${a}.plan_id in (${clubPlanIds.length ? clubPlanIds.join(",") : "0"})))`);
+    : sql.raw(`((${a}.source = 'zenedu' and ${a}.type in ('subscription_start','subscription_renew','subscription_card_update')) or (${a}.source = 'hub' and ${a}.plan_id in (${clubPlanIds.length ? clubPlanIds.join(",") : "0"})))`);
   const notTestSub = sql`not (s.source = 'hub' and exists (select 1 from payment_attempts pa where pa.subscription_id = s.id and pa.mode = 'test') and not exists (select 1 from payment_attempts pa where pa.subscription_id = s.id and pa.mode = 'live'))`;
   const notTestOrder = (a: "o" | "p") => sql`not (${sql.raw(a)}.source = 'hub' and exists (select 1 from payment_attempts pa where pa.order_id = ${sql.raw(a)}.id and pa.mode = 'test'))`;
   const hubAllow = sql.raw(subscriptionAllowsSql("s", grace));
@@ -50,7 +50,7 @@ export async function buildDashboard(offerKey?: string) {
 
   const classified = sql`
     select o.id, o.source, o.price * ${rateSql("o")} as price, o.price as raw_price, o.currency, coalesce(o.paid_at, o.created_at) as created_at, o.person_id,
-      case when o.type in ('subscription_start','subscription_renew') then o.type
+      case when o.type = 'subscription_card_update' then 'subscription_renew' when o.type in ('subscription_start','subscription_renew') then o.type
            when exists (select 1 from orders p where p.person_id = o.person_id and p.status = 'paid' and p.id <> o.id and coalesce(p.paid_at, p.created_at) < coalesce(o.paid_at, o.created_at) and ${clubOrder("p")} and ${notTestOrder("p")})
            then 'subscription_renew' else 'subscription_start' end as kind,
       (o.type = 'subscription_start' and ((o.source = 'zenedu' and (lower(o.offer_name) like '%2 тижні%' or lower(o.offer_name) like '%пробн%'))

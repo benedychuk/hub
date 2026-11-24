@@ -12,7 +12,7 @@ import { dateTime, fullName, money } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 const CHIPS: [string, string][] = [["all", "Усі"], ["subscription_start", "Перші оплати"], ["subscription_renew", "Продовження"], ["one_time", "Разові"], ["trial_to_paid", "Пробний → повна оплата"], ["trial_churn", "Пробний без продовження"]];
-const TYPE_UA: Record<string, string> = { subscription_start: "перша", subscription_renew: "продовження", one_time: "разова" };
+const TYPE_UA: Record<string, string> = { subscription_start: "перша", subscription_renew: "продовження", subscription_card_update: "продовження (нова картка)", one_time: "разова" };
 const A_STATUS: Record<string, [string, string]> = { pending: ["очікує", "warn"], approved: ["оплачено", "good"], declined: ["відхилено", "crit"], expired: ["прострочено", "mute"], refunded: ["повернено", "moon"], error: ["помилка", "crit"] };
 const A_KIND: Record<string, string> = { first: "перша оплата", renewal: "автосписання", manual: "поновлення", card: "зміна картки", migrate: "переїзд" };
 
