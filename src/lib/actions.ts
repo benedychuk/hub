@@ -538,7 +538,7 @@ export async function saveStep(fd: FormData) {
   const [cur] = await db().select().from(funnelSteps).where(eq(funnelSteps.id, id)); if (!cur) return;
   const old = (cur.config ?? {}) as StepConfig;
   let buttons: StepButton[] = [];
-  try { const raw = JSON.parse(str(fd, "buttonsJson") || "[]") as Partial<StepButton>[]; buttons = raw.filter((b) => b && b.text).map((b) => ({ text: String(b.text).slice(0, 64), kind: (b.kind ?? "url") as StepButton["kind"], target: b.target ? String(b.target) : undefined, tag: b.tag ? String(b.tag) : undefined, correct: Boolean(b.correct) })); } catch { buttons = old.buttons ?? []; }
+  try { const raw = JSON.parse(str(fd, "buttonsJson") || "[]") as Partial<StepButton>[]; buttons = raw.filter((b) => b && b.text).map((b) => ({ text: String(b.text).slice(0, 64), kind: (b.kind ?? "url") as StepButton["kind"], target: b.target ? String(b.target) : undefined, tag: b.tag ? String(b.tag) : undefined, correct: Boolean(b.correct), ...(b.kind === "subscribe" ? { channel: b.channel ? String(b.channel) : undefined, notice: b.notice ? String(b.notice).slice(0, 200) : undefined, skip: Boolean(b.skip) } : {}) })); } catch { buttons = old.buttons ?? []; }
   const attachments = str(fd, "attachmentsJson") ? (JSON.parse(str(fd, "attachmentsJson")) as unknown[]).map(Number).filter((n) => n > 0) : [];
   const stMode = (str(fd, "sendMode") || "immediately") as NonNullable<StepConfig["sendTime"]>["mode"];
   const adMode = (str(fd, "autodeleteMode") || "never") as NonNullable<StepConfig["autodelete"]>["mode"];

@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/controls";
 import { ConfirmSubmit, StepText, AttachmentsPicker, ButtonsEditor, SendTimeFields, AutoDeleteFields } from "@/components/funnel-ui";
 import { StepIcon } from "@/components/step-icon";
 import { PeoplePicker } from "@/components/people-picker";
-import { navCounts, stepDetail } from "@/lib/queries";
+import { navCounts, stepDetail, resourceList } from "@/lib/queries";
 import { saveStep, deleteStep, addStep, sendStepToPeople } from "@/lib/actions";
 import { STEP_TYPES, sendTimeLabel, type StepConfig, type FunnelSettings } from "@/lib/funnels";
 
@@ -17,7 +17,9 @@ import { STANDARD_VARS as VARS } from "@/lib/vars";
 export type StepSP = { saved?: string; sent?: string; sentTo?: string; failed?: string };
 export async function StepEditorView({ id, sid, sp, kind }: { id: string; sid: string; sp: StepSP; kind: "funnel" | "product" }) {
   const product = kind === "product"; const base = product ? "/products" : "/funnels";
-  const [counts, d] = await Promise.all([navCounts(), stepDetail(Number(id), Number(sid))]);
+  const [counts, d, res] = await Promise.all([navCounts(), stepDetail(Number(id), Number(sid)), resourceList().catch(() => [])]);
+  // канали й групи, підключені в Hub, — для кнопки «Перевірити підписку на канал»
+  const channels = res.filter((r) => (r.kind === "telegram_channel" || r.kind === "telegram_group") && (r.config as { chatId?: string } | null)?.chatId).map((r) => ({ key: r.key, name: r.name }));
   if (!d || d.f.kind !== kind) notFound();
   const { f, step, steps, modules, media, allFunnels, offers, people } = d;
   const c = (step.config ?? {}) as StepConfig;
@@ -40,7 +42,7 @@ export async function StepEditorView({ id, sid, sp, kind }: { id: string; sid: s
           </Section>
           <Section title="Вкладення" description="Фото, відео, кружечок, голосове, файл, GIF або стікер із Бібліотеки."><AttachmentsPicker media={media} initial={c.attachments ?? []} /></Section>
           <Section title={isOptions ? "Варіанти відповіді" : "Кнопки"}>
-            <ButtonsEditor initial={c.buttons ?? []} steps={steps.map((s) => ({ id: s.id, title: s.title, position: s.position }))} funnels={allFunnels.filter((x) => x.id !== f.id)} offers={offers} stepType={step.type} />
+            <ButtonsEditor initial={c.buttons ?? []} steps={steps.map((s) => ({ id: s.id, title: s.title, position: s.position }))} funnels={allFunnels.filter((x) => x.id !== f.id)} offers={offers} stepType={step.type} channels={channels} />
             {step.type === "quiz" && <FormRow><Field label="Відповідь при правильному варіанті"><input name="correctText" defaultValue={c.correctText ?? ""} placeholder="Правильно!" /></Field><Field label="Відповідь при неправильному"><input name="wrongText" defaultValue={c.wrongText ?? ""} placeholder="Не зовсім." /></Field></FormRow>}
             {(step.type === "question" || step.type === "survey" || step.type === "assignment") && <Field label="Зберігати відповідь у поле картки людини" hint="назва поля; порожньо = лише в історію"><input name="saveTo" defaultValue={c.saveTo ?? ""} placeholder={step.type === "assignment" ? "homework_1" : "goal"} /></Field>}
             {step.type === "assignment" && <p className="fld-h">Завдання чекає текстову відповідь. Наступний крок іде за своїм розкладом незалежно від відповіді.</p>}
