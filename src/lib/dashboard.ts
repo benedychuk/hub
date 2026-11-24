@@ -138,15 +138,29 @@ export async function buildDashboard(offerKey?: string) {
       coalesce(sum(price), 0)::text as uah
     from c where created_at >= (date_trunc('day', now() at time zone 'Europe/Kyiv') - interval '13 days') at time zone 'Europe/Kyiv'
     group by 1`));
+  // конверсії (правило власника 2026-11-24): рахуємо лише тих, у кого вже була спроба списання, щоб показник не «просідав» через свіжі когорти.
+  // Пробний → 1-й повний місяць: успішні пробні оплати за 90 днів, у яких пробний період уже закінчився (ZenEdu — 14 днів, Hub — пробні дні оффера);
+  //   конвертувалась, якщо наступна оплата клубу (не пробна) прийшла не пізніше ніж за 14 днів після кінця пробного (повторні спроби списання).
+  // 1-й → 2-й місяць: перші повні місячні оплати за 180 днів, у яких уже настала дата другого списання (через 31 день);
+  //   продовжила, якщо наступна оплата клубу прийшла не пізніше ніж за 14 днів після цієї дати.
+  // Запас 1 день — на синхронізацію оплат ZenEdu (раз на годину) і списання вранці.
   const q8 = run(d.execute(sql`
     with c as (${classified}),
-    seq as (select c.*, lead(created_at) over w as next_at, lag(is_trial) over w as prev_trial, lag(created_at) over w as prev_at from c window w as (partition by person_id order by created_at))
+    seq as (select c.*, lead(created_at) over w as next_at, lead(is_trial) over w as next_trial, lag(is_trial) over w as prev_trial, lag(created_at) over w as prev_at
+      from c window w as (partition by person_id order by created_at, id)),
+    x as (select seq.*,
+        (not seq.is_trial and seq.monthly and (seq.kind = 'subscription_start' or (seq.prev_trial is true and seq.prev_at > seq.created_at - interval '45 days'))) as first_full,
+        seq.created_at + (case when seq.source = 'hub' then coalesce(nullif(pl.trial_days, 0), 14) else 14 end) * interval '1 day' as trial_due,
+        seq.created_at + interval '31 days' as month_due
+      from seq left join orders oo on oo.id = seq.id left join plans pl on pl.id = oo.plan_id)
     select
-      count(*) filter (where is_trial and created_at between now() - interval '90 days' and now() - interval '17 days')::int as trials,
-      count(*) filter (where is_trial and created_at between now() - interval '90 days' and now() - interval '17 days' and next_at is not null and next_at <= created_at + interval '45 days')::int as trials_paid,
-      count(*) filter (where first_full and created_at between now() - interval '120 days' and now() - interval '34 days')::int as firsts,
-      count(*) filter (where first_full and created_at between now() - interval '120 days' and now() - interval '34 days' and next_at is not null and next_at <= created_at + interval '45 days')::int as firsts_paid
-    from (select seq.*, (not is_trial and monthly and (kind = 'subscription_start' or (prev_trial is true and prev_at > created_at - interval '45 days'))) as first_full from seq) x`));
+      count(*) filter (where is_trial and created_at >= now() - interval '90 days' and trial_due <= now() - interval '1 day')::int as trials,
+      count(*) filter (where is_trial and created_at >= now() - interval '90 days' and trial_due <= now() - interval '1 day'
+        and next_at is not null and not coalesce(next_trial, false) and next_at <= trial_due + interval '14 days')::int as trials_paid,
+      count(*) filter (where first_full and created_at >= now() - interval '180 days' and month_due <= now() - interval '1 day')::int as firsts,
+      count(*) filter (where first_full and created_at >= now() - interval '180 days' and month_due <= now() - interval '1 day'
+        and next_at is not null and not coalesce(next_trial, false) and next_at <= month_due + interval '14 days')::int as firsts_paid
+    from x`));
   const q9 = run(d.execute(sql`select o.currency as cur, o.source, coalesce(sum(o.price),0)::text as sum, coalesce(sum(o.price * ${rateSql("o")}),0)::text as uah, count(*)::int as c from orders o
     where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= now() - interval '30 days' and ${scopeO} and ${notTestOrder("o")} group by 1, 2`));
   // отримано за поточний календарний місяць (київський час), ті самі правила, що «Зібрано за 30 днів»; і минулий місяць до того самого дня
