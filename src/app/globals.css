@@ -724,3 +724,9 @@ details.chart-table { margin-top: 12px; } details.chart-table summary { cursor: 
 .stat b .chg.up { background: var(--good-soft); color: var(--good); }
 .stat b .chg.down { background: var(--crit-soft); color: var(--crit); }
 .stat b .chg.flat { background: var(--surface-2); color: var(--ink-3); }
+
+/* «Чати»: меню ⋮ на нашому повідомленні (видалити в Telegram) і позначка видаленого */
+.msg { position: relative; }
+.msg .msg-menu { float: right; margin: -4px -6px 0 8px; }
+.msg.deleted { opacity: .55; text-decoration: line-through; }
+.msg.deleted small { text-decoration: none; }

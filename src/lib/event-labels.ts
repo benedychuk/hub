@@ -98,4 +98,4 @@ function reasonLabel(r: string) {
 }
 function labelMedia(k?: string) { return ({ video_note: "кружечок", photo: "фото", video: "відео", animation: "GIF", voice: "голосове", audio: "аудіо", document: "файл", sticker: "стікер" } as Record<string, string>)[k ?? ""] ?? "медіа"; }
 function resourceLabel(key: string, n: Names) { const m = key.match(/^product:(\d+)$/); if (m) return `продукт «${n.funnels[Number(m[1])]?.name ?? key}»`; return `«${key}»`; }
-function zenLabel(t: string) { return ({ subscription_start: "Підписка оформлена (ZenEdu)", subscription_renew: "Підписку продовжено (ZenEdu)", one_time: "Разова оплата (ZenEdu)", subscription_cancel: "Підписку скасовано (ZenEdu)" } as Record<string, string>)[t] ?? `ZenEdu: ${t}`; }
+function zenLabel(t: string) { return ({ subscription_start: "Підписка оформлена (ZenEdu)", subscription_renew: "Підписку продовжено (ZenEdu)", subscription_card_update: "Підписку продовжено з нової картки (ZenEdu)", one_time: "Разова оплата (ZenEdu)", subscription_cancel: "Підписку скасовано (ZenEdu)" } as Record<string, string>)[t] ?? `ZenEdu: ${t}`; }

@@ -129,6 +129,7 @@ async function ordersWhere(type?: string, offer?: string) {
   if (sc) parts.push(scopeSql(sc, "o"));
   if (type === "trial_to_paid") parts.push(sql`o.type = 'subscription_renew' and (select count(*) from orders y where y.person_id = o.person_id and coalesce(y.offer_id, -coalesce(y.plan_id, 0)) = coalesce(o.offer_id, -coalesce(o.plan_id, 0)) and y.status = 'paid' and y.created_at < o.created_at) = 1 and (select y.price from orders y where y.person_id = o.person_id and coalesce(y.offer_id, -coalesce(y.plan_id, 0)) = coalesce(o.offer_id, -coalesce(o.plan_id, 0)) and y.status = 'paid' and y.created_at < o.created_at order by y.created_at limit 1) < o.price`);
   else if (type === "trial_churn") parts.push(sql`o.type = 'subscription_start' and o.created_at < now() - interval '40 days' and o.price < coalesce((select z.price from offers z where z.id = o.offer_id), (select pl.price from plans pl where pl.id = o.plan_id), o.price + 1) and not exists (select 1 from orders y where y.person_id = o.person_id and coalesce(y.offer_id, -coalesce(y.plan_id, 0)) = coalesce(o.offer_id, -coalesce(o.plan_id, 0)) and y.status = 'paid' and y.created_at > o.created_at)`);
+  else if (type === "subscription_renew") parts.push(sql`o.type in ('subscription_renew','subscription_card_update')`); // оплата після оновлення картки — теж продовження
   else if (type && type !== "all") parts.push(sql`o.type = ${type}`);
   return parts.length ? sql.join(parts, sql` and `) : sql`true`;
 }

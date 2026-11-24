@@ -3,9 +3,9 @@ import { Bot, MessageSquare, Check, X, Send, Save, Inbox } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { Section, Stat, Alert, EmptyState, KV, Field } from "@/components/ui/layout";
-import { Kebab, MenuAction, Switch } from "@/components/ui/controls";
+import { Kebab, MenuAction, Switch, Checkbox } from "@/components/ui/controls";
 import { navCounts, safe } from "@/lib/queries";
-import { assistantSettings, assistantStats, ticketList, actionLog, DEFAULT_MODEL } from "@/lib/assistant";
+import { assistantSettings, assistantStats, ticketList, actionLog, assistantLastError, DEFAULT_MODEL } from "@/lib/assistant";
 import { llmConfigured } from "@/lib/assistant/llm";
 import { assistantSaveSettings, assistantTicketAction } from "@/lib/actions";
 import { dateTime } from "@/lib/format";
@@ -32,7 +32,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
         <Stat label="Дій за добу" value={stats.actions24} hint="посилання, оффери" />
         <Stat label="Запитів до ШІ за місяць" value={stats.month.calls} hint={`токенів ${Math.round((stats.month.input + stats.month.output) / 1000)} тис.`} />
       </div>}
-      {tab === "tickets" ? <Tickets closed={Boolean(sp.closed)} /> : tab === "log" ? <Log /> : <Settings st={st} hasKey={key} />}
+      {tab === "tickets" ? <Tickets closed={Boolean(sp.closed)} /> : tab === "log" ? <Log /> : <Settings st={st} hasKey={key} lastError={await safe(() => assistantLastError(), null)} />}
     </Shell>
   );
 }
@@ -55,9 +55,10 @@ async function Tickets({ closed }: { closed: boolean }) {
       {t.team_note && <div style={{ marginTop: 10 }}><KV items={[{ k: "Вказівка команди", v: t.team_note }]} /></div>}
       {t.status === "open" && <form action={assistantTicketAction} style={{ marginTop: 12 }}>
         <input type="hidden" name="id" value={t.id} /><input type="hidden" name="op" value="note" />
-        <Field label="Вказівка асистентці" hint="Наприклад: «Повернення в ZenEdu оформлено, повідом людині» або «Видали доступ, надішли посилання». Асистентка виконає й напише людині протягом хвилини.">
+        <Field label="Вказівка асистентці" hint="Наприклад: «Повернення в ZenEdu оформлено» або «Доступ видано вручну». Асистентка врахує це, коли людина напише наступного разу.">
           <textarea name="note" rows={2} defaultValue="" />
         </Field>
+        <div style={{ margin: "8px 0 10px" }}><Checkbox name="sendNow" label="Написати людині зараз" hint="асистентка одразу повідомить людині лише результат за вказівкою, без «питання в роботі»" /></div>
         <button className="btn sm" type="submit"><Send size={14} /> Передати вказівку</button>
       </form>}
     </Section>)}
@@ -75,9 +76,10 @@ async function Log() {
   </Section>;
 }
 
-function Settings({ st, hasKey }: { st: { enabled: boolean; model: string; notes: string }; hasKey: boolean }) {
+function Settings({ st, hasKey, lastError }: { st: { enabled: boolean; model: string; notes: string }; hasKey: boolean; lastError: { at: string; personId: number; error: string } | null }) {
   return <div className="grid g21">
     <div>
+      {lastError && <Alert tone={Date.now() - new Date(lastError.at).getTime() < 86400_000 ? "bad" : "info"}><b>Остання помилка ШІ: {dateTime(lastError.at)}</b> (<Link href={`/chats?p=${lastError.personId}`}>діалог</Link>)<div className="mono pre-wrap" style={{ marginTop: 6 }}>{lastError.error}</div></Alert>}
       <Section title="Робота в боті" description="Коли вимкнено, люди отримують стару відповідь «Повідомлення отримано…». Коли увімкнено, Олеся відповідає на повідомлення, які не забрали команди бота, кнопки й воронки, протягом 20–80 секунд.">
         {!hasKey && <Alert tone="warn">Додайте OPENROUTER_API_KEY у Vercel → Settings → Environment Variables і зробіть новий деплой. Без ключа асистентку не можна увімкнути.</Alert>}
         <form action={assistantSaveSettings}><input type="hidden" name="form" value="switch" />

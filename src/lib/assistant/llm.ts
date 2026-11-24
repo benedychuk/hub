@@ -4,7 +4,7 @@
  */
 export type ChatMsg =
   | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; reasoning_details?: unknown[] }
   | { role: "tool"; tool_call_id: string; content: string };
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 export type ToolDef = { type: "function"; function: { name: string; description: string; parameters: Record<string, unknown> } };
@@ -24,10 +24,18 @@ export async function chat(model: string, messages: ChatMsg[], tools: ToolDef[])
         signal: AbortSignal.timeout(25_000),
       });
       if (r.status === 429 || r.status >= 500) { last = new Error(`OpenRouter ${r.status}`); await new Promise((res) => setTimeout(res, 1000 * 2 ** attempt)); continue; }
-      const j = await r.json() as { choices?: { message?: { content?: string | null; tool_calls?: ToolCall[] } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; error?: { message?: string } };
-      if (!r.ok || j.error) throw new Error(`OpenRouter ${r.status}: ${j.error?.message ?? "помилка"}`);
+      type Err = { message?: string; code?: number | string; metadata?: { raw?: unknown; provider_name?: string } };
+      const j = await r.json().catch(() => ({})) as { choices?: { message?: { content?: string | null; tool_calls?: ToolCall[]; reasoning_details?: unknown[] }; error?: Err }[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; error?: Err };
+      // OpenRouter інколи повертає помилку провайдера з кодом 200 або всередині choices — показуємо справжню причину
+      const err = j.error ?? j.choices?.[0]?.error;
+      if (!r.ok || err) {
+        const raw = err?.metadata?.raw ? ` · ${typeof err.metadata.raw === "string" ? err.metadata.raw : JSON.stringify(err.metadata.raw)}` : "";
+        throw new Error(`OpenRouter ${r.ok ? err?.code ?? 400 : r.status}: ${err?.message ?? "помилка"}${raw}`.slice(0, 500));
+      }
       const m = j.choices?.[0]?.message ?? {};
-      return { content: m.content ?? null, toolCalls: m.tool_calls ?? [], usage: { input: j.usage?.prompt_tokens ?? 0, output: j.usage?.completion_tokens ?? 0 } };
+      // reasoning_details (підпис міркувань Gemini 3) треба повернути в наступному запиті разом із викликом інструмента,
+      // інакше модель відповідає помилкою після будь-якої дії асистентки
+      return { content: m.content ?? null, toolCalls: m.tool_calls ?? [], reasoningDetails: m.reasoning_details, usage: { input: j.usage?.prompt_tokens ?? 0, output: j.usage?.completion_tokens ?? 0 } };
     } catch (e) {
       last = e;
       if (e instanceof Error && e.message.startsWith("OpenRouter 4")) throw e; // помилка запиту (ключ, модель) — повтор не допоможе

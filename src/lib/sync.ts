@@ -172,17 +172,22 @@ export function errorText(e: unknown, max = 300): string {
   return (cause ? `${short}: ${cause}` : short).slice(0, max);
 }
 
+/**
+ * Підписки ZenEdu з оплат: остання оплата підписки визначає період. Оплати підписки в ZenEdu — subscription_start,
+ * subscription_renew і subscription_card_update (списання після того, як людина оновила картку — це теж продовження;
+ * раніше їх не враховували, і людина з оплаченим місяцем виглядала як «підписка закінчилась»).
+ */
 export async function deriveSubscriptions(stats: SyncStats) {
   const d = db();
   await d.execute(sql`
     with last as (
       select distinct on (person_id) person_id, offer_id, offer_name, type, price, currency, coalesce(paid_at, created_at) as created_at
       from orders
-      where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew') and person_id is not null
+      where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew','subscription_card_update') and person_id is not null
       order by person_id, coalesce(paid_at, created_at) desc
     ), cnt as (
       select person_id, count(*)::int as c, min(coalesce(paid_at, created_at)) as first_at from orders
-      where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew') and person_id is not null
+      where source = 'zenedu' and status = 'paid' and type in ('subscription_start','subscription_renew','subscription_card_update') and person_id is not null
       group by person_id
     ), calc as (
       select l.*, c.c as payments, c.first_at,
