@@ -17,7 +17,7 @@ const KIND: Record<string, string> = { crisis: "криза", personal: "особ
 export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ tab?: string; closed?: string; ok?: string; err?: string }> }) {
   const sp = await searchParams;
   const tab = TABS.some((t) => t[0] === sp.tab) ? sp.tab! : "tickets";
-  const [counts, st, stats] = await Promise.all([navCounts(), safe(() => assistantSettings(), { enabled: false, model: DEFAULT_MODEL, notes: "" }), safe(() => assistantStats(), null)]);
+  const [counts, st, stats] = await Promise.all([navCounts(), safe(() => assistantSettings(), { enabled: false, actions: false, model: DEFAULT_MODEL, notes: "" }), safe(() => assistantStats(), null)]);
   const key = llmConfigured();
   return (
     <Shell title="Асистент" counts={counts}>
@@ -76,14 +76,17 @@ async function Log() {
   </Section>;
 }
 
-function Settings({ st, hasKey, lastError }: { st: { enabled: boolean; model: string; notes: string }; hasKey: boolean; lastError: { at: string; personId: number; error: string } | null }) {
+function Settings({ st, hasKey, lastError }: { st: { enabled: boolean; actions: boolean; model: string; notes: string }; hasKey: boolean; lastError: { at: string; personId: number; error: string } | null }) {
   return <div className="grid g21">
     <div>
       {lastError && <Alert tone={Date.now() - new Date(lastError.at).getTime() < 86400_000 ? "bad" : "info"}><b>Остання помилка ШІ: {dateTime(lastError.at)}</b> (<Link href={`/chats?p=${lastError.personId}`}>діалог</Link>)<div className="mono pre-wrap" style={{ marginTop: 6 }}>{lastError.error}</div></Alert>}
       <Section title="Робота в боті" description="Коли вимкнено, люди отримують стару відповідь «Повідомлення отримано…». Коли увімкнено, Олеся відповідає на повідомлення, які не забрали команди бота, кнопки й воронки, протягом 20–80 секунд.">
         {!hasKey && <Alert tone="warn">Додайте OPENROUTER_API_KEY у Vercel → Settings → Environment Variables і зробіть новий деплой. Без ключа асистентку не можна увімкнути.</Alert>}
         <form action={assistantSaveSettings}><input type="hidden" name="form" value="switch" />
-          <Switch name="enabled" defaultChecked={st.enabled} autoSubmit disabled={!hasKey} label="Олеся відповідає людям у Hub-боті" hint="перший етап: відповіді, посилання в канал, кабінет, «Щиро», оффери й звернення команді" />
+          <Switch name="enabled" defaultChecked={st.enabled} autoSubmit disabled={!hasKey} label="Олеся відповідає людям у Hub-боті" hint="відповіді, посилання в канал, кабінет, «Щиро», оффери й звернення команді" />
+        </form>
+        <form action={assistantSaveSettings} style={{ marginTop: 12 }}><input type="hidden" name="form" value="actions" />
+          <Switch name="actions" defaultChecked={st.actions} autoSubmit disabled={!hasKey} label="Олеся керує підписками Hub" hint="скасування автопродовження, пауза, компенсація днями (до 14, раз на 30 днів), повернення останнього платежу (до 14 днів після оплати, до 5 на добу, третє людині — відмова); не більше 3 дій на людину за добу. ZenEdu — лише через команду" />
         </form>
       </Section>
       <form action={assistantSaveSettings}><input type="hidden" name="form" value="params" />
@@ -100,7 +103,7 @@ function Settings({ st, hasKey, lastError }: { st: { enabled: boolean; model: st
           { k: "Перевіряє", v: "підписки Hub і ZenEdu, оплати, доступ до каналу, «Щиро», кабінет, етери" },
           { k: "Надсилає", v: "нове посилання в канал (знімає старе блокування), кабінет, «Щиро», оффер з оплатою" },
           { k: "Передає команді", v: "повернення й скасування, ZenEdu, нестандартне, особисте без «Щиро», кризу (терміново)" },
-          { k: "Далі", v: "скасування, пауза, компенсація й повернення в Hub — другий етап, окремий вимикач" },
+          { k: "Підписки Hub", v: st.actions ? "скасування, пауза, компенсація днями, повернення останнього платежу — увімкнено" : "вимкнено: скасування й повернення Олеся передає команді" },
         ]} />
       </Section>
     </div>

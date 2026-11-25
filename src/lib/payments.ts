@@ -376,9 +376,9 @@ export async function dailyPayments() {
 }
 
 // ---------- керування підпискою ----------
-export async function cancelAtEnd(subId: number, by: string) {
+export async function cancelAtEnd(subId: number, by: string, opts: { silent?: boolean } = {}) {
   const d = db(); const [s] = await d.update(subscriptions).set({ cancelAtPeriodEnd: true, updatedAt: new Date() }).where(eq(subscriptions.id, subId)).returning();
-  if (s) { await d.insert(events).values({ personId: s.personId, type: "subscription.cancel_scheduled", source: by, payload: { subscriptionId: subId, until: s.currentPeriodEnd } }); await notify(s.personId, `Продовження вимкнено. Доступ діє до ${s.currentPeriodEnd?.toLocaleDateString("uk-UA")}, далі списань не буде. Передумаєте — /subscriptions.`); }
+  if (s) { await d.insert(events).values({ personId: s.personId, type: "subscription.cancel_scheduled", source: by, payload: { subscriptionId: subId, until: s.currentPeriodEnd } }); if (!opts.silent) await notify(s.personId, `Продовження вимкнено. Доступ діє до ${s.currentPeriodEnd?.toLocaleDateString("uk-UA")}, далі списань не буде. Передумаєте — /subscriptions.`); }
   return s;
 }
 export async function resumeSub(subId: number, by: string) {
@@ -392,9 +392,9 @@ export async function resumeSub(subId: number, by: string) {
   await accessTick().catch(() => null);
   return s;
 }
-export async function pauseSub(subId: number, by: string) {
+export async function pauseSub(subId: number, by: string, opts: { silent?: boolean } = {}) {
   const d = db(); const [s] = await d.update(subscriptions).set({ status: "paused", pausedAt: new Date(), nextChargeAt: null, nextRetryAt: null, updatedAt: new Date() }).where(eq(subscriptions.id, subId)).returning();
-  if (s) { await d.insert(events).values({ personId: s.personId, type: "subscription.paused", source: by, payload: { subscriptionId: subId } }); await notify(s.personId, "Підписку поставлено на паузу: списань і доступу до закритих матеріалів не буде, поки її не відновити (/subscriptions)."); await accessTick().catch(() => null); }
+  if (s) { await d.insert(events).values({ personId: s.personId, type: "subscription.paused", source: by, payload: { subscriptionId: subId } }); if (!opts.silent) await notify(s.personId, "Підписку поставлено на паузу: списань і доступу до закритих матеріалів не буде, поки її не відновити (/subscriptions)."); await accessTick().catch(() => null); }
   return s;
 }
 /**
