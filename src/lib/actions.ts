@@ -1042,6 +1042,7 @@ export async function createClubCabinetsAction() {
 export async function assistantSaveSettings(fd: FormData) {
   const { setAssistantSetting } = await import("./assistant");
   if (fd.get("form") === "switch") await setAssistantSetting("enabled", fd.get("enabled") === "on");
+  else if (fd.get("form") === "actions") await setAssistantSetting("actions", fd.get("actions") === "on");
   else {
     await setAssistantSetting("model", str(fd, "model").trim() || null);
     await setAssistantSetting("notes", str(fd, "notes").slice(0, 4000));
