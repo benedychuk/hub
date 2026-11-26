@@ -23,7 +23,7 @@ export default async function Payments({ searchParams }: { searchParams: Promise
   const qs = (o: Record<string, string | undefined>) => "?" + new URLSearchParams(Object.fromEntries(Object.entries({ type, offer: sp.offer, ...o }).filter(([, v]) => v)) as Record<string, string>).toString();
   if (tab === "hub" && hub) return (
     <Shell title="Платежі" counts={counts}>
-      <div className="tabs"><Link href="/payments">Замовлення</Link><Link href="/payments?tab=hub" className="on">Спроби WayForPay через Hub</Link></div>
+      <div className="tabs"><Link href="/payments">Замовлення</Link><Link href="/payments?tab=hub" className="on">Оплати через Hub</Link></div>
       {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}{sp.err && <Alert tone="bad">{sp.err}</Alert>}
       <div className="grid g3" style={{ marginBottom: 16 }}>
         <Stat label="Бойових за 30 днів" value={money(hub.live30.s, "UAH")} hint={`${hub.live30.c} спроб`} tone="good" />
@@ -42,7 +42,7 @@ export default async function Payments({ searchParams }: { searchParams: Promise
   const isTrial = type.startsWith("trial");
   return (
     <Shell title="Платежі" counts={counts}>
-      <div className="tabs"><Link href="/payments" className="on">Замовлення</Link><Link href="/payments?tab=hub">Спроби WayForPay через Hub</Link></div>
+      <div className="tabs"><Link href="/payments" className="on">Замовлення</Link><Link href="/payments?tab=hub">Оплати через Hub</Link></div>
       <div className="grid g4" style={{ marginBottom: 16 }}>
         <Stat label="За 30 днів, UAH" value={money(uah?.sum ?? 0, "UAH")} hint={`${uah?.c ?? 0} платежів · усі оффери`} tone="good" />
         <Stat label="За фільтром" value={money(d.filteredSum, "UAH")} hint={`${d.total} замовлень`} />

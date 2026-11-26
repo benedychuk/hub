@@ -70,7 +70,7 @@ export default async function PayPage({ params, searchParams }: { params: Promis
               {needEmail && kind === "first" && <label className="fld"><span className="fld-l">Email для чеків і доступу</span><input name="email" type="email" required placeholder="name@example.com" /></label>}
               <button className="btn pri" type="submit" disabled={preview || (kind === "first" && !av.ok)} style={{ justifyContent: "center", fontSize: 15, padding: "12px 18px" }}>{kind === "first" ? `${btn} ${money(amount, pl!.currency)}` : kind === "migrate" ? "Прив'язати картку" : "Оновити картку"}</button>
             </form>
-            <p className="note" style={{ textAlign: "center", margin: 0 }}>Оплата на захищеній сторінці WayForPay. Hub не бачить номер картки, лише токен для наступних списань.{!oneTime ? " Скасувати підписку можна будь-коли командою /subscriptions у боті." : ""}</p>
+            <p className="note" style={{ textAlign: "center", margin: 0 }}>Оплата на захищеній сторінці банку. Hub не бачить номер картки, лише токен для наступних списань.{!oneTime ? " Скасувати підписку можна будь-коли командою /subscriptions у боті." : ""}</p>
           </>}
         </div>
       </div>

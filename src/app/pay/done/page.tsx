@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, hasDb, schema } from "@/db";
 import { creds, checkStatus, verifyResponse } from "@/lib/wayforpay";
-import { applyResult } from "@/lib/payments";
+import { applyResult, syncMonoAttempt } from "@/lib/payments";
 import { money } from "@/lib/format";
 import { MetaPixel, RefreshWhilePending } from "@/components/meta-pixel";
 
@@ -10,11 +10,14 @@ const PIXEL_ID = process.env.META_PIXEL_ID || "724340840721168";
 
 export const dynamic = "force-dynamic";
 
-/** Сторінка повернення після WayForPay: показує результат; якщо зворотний виклик ще не дійшов, питає статус у WayForPay. */
+/** Сторінка повернення після оплати: показує результат; якщо зворотний виклик ще не дійшов, питає статус у WayForPay чи monobank. */
 export default async function PayDone({ searchParams }: { searchParams: Promise<{ ref?: string }> }) {
   const sp = await searchParams;
   let a = hasDb() && sp.ref ? (await db().select().from(schema.paymentAttempts).where(eq(schema.paymentAttempts.orderReference, sp.ref)))[0] : undefined;
-  if (a && a.status === "pending") {
+  if (a && a.status === "pending" && a.provider === "monobank") {
+    await syncMonoAttempt(a.orderReference).catch(() => null);
+    a = (await db().select().from(schema.paymentAttempts).where(eq(schema.paymentAttempts.id, a.id)))[0];
+  } else if (a && a.status === "pending") {
     const c = creds(a.mode as "test" | "live");
     const r = await checkStatus(c, a.orderReference).catch(() => null);
     if (r && r.transactionStatus && r.merchantSignature && verifyResponse(c, r)) { await applyResult(a, r, c); a = (await db().select().from(schema.paymentAttempts).where(eq(schema.paymentAttempts.id, a.id)))[0]; }
