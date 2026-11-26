@@ -147,6 +147,16 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
               : `пробних через Hub, у яких уже минув пробний період, ще не було${d.conv.trials_waiting ? ` · ${d.conv.trials_waiting} зараз у пробному` : ""}`, color: "var(--c1)" },
             { name: "1-й → 2-й місяць", value: pct(d.conv.firsts_paid, d.conv.firsts), note: `${d.conv.firsts_paid} з ${d.conv.firsts} оплатили другий місяць`, color: "var(--c1)" },
           ]} /> : null}
+          {d && d.conv.trials > d.conv.trials_paid && (() => { const l = d.conv.lost; const notPaid = d.conv.trials - d.conv.trials_paid;
+            return <>
+              <p className="fld-h" style={{ marginTop: 10 }}>Пробні Hub, що не перейшли ({notPaid}): {[
+                l.declined ? `списання відхилено — ${l.declined}${l.topReason ? ` (найчастіше: ${l.topReason})` : ""}` : "",
+                l.cancelled ? `скасували або поставили на паузу — ${l.cancelled}` : "",
+                l.noCard ? `картка не збереглась — ${l.noCard}` : "",
+                l.notCharged ? `списання не відбулося — ${l.notCharged}` : "",
+              ].filter(Boolean).join(" · ") || "причин не знайдено"}</p>
+              {(l.noCard + l.notCharged) > 0 && <Alert tone="warn">У {l.noCard + l.notCharged} людей після пробного Hub не спробував списати оплату{l.noCard ? `: у ${l.noCard} з них картка не збереглась після пробної оплати` : ""}. Це втрачені продовження — подивіться підписки «пробний період» у «Продажі → Підписки» або напишіть розробнику.</Alert>}
+            </>; })()}
         </Section>
       </div>
 

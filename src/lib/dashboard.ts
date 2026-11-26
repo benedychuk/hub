@@ -169,21 +169,38 @@ export async function buildDashboard(offerKey?: string) {
       count(*) filter (where first_full and created_at >= now() - interval '180 days' and month_due <= now() - interval '1 day'
         and next_at is not null and not coalesce(next_trial, false) and next_at <= month_due + interval '14 days')::int as firsts_paid
     from x`));
-  // пробний → 1-й повний місяць лише для пробних, оформлених через Hub (рішення власника 2026-11-26): точно, з даних самого Hub —
-  // пробна оплата = перша бойова оплата оффера з пробними днями за пробною ціною; конверсія = успішне списання цієї підписки
-  // протягом 14 днів після кінця пробного; лише ті, у кого пробний закінчився щонайменше день тому, за 90 днів
+  // пробний → 1-й повний місяць лише для пробних, оформлених через Hub (рішення власника 2026-11-26), з даних самого Hub.
+  // Пробна оплата — перша бойова оплата оффера з пробними днями за пробною ціною. Перехід — будь-яка успішна бойова оплата
+  // клубу від цієї людини за повною ціною (автосписання, ручна оплата за посиланням, інший оффер клубу) після пробної
+  // і не пізніше ніж за 14 днів після кінця пробного. Лише ті, у кого пробний закінчився щонайменше день тому, за 90 днів.
+  // Для тих, хто не перейшов, — причина: списання відхилено / скасували / картка не збереглась / списання не було.
+  const clubPlans = sql.raw(clubPlanIds.length ? clubPlanIds.join(",") : "0");
   const q15 = run(d.execute(sql`
-    select count(*) filter (where due <= now() - interval '1 day')::int as trials,
-      count(*) filter (where due <= now() - interval '1 day' and paid)::int as trials_paid,
-      count(*) filter (where due > now() - interval '1 day')::int as waiting
-    from (
-      select coalesce(pa.processed_at, pa.created_at) + pl.trial_days * interval '1 day' as due,
-        exists (select 1 from payment_attempts r where r.subscription_id = pa.subscription_id and r.kind = 'renewal' and r.mode = 'live' and r.status in ('approved','refunded')
-          and coalesce(r.processed_at, r.created_at) <= coalesce(pa.processed_at, pa.created_at) + (pl.trial_days + 14) * interval '1 day') as paid
+    with t as (
+      select pa.id, pa.person_id, s.id as sub_id, coalesce(pa.processed_at, pa.created_at) as at,
+        coalesce(pa.processed_at, pa.created_at) + pl.trial_days * interval '1 day' as due,
+        s.status, s.cancel_at_period_end, s.payment_method_id
       from payment_attempts pa join plans pl on pl.id = pa.plan_id join subscriptions s on s.id = pa.subscription_id
       where pa.kind = 'first' and pa.mode = 'live' and pa.status in ('approved','refunded') and pl.trial_days > 0 and pa.amount < pl.price
         and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and ${clubSub}
-    ) x`));
+    ), x as (
+      select t.*,
+        exists (select 1 from payment_attempts r join plans rp on rp.id = r.plan_id
+          where r.person_id = t.person_id and r.id <> t.id and r.mode = 'live' and r.status in ('approved','refunded') and r.kind in ('renewal','manual','first')
+            and r.plan_id in (${clubPlans}) and r.amount >= rp.price * 0.5
+            and coalesce(r.processed_at, r.created_at) > t.at and coalesce(r.processed_at, r.created_at) <= t.due + interval '14 days') as paid,
+        (select r.reason from payment_attempts r where r.subscription_id = t.sub_id and r.kind = 'renewal' and r.status in ('declined','error','expired')
+          order by r.id desc limit 1) as decline_reason
+      from t)
+    select count(*) filter (where due <= now() - interval '1 day')::int as trials,
+      count(*) filter (where due <= now() - interval '1 day' and paid)::int as trials_paid,
+      count(*) filter (where due > now() - interval '1 day')::int as waiting,
+      count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is not null)::int as declined,
+      count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is null and (cancel_at_period_end or status in ('cancelled','refunded','paused')))::int as cancelled,
+      count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is null and not (cancel_at_period_end or status in ('cancelled','refunded','paused')) and payment_method_id is null)::int as no_card,
+      count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is null and not (cancel_at_period_end or status in ('cancelled','refunded','paused')) and payment_method_id is not null)::int as not_charged,
+      (select mode() within group (order by decline_reason) from x where due <= now() - interval '1 day' and not paid and decline_reason is not null) as top_reason
+    from x`));
   const q9 = run(d.execute(sql`select o.currency as cur, o.source, coalesce(sum(o.price),0)::text as sum, coalesce(sum(o.price * ${rateSql("o")}),0)::text as uah, count(*)::int as c from orders o
     where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= now() - interval '30 days' and ${scopeO} and ${notTestOrder("o")} group by 1, 2`));
   // отримано за поточний календарний місяць (київський час), ті самі правила, що «Зібрано за 30 днів»; і минулий місяць до того самого дня
@@ -252,9 +269,10 @@ export async function buildDashboard(offerKey?: string) {
   // пробний → 1-й повний місяць: пробні, розпочаті 17–90 днів тому; продовжила, якщо була наступна оплата клубу
   // 1-й → 2-й місяць: перша повна місячна оплата (старт без пробного або перша оплата після пробного) 34–120 днів тому
   const [conv0] = (await q8).rows as { trials: number; trials_paid: number; trials_zen: number; trials_paid_zen: number; firsts: number; firsts_paid: number }[];
-  const [hubTrials] = (await q15).rows as { trials: number; trials_paid: number; waiting: number }[];
+  const [hubTrials] = (await q15).rows as { trials: number; trials_paid: number; waiting: number; declined: number; cancelled: number; no_card: number; not_charged: number; top_reason: string | null }[];
   // пробний → 1-й місяць: лише пробні, оформлені через Hub; ZenEdu — окремо для порівняння
-  const conv = conv0 ? { ...conv0, trials: hubTrials?.trials ?? 0, trials_paid: hubTrials?.trials_paid ?? 0, trials_waiting: hubTrials?.waiting ?? 0 } : undefined;
+  const conv = conv0 ? { ...conv0, trials: hubTrials?.trials ?? 0, trials_paid: hubTrials?.trials_paid ?? 0, trials_waiting: hubTrials?.waiting ?? 0,
+    lost: { declined: hubTrials?.declined ?? 0, cancelled: hubTrials?.cancelled ?? 0, noCard: hubTrials?.no_card ?? 0, notCharged: hubTrials?.not_charged ?? 0, topReason: hubTrials?.top_reason ?? null } } : undefined;
 
   // зібрано за 30 днів: усі оплачені замовлення (клуб і продукти), без тестових
   const rev = (await q9).rows as { cur: string; source: string; sum: string; uah: string; c: number }[];
@@ -324,7 +342,7 @@ export async function buildDashboard(offerKey?: string) {
 
   return {
     members, zenOnly, hubOnly, both, trialing, pastDue, noRenew, left: left?.c ?? 0,
-    last14, conv: conv ?? { trials: 0, trials_paid: 0, trials_waiting: 0, trials_zen: 0, trials_paid_zen: 0, firsts: 0, firsts_paid: 0 },
+    last14, conv: conv ?? { trials: 0, trials_paid: 0, trials_waiting: 0, trials_zen: 0, trials_paid_zen: 0, firsts: 0, firsts_paid: 0, lost: { declined: 0, cancelled: 0, noCard: 0, notCharged: 0, topReason: null as string | null } },
     // ARPU: щомісячний дохід (MRR) на учасницю з автопродовженням; і фактичний дохід клубу за 30 днів на активну учасницю
     arpu: renewingPersons.size ? Math.round(mrrUah / renewingPersons.size) : 0,
     arpu30: bySource.size ? Math.round(Number(period.club_uah) / bySource.size) : 0,
