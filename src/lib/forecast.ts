@@ -35,7 +35,8 @@ export async function actualAssumptions() {
   const d = await buildDashboard();
   const share = (a: number, b: number, fb: number) => (b > 0 ? a / b : fb);
   const r90 = share(d.rates.renewed90, d.rates.due90, d.pRenew);
-  const c1 = share(d.conv.trials_paid, d.conv.trials, d.pTrial);
+  // пробний → 1-й місяць: з пробних через Hub; якщо їх ще замало (< 5), — загальна оцінка з прогнозу дашборда
+  const c1 = d.conv.trials >= 5 ? d.conv.trials_paid / d.conv.trials : d.pTrial;
   const c2 = share(d.conv.firsts_paid, d.conv.firsts, r90);
   return {
     members: d.members,

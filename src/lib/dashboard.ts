@@ -162,10 +162,28 @@ export async function buildDashboard(offerKey?: string) {
       count(*) filter (where is_trial and created_at >= now() - interval '90 days' and trial_due <= now() - interval '1 day')::int as trials,
       count(*) filter (where is_trial and created_at >= now() - interval '90 days' and trial_due <= now() - interval '1 day'
         and next_at is not null and not coalesce(next_trial, false) and next_at <= trial_due + interval '14 days')::int as trials_paid,
+      count(*) filter (where is_trial and source = 'zenedu' and created_at >= now() - interval '90 days' and trial_due <= now() - interval '1 day')::int as trials_zen,
+      count(*) filter (where is_trial and source = 'zenedu' and created_at >= now() - interval '90 days' and trial_due <= now() - interval '1 day'
+        and next_at is not null and not coalesce(next_trial, false) and next_at <= trial_due + interval '14 days')::int as trials_paid_zen,
       count(*) filter (where first_full and created_at >= now() - interval '180 days' and month_due <= now() - interval '1 day')::int as firsts,
       count(*) filter (where first_full and created_at >= now() - interval '180 days' and month_due <= now() - interval '1 day'
         and next_at is not null and not coalesce(next_trial, false) and next_at <= month_due + interval '14 days')::int as firsts_paid
     from x`));
+  // пробний → 1-й повний місяць лише для пробних, оформлених через Hub (рішення власника 2026-11-26): точно, з даних самого Hub —
+  // пробна оплата = перша бойова оплата оффера з пробними днями за пробною ціною; конверсія = успішне списання цієї підписки
+  // протягом 14 днів після кінця пробного; лише ті, у кого пробний закінчився щонайменше день тому, за 90 днів
+  const q15 = run(d.execute(sql`
+    select count(*) filter (where due <= now() - interval '1 day')::int as trials,
+      count(*) filter (where due <= now() - interval '1 day' and paid)::int as trials_paid,
+      count(*) filter (where due > now() - interval '1 day')::int as waiting
+    from (
+      select coalesce(pa.processed_at, pa.created_at) + pl.trial_days * interval '1 day' as due,
+        exists (select 1 from payment_attempts r where r.subscription_id = pa.subscription_id and r.kind = 'renewal' and r.mode = 'live' and r.status in ('approved','refunded')
+          and coalesce(r.processed_at, r.created_at) <= coalesce(pa.processed_at, pa.created_at) + (pl.trial_days + 14) * interval '1 day') as paid
+      from payment_attempts pa join plans pl on pl.id = pa.plan_id join subscriptions s on s.id = pa.subscription_id
+      where pa.kind = 'first' and pa.mode = 'live' and pa.status in ('approved','refunded') and pl.trial_days > 0 and pa.amount < pl.price
+        and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and ${clubSub}
+    ) x`));
   const q9 = run(d.execute(sql`select o.currency as cur, o.source, coalesce(sum(o.price),0)::text as sum, coalesce(sum(o.price * ${rateSql("o")}),0)::text as uah, count(*)::int as c from orders o
     where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= now() - interval '30 days' and ${scopeO} and ${notTestOrder("o")} group by 1, 2`));
   // отримано за поточний календарний місяць (київський час), ті самі правила, що «Зібрано за 30 днів»; і минулий місяць до того самого дня
@@ -233,7 +251,10 @@ export async function buildDashboard(offerKey?: string) {
   // конверсії (когорти, щоб у кожної людини був час продовжити):
   // пробний → 1-й повний місяць: пробні, розпочаті 17–90 днів тому; продовжила, якщо була наступна оплата клубу
   // 1-й → 2-й місяць: перша повна місячна оплата (старт без пробного або перша оплата після пробного) 34–120 днів тому
-  const [conv] = (await q8).rows as { trials: number; trials_paid: number; firsts: number; firsts_paid: number }[];
+  const [conv0] = (await q8).rows as { trials: number; trials_paid: number; trials_zen: number; trials_paid_zen: number; firsts: number; firsts_paid: number }[];
+  const [hubTrials] = (await q15).rows as { trials: number; trials_paid: number; waiting: number }[];
+  // пробний → 1-й місяць: лише пробні, оформлені через Hub; ZenEdu — окремо для порівняння
+  const conv = conv0 ? { ...conv0, trials: hubTrials?.trials ?? 0, trials_paid: hubTrials?.trials_paid ?? 0, trials_waiting: hubTrials?.waiting ?? 0 } : undefined;
 
   // зібрано за 30 днів: усі оплачені замовлення (клуб і продукти), без тестових
   const rev = (await q9).rows as { cur: string; source: string; sum: string; uah: string; c: number }[];
@@ -303,7 +324,7 @@ export async function buildDashboard(offerKey?: string) {
 
   return {
     members, zenOnly, hubOnly, both, trialing, pastDue, noRenew, left: left?.c ?? 0,
-    last14, conv: conv ?? { trials: 0, trials_paid: 0, firsts: 0, firsts_paid: 0 },
+    last14, conv: conv ?? { trials: 0, trials_paid: 0, trials_waiting: 0, trials_zen: 0, trials_paid_zen: 0, firsts: 0, firsts_paid: 0 },
     // ARPU: щомісячний дохід (MRR) на учасницю з автопродовженням; і фактичний дохід клубу за 30 днів на активну учасницю
     arpu: renewingPersons.size ? Math.round(mrrUah / renewingPersons.size) : 0,
     arpu30: bySource.size ? Math.round(Number(period.club_uah) / bySource.size) : 0,
