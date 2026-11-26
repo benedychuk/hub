@@ -506,6 +506,8 @@ export const paymentAttempts = pgTable("payment_attempts", {
   currency: text("currency").notNull().default("UAH"),
   status: text("status").notNull().default("pending"), // pending | approved | declined | refunded | expired | error
   mode: text("mode").notNull().default("test"), // test | live
+  provider: text("provider").notNull().default("wayforpay"), // wayforpay | monobank — через який шлюз проведено
+  providerRef: text("provider_ref"),                    // monobank: invoiceId (для статусу й повернення)
   reasonCode: text("reason_code"),
   reason: text("reason"),
   cardPan: text("card_pan"),

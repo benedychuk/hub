@@ -900,8 +900,11 @@ import { money as fmtMoney } from "./format";
 const { subscriptions: subsT, plans: plansT } = schema;
 
 export async function savePaymentSettings(fd: FormData) {
-  const mode = str(fd, "mode") === "live" && liveConfigured() ? "live" : "test";
+  const prov = ["monobank", "monobank_testers"].includes(str(fd, "provider")) ? str(fd, "provider") : "wayforpay";
+  // бойовий режим — лише з бойовими ключами шлюзу, який використовується
+  const mode = str(fd, "mode") === "live" && (liveConfigured() || (prov !== "wayforpay" && Boolean(process.env.MONO_TOKEN))) ? "live" : "test";
   await setPaySetting("payments.mode", mode);
+  await setPaySetting("payments.provider", prov); // шлюз для нових оплат; автосписання — тим шлюзом, яким збережено картку
   await setPaySetting("payments.migrationDays", Math.max(1, Number(fd.get("migrationDays") || 5)));
   await setPaySetting("payments.reminderDays", Math.max(1, Number(fd.get("reminderDays") || 3)));
   await setPaySetting("payments.trialVerifyAmount", Math.max(1, Number(fd.get("verifyAmount") || 1)));

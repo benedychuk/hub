@@ -4,6 +4,7 @@ import { db, schema } from "@/db";
 import type { OfferSettings } from "@/db/schema";
 import { appUrl, botToken, sendToPerson } from "./bot";
 import { accessTick, syncEntitlementsFromSubscriptions, enforcedChannelKeys, inviteAfterPayment } from "./telegram-access";
+import { createInvoice as monoInvoice, walletPayment as monoCharge, cancelInvoice as monoCancel, invoiceStatus as monoStatus, verifyWebhook as monoVerify, toPayResult as monoResult, monoConfigured, type MonoInvoice } from "./monobank";
 import { creds, charge as wfpCharge, refund as wfpRefund, purchaseForm, verifyResponse, type Creds, type WfpResponse } from "./wayforpay";
 import { money } from "./format";
 import { adminTelegramId } from "./auth";
@@ -20,9 +21,9 @@ const RETRY_DAYS = [1, 3, 5];
 
 // ---------- налаштування ----------
 export async function paymentSettings() {
-  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled", "payments.newPeople", "payments.testers", "access.graceHours"]));
+  const rows = await db().select().from(settings).where(inArray(settings.key, ["payments.mode", "payments.migrationDays", "payments.reminderDays", "payments.trialVerifyAmount", "payments.migrationAuto", "payments.enabled", "payments.newPeople", "payments.testers", "payments.provider", "access.graceHours"]));
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true, newPeople: m["payments.newPeople"] === true, testers: (Array.isArray(m["payments.testers"]) ? m["payments.testers"] as number[] : []), graceHours: Number.isFinite(Number(m["access.graceHours"])) && m["access.graceHours"] != null ? Number(m["access.graceHours"]) : DEFAULT_GRACE_HOURS };
+  return { provider: (["monobank", "monobank_testers"].includes(String(m["payments.provider"])) ? m["payments.provider"] : "wayforpay") as "wayforpay" | "monobank" | "monobank_testers", mode: (m["payments.mode"] === "live" ? "live" : "test") as "test" | "live", migrationDays: Number(m["payments.migrationDays"] ?? 5), reminderDays: Number(m["payments.reminderDays"] ?? 3), verifyAmount: Number(m["payments.trialVerifyAmount"] ?? 1), migrationAuto: m["payments.migrationAuto"] === true, enabled: m["payments.enabled"] === true, newPeople: m["payments.newPeople"] === true, testers: (Array.isArray(m["payments.testers"]) ? m["payments.testers"] as number[] : []), graceHours: Number.isFinite(Number(m["access.graceHours"])) && m["access.graceHours"] != null ? Number(m["access.graceHours"]) : DEFAULT_GRACE_HOURS };
 }
 export async function setSetting(key: string, value: unknown) {
   await db().insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
@@ -72,6 +73,18 @@ export async function paymentsAllowedFor(personId: number, plan?: { settings?: O
   // учасниці ZenEdu — лише на офферах, де власник увімкнув «Доступно учасницям ZenEdu» (переведення в Hub)
   return !(await hasActiveZenSub(personId)) || Boolean(plan?.settings?.allowZenMembers);
 }
+/**
+ * Шлюз для нових оплат (Налаштування → Оплати; за замовчуванням WayForPay, змінює лише власник):
+ * monobank_testers — monobank лише для адміністратора й тестувальників, решта як і раніше через WayForPay.
+ * Якщо токена monobank для поточного режиму немає — WayForPay. Автосписання йдуть тим шлюзом, яким збережено картку.
+ */
+export async function providerFor(personId: number): Promise<"wayforpay" | "monobank"> {
+  const st = await paymentSettings();
+  if (st.provider === "wayforpay" || !monoConfigured(st.mode)) return "wayforpay";
+  if (st.provider === "monobank") return "monobank";
+  const [p] = await db().select({ tg: persons.telegramUserId }).from(persons).where(eq(persons.id, personId));
+  return p && (p.tg === adminTelegramId() || st.testers.includes(p.tg)) ? "monobank" : "wayforpay";
+}
 /** Що сказати людині, якій оплата в боті зараз недоступна. */
 export async function paymentBlockedText(personId: number) {
   return (await hasActiveZenSub(personId))
@@ -97,9 +110,22 @@ export async function beginPayment(personId: number, planKey: string, kind: "fir
   const orderReference = `hub-${a.id}-${Date.now().toString(36)}`;
   await d.update(paymentAttempts).set({ orderReference }).where(eq(paymentAttempts.id, a.id));
   const label = kind === "first" ? `${pl.name}${trial ? " · пробний період" : ""}` : kind === "migrate" ? "Прив'язка картки для переїзду в Hub (повертається)" : "Перевірка картки (повертається)";
+  // monobank: лише перші оплати офферів (прив'язка й переїзд картки — через WayForPay, як і раніше)
+  if (kind === "first" && (await providerFor(personId)) === "monobank") {
+    try {
+      const inv = await monoInvoice(c.mode, { amount, currency: pl.currency, reference: orderReference, destination: label, redirectUrl: `${appUrl()}/pay/done?ref=${orderReference}`, webHookUrl: `${appUrl()}/api/payments/monobank`,
+        walletId: oneTime ? undefined : `hub-${personId}`, email: p.email ?? undefined });
+      await d.update(paymentAttempts).set({ provider: "monobank", providerRef: inv.invoiceId }).where(eq(paymentAttempts.id, a.id));
+      await d.insert(events).values({ personId, type: "payment.started", source: "hub", payload: { attemptId: a.id, kind: attemptKind, amount, mode: c.mode, plan: pl.key, provider: "monobank" } });
+      return { attempt: { ...a, orderReference }, plan: pl, redirect: inv.pageUrl as string | undefined, form: undefined, amount };
+    } catch {
+      await d.update(paymentAttempts).set({ provider: "monobank", status: "error", reason: "не вдалося створити рахунок monobank", processedAt: new Date() }).where(eq(paymentAttempts.id, a.id));
+      throw new Error("Не вдалося створити оплату monobank. Спробуйте за хвилину або напишіть нам");
+    }
+  }
   const form = purchaseForm(c, { orderReference, amount, currency: pl.currency, products: [{ name: label, price: amount }], client: { firstName: p.firstName ?? undefined, lastName: p.lastName ?? undefined, email: p.email ?? undefined, phone: p.phone ?? undefined }, returnUrl: `${appUrl()}/pay/done?ref=${orderReference}`, serviceUrl: `${appUrl()}/api/payments/wayforpay` });
   await d.insert(events).values({ personId, type: "payment.started", source: "hub", payload: { attemptId: a.id, kind: attemptKind, amount, mode: c.mode, plan: pl.key } });
-  return { attempt: { ...a, orderReference }, plan: pl, form, amount };
+  return { attempt: { ...a, orderReference }, plan: pl, form, redirect: undefined as string | undefined, amount };
 }
 
 // ---------- зворотний виклик і застосування результату ----------
@@ -112,6 +138,48 @@ export async function handleCallback(body: WfpResponse) {
   if (!verifyResponse(c, body)) { await d.insert(events).values({ personId: a.personId, type: "payment.bad_signature", source: "wayforpay", payload: { ref } }); return { ok: false, reason: "bad signature" }; }
   await applyResult(a, body, c);
   return { ok: true, creds: c };
+}
+
+/**
+ * Вебхук monobank: перевірка підпису ECDSA, захист від застарілих повідомлень (modifiedDate), той самий шлях, що й для WayForPay.
+ * Окремо: токен картки може прийти вже після успішної оплати — тоді зберігаємо картку й прив'язуємо до підписки.
+ */
+export async function handleMonoCallback(raw: string, sign: string | null) {
+  let i: MonoInvoice; try { i = JSON.parse(raw) as MonoInvoice; } catch { return { ok: false, reason: "bad body" }; }
+  const d = db();
+  const [a] = await d.select().from(paymentAttempts).where(and(eq(paymentAttempts.provider, "monobank"), or(eq(paymentAttempts.providerRef, String(i.invoiceId ?? "")), eq(paymentAttempts.orderReference, String(i.reference ?? "-")))));
+  if (!a) return { ok: false, reason: "unknown invoice" };
+  if (!(await monoVerify(a.mode as "test" | "live", raw, sign))) { await d.insert(events).values({ personId: a.personId, type: "payment.bad_signature", source: "monobank", payload: { invoiceId: i.invoiceId } }); return { ok: false, reason: "bad signature" }; }
+  await applyMono(a, i);
+  return { ok: true };
+}
+async function applyMono(a: Attempt, i: MonoInvoice) {
+  const d = db();
+  const prev = (a.raw as { modifiedDate?: string } | null)?.modifiedDate;
+  if (prev && i.modifiedDate && i.modifiedDate < prev) return; // вебхуки можуть прийти не по черзі: актуальний — з більшим modifiedDate
+  const r = monoResult(i);
+  if (a.status === "approved") {
+    if (r.recToken) { // картку збережено пізніше за оплату
+      const pm = await saveCard(a.personId, r);
+      if (pm && a.subscriptionId) await d.update(subscriptions).set({ paymentMethodId: pm.id, updatedAt: new Date() }).where(and(eq(subscriptions.id, a.subscriptionId), isNull(subscriptions.paymentMethodId)));
+    }
+    if (r.transactionStatus === "Refunded") { // повернення з кабінету monobank
+      await d.update(paymentAttempts).set({ status: "refunded", raw: i as unknown as Record<string, unknown>, processedAt: new Date() }).where(eq(paymentAttempts.id, a.id));
+      if (a.orderId) await d.update(orders).set({ status: "refunded" }).where(eq(orders.id, a.orderId));
+      await d.insert(events).values({ personId: a.personId, type: "payment.refunded", source: "monobank", payload: { attemptId: a.id, amount: a.amount, revoke: true } });
+      if (a.subscriptionId) await revokeSubscription(a.subscriptionId, a.id);
+    }
+    return;
+  }
+  await applyResult(a, r, creds(a.mode as "test" | "live"));
+  await d.update(paymentAttempts).set({ providerRef: i.invoiceId, raw: i as unknown as Record<string, unknown> }).where(eq(paymentAttempts.id, a.id));
+}
+/** Підтягнути статус оплати monobank (сторінка /pay/done, якщо вебхук ще не дійшов). */
+export async function syncMonoAttempt(orderReference: string) {
+  const [a] = await db().select().from(paymentAttempts).where(and(eq(paymentAttempts.orderReference, orderReference), eq(paymentAttempts.provider, "monobank")));
+  if (!a?.providerRef || a.status !== "pending") return;
+  const i = await monoStatus(a.mode as "test" | "live", a.providerRef).catch(() => null);
+  if (i) await applyMono(a, i);
 }
 
 /** Ідемпотентно застосовує результат платежу (з callback або з відповіді Charge). */
@@ -138,7 +206,7 @@ export async function applyResult(a: Attempt, r: WfpResponse, c: Creds) {
 async function saveCard(personId: number, r: WfpResponse) {
   const d = db();
   const token = r.recToken ? String(r.recToken) : null; if (!token) return null;
-  const [pm] = await d.insert(paymentMethods).values({ personId, recToken: token, cardPan: r.cardPan ? String(r.cardPan) : null, cardType: r.cardType ? String(r.cardType) : null, bank: r.issuerBankName ? String(r.issuerBankName) : null, lastUsedAt: new Date() })
+  const [pm] = await d.insert(paymentMethods).values({ personId, provider: String((r as { provider?: string }).provider ?? "wayforpay"), recToken: token, cardPan: r.cardPan ? String(r.cardPan) : null, cardType: r.cardType ? String(r.cardType) : null, bank: r.issuerBankName ? String(r.issuerBankName) : null, lastUsedAt: new Date() })
     .onConflictDoUpdate({ target: [paymentMethods.personId, paymentMethods.recToken], set: { cardPan: r.cardPan ? String(r.cardPan) : null, isActive: true, failedAt: null, lastUsedAt: new Date() } }).returning();
   return pm;
 }
@@ -298,6 +366,7 @@ export async function chargeSubscription(subId: number) {
   const [p] = await d.select().from(persons).where(eq(persons.id, s.personId));
   const st = await paymentSettings(); const c = creds(st.mode);
   const amount = Number(s.price);
+  if (pm.provider === "monobank") return chargeMono(s, pm, pl ?? null, amount, st.mode);
   const [a] = await d.insert(paymentAttempts).values({ orderReference: `tmp-${Date.now()}`, personId: s.personId, planId: s.planId, subscriptionId: s.id, kind: "renewal", amount: amount.toFixed(2), currency: s.currency, mode: c.mode, recToken: pm.recToken, cardPan: pm.cardPan }).returning();
   const orderReference = `hub-${a.id}-${Date.now().toString(36)}`;
   await d.update(paymentAttempts).set({ orderReference }).where(eq(paymentAttempts.id, a.id));
@@ -320,6 +389,28 @@ export async function chargeSubscription(subId: number) {
 }
 
 /** Тік: списує підписки, у яких настав час, і завершує скасовані. */
+/** Автосписання за карткою, збереженою в monobank (оплата за токеном з ініціативи Hub). Результат — одразу або вебхуком. */
+async function chargeMono(s: Sub, pm: typeof paymentMethods.$inferSelect, pl: typeof plans.$inferSelect | null, amount: number, mode: "test" | "live") {
+  const d = db();
+  const [a] = await d.insert(paymentAttempts).values({ orderReference: `tmp-${Date.now()}`, personId: s.personId, planId: s.planId, subscriptionId: s.id, kind: "renewal", amount: amount.toFixed(2), currency: s.currency, mode, provider: "monobank", recToken: pm.recToken, cardPan: pm.cardPan }).returning();
+  const orderReference = `hub-${a.id}-${Date.now().toString(36)}`;
+  await d.update(paymentAttempts).set({ orderReference }).where(eq(paymentAttempts.id, a.id));
+  await d.update(subscriptions).set({ nextRetryAt: chargeTime(addDays(new Date(), 1)), updatedAt: new Date() }).where(eq(subscriptions.id, s.id)); // як і для WayForPay: паралельний тік не спише двічі
+  let i: MonoInvoice;
+  try { i = await monoCharge(mode, { cardToken: pm.recToken, amount, currency: s.currency, reference: orderReference, destination: pl?.name ?? "Підписка Hub", redirectUrl: `${appUrl()}/pay/done?ref=${orderReference}`, webHookUrl: `${appUrl()}/api/payments/monobank` }); }
+  catch (e) {
+    const reason = String(e).slice(0, 200);
+    await d.update(paymentAttempts).set({ status: "error", reason, processedAt: new Date() }).where(eq(paymentAttempts.id, a.id));
+    await onRenewalFailed({ ...a, orderReference }, reason);
+    return { ok: false, reason };
+  }
+  await d.update(paymentAttempts).set({ providerRef: i.invoiceId }).where(eq(paymentAttempts.id, a.id));
+  const r = monoResult(i);
+  if (r.transactionStatus === "InProcessing") { await d.update(paymentAttempts).set({ raw: i as unknown as Record<string, unknown> }).where(eq(paymentAttempts.id, a.id)); return { ok: false, reason: "в обробці" }; }
+  await applyMono({ ...a, orderReference, providerRef: i.invoiceId }, i);
+  return { ok: r.transactionStatus === "Approved", reason: r.reason ? String(r.reason) : String(r.transactionStatus) };
+}
+
 export async function chargeDue(limit = 20) {
   const d = db(); const now = new Date();
   await expireOneTime().catch(() => null); // разові оффери й доступи за посиланням
@@ -405,7 +496,13 @@ export async function refundAttempt(attemptId: number, comment = "Поверне
   const d = db(); const [a] = await d.select().from(paymentAttempts).where(eq(paymentAttempts.id, attemptId));
   if (!a || a.status !== "approved") return { ok: false, reason: "немає успішного платежу" };
   const c = creds(a.mode as "test" | "live");
-  const r = await wfpRefund(c, { orderReference: a.orderReference, amount: Number(a.amount), currency: a.currency, comment });
+  let r: WfpResponse;
+  if (a.provider === "monobank") {
+    // monobank: скасування успішної оплати (повернення на картку робить банк)
+    if (!a.providerRef) return { ok: false, reason: "немає номера оплати monobank", revoked: false };
+    try { const m = await monoCancel(a.mode as "test" | "live", a.providerRef, `refund-${a.id}`); r = { transactionStatus: ["processing", "success"].includes(m.status) ? "Refunded" : m.status, reason: m.status, ...m }; }
+    catch (e) { return { ok: false, reason: String(e).slice(0, 200), revoked: false }; }
+  } else r = await wfpRefund(c, { orderReference: a.orderReference, amount: Number(a.amount), currency: a.currency, comment });
   const ok = ["Refunded", "Approved", "Voided", "RefundInProcessing"].includes(String(r.transactionStatus));
   if (ok) {
     await d.update(paymentAttempts).set({ status: "refunded", raw: r as Record<string, unknown>, processedAt: new Date() }).where(eq(paymentAttempts.id, a.id));

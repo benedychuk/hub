@@ -167,7 +167,7 @@ export function getBot() {
     if (!payable.length) { await ctx.reply("Тарифи клубу:\n\n" + text + "\n\n" + await paymentBlockedText(personId)); return; }
     const kb = new InlineKeyboard();
     for (const p of payable) kb.url(`${p.design?.buttonText || "Оплатити"}: ${p.name} · ${money(p.price, p.currency)}`, payLink(personId, p.key, "first")).row();
-    await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці WayForPay. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });
+    await ctx.reply("Тарифи клубу:\n\n" + text + "\n\nОплата на захищеній сторінці банку. Скасувати можна будь-коли: /subscriptions.", { reply_markup: kb });
   };
   bot.command("plans", (ctx) => showPlans(ctx as unknown as Ctx));
   /** Особистий кабінет онбордингу: одноразове посилання з автологіном (ТЗ, розділ 4.1). */
