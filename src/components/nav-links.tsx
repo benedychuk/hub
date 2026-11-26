@@ -16,7 +16,7 @@ const ICON: Record<string, React.ReactNode> = {
 const GROUPS: Group[] = [
   { key: "home", label: "Дашборд", icon: "home", href: "/" },
   { key: "products", label: "Продукти", icon: "box", items: [{ href: "/products", label: "Цифрові продукти", cnt: "products" }, { href: "/resources", label: "Канали і групи" }, { href: "/resources?tab=digital", label: "Функції бота й посилання" }, { href: "/shchyro", label: "Бот «Щиро»" }, { href: "/streams", label: "Етери" }, { href: "/onboarding", label: "Онбординг" }] },
-  { key: "marketing", label: "Маркетинг", icon: "trend", items: [{ href: "/funnels", label: "Воронки", cnt: "funnels" }, { href: "/broadcasts", label: "Розсилки" }, { href: "/automations", label: "Автоматизації" }, { href: "/library", label: "Бібліотека" }] },
+  { key: "marketing", label: "Маркетинг", icon: "trend", items: [{ href: "/funnels", label: "Воронки", cnt: "funnels" }, { href: "/forecast", label: "Прорахунок та аналітика" }, { href: "/broadcasts", label: "Розсилки" }, { href: "/automations", label: "Автоматизації" }, { href: "/library", label: "Бібліотека" }] },
   { key: "sales", label: "Продажі", icon: "dollar", items: [{ href: "/payments", label: "Платежі" }, { href: "/offers", label: "Оффери" }, { href: "/subscriptions", label: "Підписки", cnt: "subs" }] },
   { key: "audience", label: "Аудиторія", icon: "user", items: [{ href: "/people", label: "Люди", cnt: "people" }, { href: "/chats", label: "Чати", cnt: "chats" }, { href: "/assistant", label: "Асистент", cnt: "assistant" }] },
   { key: "system", label: "Система", icon: "cog", items: [{ href: "/bots", label: "Боти й меню" }, { href: "/migration", label: "Міграція з ZenEdu" }, { href: "/settings", label: "Налаштування" }] },

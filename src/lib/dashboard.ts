@@ -119,7 +119,12 @@ export async function buildDashboard(offerKey?: string) {
       count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days')::int as due,
       count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days' and next_at is not null and next_at <= run_end + interval '10 days')::int as renewed,
       count(*) filter (where is_trial and cover_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days')::int as trial_due,
-      count(*) filter (where is_trial and cover_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days' and next_at is not null and next_at <= cover_end + interval '10 days')::int as trial_paid
+      count(*) filter (where is_trial and cover_end + interval '3 days' between now() - interval '150 days' and now() - interval '3 days' and next_at is not null and next_at <= cover_end + interval '10 days')::int as trial_paid,
+      -- для «Прорахунку»: продовження за останні 90 днів і середні ціни (у гривнях) пробного та повного місяця
+      count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '90 days' and now() - interval '3 days')::int as due90,
+      count(*) filter (where not is_trial and run_end + interval '3 days' between now() - interval '90 days' and now() - interval '3 days' and next_at is not null and next_at <= run_end + interval '10 days')::int as renewed90,
+      coalesce(avg(price) filter (where is_trial and created_at >= now() - interval '90 days'), 0)::float as avg_trial_uah,
+      coalesce(avg(price) filter (where not is_trial and days between 28 and 31 and created_at >= now() - interval '90 days'), 0)::float as avg_month_uah
     from fl`));
   const q6 = run(d.execute(sql`${cover}
     select coalesce(sum(price) filter (where created_at >= now() - interval '90 days'), 0)::text as uah,
@@ -213,7 +218,7 @@ export async function buildDashboard(offerKey?: string) {
   // продовження — оплата без перерви. Пішла — доступ скінчився (+3 дні) і наступної оплати не було.
   const flowRows = (await q4).rows as { m: string; new: number; new_trial: number; returned: number; renew: number; uah_new: string; uah_returned: string; uah_renew: string; usd: string; churned: number; members: number }[];
   // ймовірності для прогнозу: частка тих, хто продовжив, серед доступів, що закінчились за останні 150 днів
-  const [rates] = (await q5).rows as { due: number; renewed: number; trial_due: number; trial_paid: number }[];
+  const [rates] = (await q5).rows as { due: number; renewed: number; trial_due: number; trial_paid: number; due90: number; renewed90: number; avg_trial_uah: number; avg_month_uah: number }[];
   const pRenew = rates?.due ? rates.renewed / rates.due : 0.8;
   const pTrial = rates?.trial_due ? rates.trial_paid / rates.trial_due : 0.5;
   // ARPU за 90 днів: дохід клубу (у гривнях, долари за курсом) за 90 днів / люди, які мали доступ до клубу хоча б день за ці 90 днів
@@ -307,7 +312,7 @@ export async function buildDashboard(offerKey?: string) {
     starts30: period.starts, startsZen: period.starts_zen, startsHub: period.starts_hub, startsPrev: period.starts_prev, renews30: period.renews,
     month, revUah: revUahOf(), revUsd: revOf("USD"), revZen: revUahOf("zenedu"), revHub: revUahOf("hub"), revCount, usdRate: USD_UAH,
     bot: bot ?? { total: 0, d30: 0, prev: 0 },
-    days14, flow: flowRows, pRenew, pTrial, rates: rates ?? { due: 0, renewed: 0, trial_due: 0, trial_paid: 0 }, forecast: [...forecast.entries()].map(([m, f]) => ({ m, ...f })).sort((a, b) => a.m.localeCompare(b.m)),
+    days14, flow: flowRows, pRenew, pTrial, rates: rates ?? { due: 0, renewed: 0, trial_due: 0, trial_paid: 0, due90: 0, renewed90: 0, avg_trial_uah: 0, avg_month_uah: 0 }, forecast: [...forecast.entries()].map(([m, f]) => ({ m, ...f })).sort((a, b) => a.m.localeCompare(b.m)),
     tariffs: tariffRows, mrrUah, mrrUsd, zenRenewPrice,
     syncOkAt: sync?.ok_at ? new Date(sync.ok_at) : null, syncLast: sync?.last ?? null, syncProblem: syncProblem(sync?.last ?? null),
     scoped: Boolean(sc),
