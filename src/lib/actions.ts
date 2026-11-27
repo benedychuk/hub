@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
 import { myTelegramId, currentUser } from "./auth";
+import { trackTags } from "./tag-stats";
 import { periodDaysFromOfferName } from "./zenedu";
 import { installWebhook, sendToPerson, getBot, botToken } from "./bot";
 import { grantOffer, newLinkToken } from "./offers";
@@ -163,7 +164,7 @@ export async function bulkPeople(fd: FormData) {
   for (const personId of ids) {
     if (act === "funnel" && num(fd, "funnelId")) { if (await enrollPerson(num(fd, "funnelId"), personId, "bulk")) n++; }
     else if (act === "offer" && num(fd, "planId")) { await grantOffer(personId, num(fd, "planId"), "admin"); n++; }
-    else if (act === "tag" && str(fd, "tag")) { await db().update(persons).set({ tags: sql`(select jsonb_agg(distinct x) from jsonb_array_elements(coalesce(${persons.tags}, '[]'::jsonb) || ${JSON.stringify([str(fd, "tag").slice(0, 60)])}::jsonb) x)` }).where(eq(persons.id, personId)); n++; }
+    else if (act === "tag" && str(fd, "tag")) { await db().update(persons).set({ tags: sql`(select jsonb_agg(distinct x) from jsonb_array_elements(coalesce(${persons.tags}, '[]'::jsonb) || ${JSON.stringify([str(fd, "tag").slice(0, 60)])}::jsonb) x)` }).where(eq(persons.id, personId)); n++; await trackTags(personId, [str(fd, "tag").slice(0, 60)], "manual"); }
   }
   if (act === "funnel") await processDue(50);
   revalidatePath("/people");
@@ -196,7 +197,7 @@ export async function grantOfferToPerson(fd: FormData) {
 
 export async function addTag(fd: FormData) {
   const id = Number(fd.get("personId")); const tag = str(fd, "tag");
-  if (tag) await db().update(persons).set({ tags: sql`(select jsonb_agg(distinct x) from jsonb_array_elements(${persons.tags} || ${JSON.stringify([tag])}::jsonb) x)` }).where(eq(persons.id, id));
+  if (tag) { await db().update(persons).set({ tags: sql`(select jsonb_agg(distinct x) from jsonb_array_elements(${persons.tags} || ${JSON.stringify([tag])}::jsonb) x)` }).where(eq(persons.id, id)); await trackTags(id, [tag], "manual"); }
   revalidatePath(`/people/${id}`);
 }
 export async function removeTag(fd: FormData) {

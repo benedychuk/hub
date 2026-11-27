@@ -1,6 +1,7 @@
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { zen, zenPeriodSql, type ZenSubscriber, type ZenOrder } from "./zenedu";
+import { trackTags } from "./tag-stats";
 
 const { persons, orders, offers, funnels, subscriptions, syncRuns, bots, settings } = schema;
 
@@ -92,6 +93,12 @@ async function upsertPersons(list: ZenSubscriber[]): Promise<Map<number, number>
     },
   }).returning({ id: persons.id, tg: persons.telegramUserId });
   r.forEach((x) => map.set(x.tg, x.id));
+  // статистика лід-магнітів: нові теги ZenEdu в наявних людей (час — момент синхронізації, точність ±1 год). Новим людям не пишемо: невідомо, коли їх отримано
+  for (const row of rows) {
+    const p = prev.get(row.telegramUserId); const id = map.get(row.telegramUserId); if (!p || !id) continue;
+    const old = new Set(p.zenTags ?? []); const added = row.zenTags.filter((t) => !old.has(t));
+    if (added.length) await trackTags(id, added, "zenedu");
+  }
   return map;
 }
 

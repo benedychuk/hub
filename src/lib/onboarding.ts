@@ -6,6 +6,7 @@ import { shchyroConfigured, shchyroRequestPublic } from "./shchyro";
 import { accessGraceHours, subscriptionAllowsSql } from "./access-rule";
 import { SHCHYRO_BOT_URL } from "./shchyro";
 import { clubAccess, clubMemberSql } from "./club";
+import { trackTags } from "./tag-stats";
 
 /**
  * Платформа онбордингу (кабінет кандидатки) як частина Hub.
@@ -265,22 +266,29 @@ export async function linkAccountToPerson(code: string, personId: number) {
   } else {
     [acc] = await d.update(onboardingAccounts).set({ personId, confirmedAt: a.confirmedAt ?? new Date(), updatedAt: new Date() }).where(eq(onboardingAccounts.id, a.id)).returning();
   }
-  await addPersonTags(personId, acc.tags ?? []);
+  await addPersonTags(personId, acc.tags ?? [], acc.id);
   await logEvent(acc, "telegram_confirmed", { via: "bot_start", link_code: code });
   if (acc.quizResultId && !acc.shchyroSyncedAt) await bridgeQuizToShchyro(acc).catch(() => null);
   return { ok: true as const, account: acc };
 }
 
 // ---------- теги й події ----------
-async function addPersonTags(personId: number | null, tags: string[]) {
+async function addPersonTags(personId: number | null, tags: string[], fromAccountId?: number) {
   if (!personId || !tags.length) return;
+  const had = new Set(((await db().select({ t: persons.tags }).from(persons).where(eq(persons.id, personId)))[0]?.t as string[] | undefined) ?? []);
   await db().update(persons).set({ tags: sql`(select coalesce(jsonb_agg(distinct x), '[]'::jsonb) from jsonb_array_elements(${persons.tags} || ${JSON.stringify(tags)}::jsonb) x)`, updatedAt: new Date() }).where(eq(persons.id, personId));
+  // статистика лід-магнітів: момент присвоєння. Якщо тег отримано на платформі ще до прив'язки Telegram — беремо час тієї події
+  for (const tag of tags.filter((t) => !had.has(t))) {
+    let at: Date | null = null;
+    if (fromAccountId) { const r = (await db().execute(sql`select min(created_at) as at from events where source = 'onboarding' and payload->>'account_id' = ${String(fromAccountId)} and payload->>'tag' = ${tag}`)).rows[0] as { at: string | null } | undefined; at = r?.at ? new Date(r.at) : null; }
+    await trackTags(personId, [tag], "onboarding", at);
+  }
 }
 async function addAccountTags(a: Account, tags: string[]) {
   const next = [...new Set([...(a.tags ?? []), ...tags])];
   if (next.length === (a.tags ?? []).length) return a;
   const [u] = await db().update(onboardingAccounts).set({ tags: next, updatedAt: new Date() }).where(eq(onboardingAccounts.id, a.id)).returning();
-  await addPersonTags(a.personId, tags);
+  await addPersonTags(a.personId, tags, a.id);
   return u;
 }
 async function logEvent(a: Account, type: string, payload: Record<string, unknown>) {
