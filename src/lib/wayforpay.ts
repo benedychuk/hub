@@ -60,7 +60,8 @@ function chargeBody(c: Creds, o: Base & { recToken: string; client: { firstName?
     // обов'язкові за документацією CHARGE (wiki.wayforpay.com/en/view/852194): списання (SALE) без 3-D Secure (NON3DS) — автосписання
     // з ініціативи Hub, власниці картки поруч немає. Без цих полів WayForPay проводив оплату з 3-D Secure, і банк відхиляв її
     // через 10 хв: «Cardholder session expired». Підпис ці поля не змінюють.
-    merchantTransactionType: "SALE", merchantTransactionSecureType: "NON3DS",
+    // у таблиці документації назва поля з одруківкою (merchantTransactionSecureTtype), у прикладі — без; передаємо обидві
+    merchantTransactionType: "SALE", merchantTransactionSecureType: "NON3DS", merchantTransactionSecureTtype: "NON3DS",
     merchantSignature: hmacMd5(c.secret, [c.account, domainName(), o.orderReference, orderDate, amount, o.currency, ...names, ...counts, ...prices]),
     apiVersion: 1, orderReference: o.orderReference, orderDate, amount: asNum ? Number(amount) : amount, currency: o.currency,
     productName: names, productPrice: asNum ? prices.map(Number) : prices, productCount: counts,

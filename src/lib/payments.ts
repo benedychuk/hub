@@ -188,6 +188,8 @@ export async function applyResult(a: Attempt, r: WfpResponse, c: Creds) {
   const status = String(r.transactionStatus ?? "");
   const [fresh] = await d.select().from(paymentAttempts).where(eq(paymentAttempts.id, a.id));
   if (!fresh || fresh.status === "approved" || fresh.status === "refunded") return; // вже оброблено
+  // відмову вже зараховано (напр. «Wait 3ds data» у відповіді Charge): пізній підсумок WayForPay (Expired через 10 хв) не рахуємо вдруге
+  if (["declined", "expired", "error"].includes(fresh.status) && status !== "Approved") return;
   const base = { reasonCode: String(r.reasonCode ?? ""), reason: r.reason ? String(r.reason) : null, cardPan: r.cardPan ? String(r.cardPan) : null, recToken: r.recToken ? String(r.recToken) : null, raw: r as Record<string, unknown>, processedAt: new Date() };
   if (status === "Approved") {
     await d.update(paymentAttempts).set({ ...base, status: "approved" }).where(eq(paymentAttempts.id, a.id));
@@ -383,6 +385,13 @@ export async function chargeSubscription(subId: number) {
     await applyResult({ ...a, orderReference }, r, c);
     return { ok: r.transactionStatus === "Approved", reason: r.reason ? String(r.reason) : r.transactionStatus };
   }
+  // банк вимагає 3-D Secure (код 5100 «Wait 3ds data»): при автосписанні підтверджувати нікому — це відмова, одразу й один раз
+  if (String(r.reasonCode ?? "") === "5100" || /wait 3ds/i.test(String(r.reason ?? "")) || r.transactionStatus === "WaitingAuthComplete") {
+    const reason = "Wait 3ds data: банк вимагає 3-D Secure (списання без 3-D Secure не дозволене мерчанту)";
+    await d.update(paymentAttempts).set({ status: "declined", reason, reasonCode: String(r.reasonCode ?? "5100"), raw: r as Record<string, unknown>, processedAt: new Date() }).where(eq(paymentAttempts.id, a.id));
+    await onRenewalFailed({ ...a, orderReference }, reason);
+    return { ok: false, reason };
+  }
   if (r.transactionStatus === "InProcessing" || r.transactionStatus === "Pending") { await d.update(paymentAttempts).set({ raw: r as Record<string, unknown> }).where(eq(paymentAttempts.id, a.id)); return { ok: false, reason: "в обробці" }; }
   // помилка запиту або формату: як невдале списання з повтором
   await d.update(paymentAttempts).set({ status: "error", reason: String(r.reason ?? "помилка запиту"), reasonCode: String(r.reasonCode ?? ""), raw: r as Record<string, unknown>, processedAt: new Date() }).where(eq(paymentAttempts.id, a.id));
@@ -538,10 +547,10 @@ export async function wfpRetryCandidates(): Promise<WfpRetryCandidate[]> {
     from subscriptions s
     join payment_methods pm on pm.id = s.payment_method_id and pm.rec_token is not null and coalesce(pm.provider, 'wayforpay') = 'wayforpay'
     join lateral (select min(coalesce(r.processed_at, r.created_at)) as first_fail from payment_attempts r
-      where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' and r.reason ilike '%session expired%') f on true
+      where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' and (r.reason ilike '%session expired%' or r.reason ilike '%wait 3ds%')) f on true
     where s.source = 'hub' and s.kind = 'subscription' and s.status in ('past_due','expired') and not s.cancel_at_period_end and s.paused_at is null
       and f.first_fail is not null and f.first_fail > now() - interval '30 days'
-      and (select r.reason from payment_attempts r where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' order by r.id desc limit 1) ilike '%session expired%'
+      and (select r.reason from payment_attempts r where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' order by r.id desc limit 1) similar to '%(session expired|Wait 3ds)%'
       and not exists (select 1 from payment_attempts ok join plans pl on pl.id = ok.plan_id where ok.person_id = s.person_id and ok.mode = 'live'
         and ok.status = 'approved' and ok.kind in ('renewal','manual','first') and ok.amount >= pl.price * 0.5 and coalesce(ok.processed_at, ok.created_at) > f.first_fail)
       and not exists (select 1 from payment_attempts p where p.subscription_id = s.id and p.status = 'pending' and p.created_at > now() - interval '1 hour')
