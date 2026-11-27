@@ -188,23 +188,34 @@ export async function buildDashboard(offerKey?: string) {
   const clubPlans = sql.raw(clubPlanIds.length ? clubPlanIds.join(",") : "0");
   const q15 = run(d.execute(sql`
     with t as (
-      select pa.id, pa.person_id, s.id as sub_id, coalesce(pa.processed_at, pa.created_at) as at,
+      select pa.id, pa.person_id, pa.order_id, s.id as sub_id, coalesce(pa.processed_at, pa.created_at) as at,
         coalesce(pa.processed_at, pa.created_at) + pl.trial_days * interval '1 day' as due,
-        s.status, s.cancel_at_period_end, s.payment_method_id
+        pl.price * ${rateSql("pl")} as full_uah, s.status, s.cancel_at_period_end, s.payment_method_id
       from payment_attempts pa join plans pl on pl.id = pa.plan_id join subscriptions s on s.id = pa.subscription_id
       where pa.kind = 'first' and pa.mode = 'live' and pa.status in ('approved','refunded') and pl.trial_days > 0 and pa.amount < pl.price
         and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and ${clubSub}
     ), x as (
       select t.*,
-        exists (select 1 from payment_attempts r join plans rp on rp.id = r.plan_id
+        -- перехід: бойова оплата Hub за повною ціною (автосписання, ручна, інший оффер клубу) або новий старт підписки в ZenEdu
+        -- (дехто після пробного в Hub оплачує клуб у ZenEdu). Те саме бачить сторінка «Платежі» (замовлення).
+        (exists (select 1 from payment_attempts r join plans rp on rp.id = r.plan_id
           where r.person_id = t.person_id and r.id <> t.id and r.mode = 'live' and r.status in ('approved','refunded') and r.kind in ('renewal','manual','first')
             and r.plan_id in (${clubPlans}) and r.amount >= rp.price * 0.5
-            and coalesce(r.processed_at, r.created_at) > t.at and coalesce(r.processed_at, r.created_at) <= t.due + interval '14 days') as paid,
+            and coalesce(r.processed_at, r.created_at) > t.at and coalesce(r.processed_at, r.created_at) <= t.due + interval '14 days')
+         or exists (select 1 from orders o where o.person_id = t.person_id and o.status in ('paid','refunded') and o.id is distinct from t.order_id
+            and ((o.source = 'hub' and o.plan_id in (${clubPlans})) or (o.source = 'zenedu' and o.type = 'subscription_start'))
+            and ${notTestOrder("o")} and o.price * ${rateSql("o")} >= t.full_uah * 0.5
+            and coalesce(o.paid_at, o.created_at) > t.at and coalesce(o.paid_at, o.created_at) <= t.due + interval '14 days')) as paid,
+        exists (select 1 from orders o where o.person_id = t.person_id and o.status in ('paid','refunded') and o.source = 'zenedu' and o.type = 'subscription_start'
+            and o.price * ${rateSql("o")} >= t.full_uah * 0.5 and coalesce(o.paid_at, o.created_at) > t.at and coalesce(o.paid_at, o.created_at) <= t.due + interval '14 days') as paid_zen,
+        (select count(*) from payment_attempts r where r.subscription_id = t.sub_id and r.kind = 'renewal' and r.mode = 'live')::int as renew_tries,
         (select r.reason from payment_attempts r where r.subscription_id = t.sub_id and r.kind = 'renewal' and r.status in ('declined','error','expired')
           order by r.id desc limit 1) as decline_reason
       from t)
     select count(*) filter (where due <= now() - interval '1 day')::int as trials,
       count(*) filter (where due <= now() - interval '1 day' and paid)::int as trials_paid,
+      count(*) filter (where due <= now() - interval '1 day' and paid and paid_zen)::int as paid_zen,
+      count(*) filter (where due <= now() - interval '1 day' and renew_tries > 0)::int as charged,
       count(*) filter (where due > now() - interval '1 day')::int as waiting,
       count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is not null)::int as declined,
       count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is null and (cancel_at_period_end or status in ('cancelled','refunded','paused')))::int as cancelled,
@@ -277,9 +288,10 @@ export async function buildDashboard(offerKey?: string) {
   // пробний → 1-й повний місяць: пробні, розпочаті 17–90 днів тому; продовжила, якщо була наступна оплата клубу
   // 1-й → 2-й місяць: перша повна місячна оплата (старт без пробного або перша оплата після пробного) 34–120 днів тому
   const [conv0] = (await q8).rows as { trials: number; trials_paid: number; trials_zen: number; trials_paid_zen: number; firsts: number; firsts_paid: number }[];
-  const [hubTrials] = (await q15).rows as { trials: number; trials_paid: number; waiting: number; declined: number; cancelled: number; no_card: number; not_charged: number; top_reason: string | null }[];
+  const [hubTrials] = (await q15).rows as { trials: number; trials_paid: number; paid_zen: number; charged: number; waiting: number; declined: number; cancelled: number; no_card: number; not_charged: number; top_reason: string | null }[];
   // пробний → 1-й місяць: лише пробні, оформлені через Hub; ZenEdu — окремо для порівняння
   const conv = conv0 ? { ...conv0, trials: hubTrials?.trials ?? 0, trials_paid: hubTrials?.trials_paid ?? 0, trials_waiting: hubTrials?.waiting ?? 0,
+    paidZen: hubTrials?.paid_zen ?? 0, charged: hubTrials?.charged ?? 0,
     lost: { declined: hubTrials?.declined ?? 0, cancelled: hubTrials?.cancelled ?? 0, noCard: hubTrials?.no_card ?? 0, notCharged: hubTrials?.not_charged ?? 0, topReason: hubTrials?.top_reason ?? null } } : undefined;
 
   // поточний місяць у розрізі валют: скільки з суми прийшло в доларах і кількість оплат
@@ -348,7 +360,7 @@ export async function buildDashboard(offerKey?: string) {
 
   return {
     members, zenOnly, hubOnly, both, trialing, pastDue, noRenew, left: left?.c ?? 0,
-    last14, conv: conv ?? { trials: 0, trials_paid: 0, trials_waiting: 0, trials_zen: 0, trials_paid_zen: 0, firsts: 0, firsts_paid: 0, lost: { declined: 0, cancelled: 0, noCard: 0, notCharged: 0, topReason: null as string | null } },
+    last14, conv: conv ?? { trials: 0, trials_paid: 0, trials_waiting: 0, trials_zen: 0, trials_paid_zen: 0, firsts: 0, firsts_paid: 0, paidZen: 0, charged: 0, lost: { declined: 0, cancelled: 0, noCard: 0, notCharged: 0, topReason: null as string | null } },
     // ARPU: щомісячний дохід (MRR) на учасницю з автопродовженням
     arpu: renewingPersons.size ? Math.round(mrrUah / renewingPersons.size) : 0,
     arpu90Prev: a90?.people_prev ? Math.round(Number(a90.uah_prev) / a90.people_prev) : 0, leftPrev: leftPrev?.c ?? 0,
@@ -412,4 +424,37 @@ function syncProblem(last: { kind: string; status: string; error: string | null;
     : /\b(403|429|5\d\d)\b|retries/.test(e) ? "ZenEdu тимчасово обмежив запити: повторіть оновлення в Налаштуваннях за кілька хвилин; наступного ранку воно запуститься саме."
     : "Повторіть оновлення в Налаштуваннях; якщо помилка повториться, надішліть її текст розробнику.";
   return { title: `${kind} ZenEdu ${new Date(last.started_at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} завершився помилкою`, what, detail: e.slice(0, 300) };
+}
+
+/**
+ * Розбір пробних, оформлених через Hub за 90 днів (для «Конверсій» на дашборді): по кожній людині — коли пробний закінчився,
+ * чи є картка, що Hub пробував списати і які оплати клубу були після пробного (Hub і ZenEdu). Щоб було видно, чому не перейшли.
+ */
+export async function hubTrialDetails(limit = 200) {
+  const d = db();
+  const chans = (await d.select({ key: schema.resources.key, kind: schema.resources.kind }).from(schema.resources)).filter((r) => r.kind === "telegram_channel" || r.kind === "telegram_group").map((r) => r.key);
+  const plans = await d.select({ id: schema.plans.id, ents: schema.plans.entitlements }).from(schema.plans);
+  const ids = plans.filter((p) => Object.keys(p.ents ?? {}).some((k) => chans.includes(k))).map((p) => p.id);
+  const club = sql.raw(ids.length ? ids.join(",") : "0");
+  const r = await d.execute(sql`
+    select pa.person_id, coalesce(nullif(trim(concat_ws(' ', p.first_name, p.last_name)), ''), 'tg ' || p.telegram_user_id) as name, p.username,
+      pl.name as plan, pa.amount::text as trial_amount, pa.currency, coalesce(pa.processed_at, pa.created_at) as at,
+      coalesce(pa.processed_at, pa.created_at) + pl.trial_days * interval '1 day' as due,
+      s.status, s.cancel_at_period_end, s.payment_method_id is not null as has_card, s.next_charge_at, s.current_period_end,
+      (select coalesce(json_agg(json_build_object('at', coalesce(r.processed_at, r.created_at), 'status', r.status, 'amount', r.amount, 'reason', r.reason) order by r.id), '[]'::json)
+        from payment_attempts r where r.subscription_id = s.id and r.kind = 'renewal' and r.mode = 'live') as charges,
+      (select coalesce(json_agg(json_build_object('at', coalesce(o.paid_at, o.created_at), 'source', o.source, 'type', o.type, 'name', o.offer_name, 'amount', o.price, 'currency', o.currency, 'status', o.status) order by coalesce(o.paid_at, o.created_at)), '[]'::json)
+        from orders o where o.person_id = pa.person_id and o.id is distinct from pa.order_id and o.status in ('paid','refunded')
+          and ((o.source = 'hub' and o.plan_id in (${club})) or o.source = 'zenedu')
+          and coalesce(o.paid_at, o.created_at) > coalesce(pa.processed_at, pa.created_at) - interval '1 day') as orders
+    from payment_attempts pa join plans pl on pl.id = pa.plan_id join subscriptions s on s.id = pa.subscription_id join persons p on p.id = pa.person_id
+    where pa.kind = 'first' and pa.mode = 'live' and pa.status in ('approved','refunded') and pl.trial_days > 0 and pa.amount < pl.price
+      and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and s.plan_id in (${club})
+    order by coalesce(pa.processed_at, pa.created_at) desc limit ${limit}`);
+  return r.rows as {
+    person_id: number; name: string; username: string | null; plan: string; trial_amount: string; currency: string; at: string; due: string;
+    status: string; cancel_at_period_end: boolean; has_card: boolean; next_charge_at: string | null; current_period_end: string | null;
+    charges: { at: string; status: string; amount: string; reason: string | null }[];
+    orders: { at: string; source: string; type: string | null; name: string | null; amount: string; currency: string; status: string }[];
+  }[];
 }

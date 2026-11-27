@@ -9,7 +9,7 @@ import { offerOptions } from "@/lib/offers";
 import { navCounts, recentEvents, safe } from "@/lib/queries";
 import { hubBuyerGaps } from "@/lib/shchyro";
 import { onboardingConfigured } from "@/lib/onboarding";
-import { buildDashboard, kyivMonth, USD_UAH } from "@/lib/dashboard";
+import { buildDashboard, hubTrialDetails, kyivMonth, USD_UAH } from "@/lib/dashboard";
 import { dateTime, fullName, money } from "@/lib/format";
 import { describeEvent } from "@/lib/event-labels";
 import { hasDb, db } from "@/db";
@@ -35,6 +35,9 @@ function monthPeriod(now: Date) {
   return { label: MONTH_LOC[m - 1], prevRange: pDay === 1 ? `1 ${MONTH_GEN[pm - 1]}` : `1–${pDay} ${MONTH_GEN[pm - 1]}`, prevDay: `${pDay} ${MONTH_GEN[pm - 1]}` };
 }
 
+const SUB_UA: Record<string, string> = { trialing: "пробний", active: "активна", past_due: "борг", cancelled: "скасована", expired: "закінчилась", paused: "пауза", refunded: "повернено" };
+const CHARGE_UA: Record<string, string> = { approved: "списано", declined: "відхилено", error: "помилка", expired: "прострочено", pending: "в обробці", refunded: "повернено" };
+
 // пояснення до плиток: що це і як рахується (спливає при наведенні на «i»)
 const INFO = {
   month: "Скільки грошей надійшло з 1-го числа поточного місяця (київський час) до зараз.\n\nУсі оплачені замовлення ZenEdu і Hub (клуб і продукти), без тестових; долари за курсом. Порівняння — з минулим місяцем за ту саму кількість днів.",
@@ -57,6 +60,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   // термінові звернення асистентки (криза) — одразу на головній
   const urgent = hasDb() ? await safe(async () => Number(((await db().execute(sql`select count(*)::int as c from assistant_tickets where status = 'open' and priority = 'urgent'`)).rows[0] as { c: number })?.c ?? 0), 0) : 0;
   const gapShchyro = gaps.filter((g) => g.problems.some((p) => p !== "no_cabinet")).length, gapCabinet = gaps.filter((g) => g.problems.includes("no_cabinet")).length;
+  const trialRows = hasDb() ? await safe(() => hubTrialDetails(), []) : [];
   const thisMonth = kyivMonth(Date.now());
   const staleHours = d?.syncOkAt ? (Date.now() - d.syncOkAt.getTime()) / 3600_000 : null;
 
@@ -153,7 +157,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <Section title="Конверсії" description="Лише ті, у кого вже була спроба списання. Пробні — оформлені через Hub за 90 днів, пробний період закінчився (точно, з даних Hub); перші повні місяці — оплачені за 180 днів, настала дата другого списання. Продовження зараховується, якщо оплата прийшла протягом 14 днів після дати списання.">
           {d ? <HBars format="pct" max={100} rows={[
             { name: "Пробний → 1-й повний місяць (Hub)", value: d.conv.trials ? pct(d.conv.trials_paid, d.conv.trials) : 0, note: d.conv.trials
-              ? `${d.conv.trials_paid} з ${d.conv.trials} пробних, оформлених у Hub, оплатили повний місяць${d.conv.trials_waiting ? ` · ще ${d.conv.trials_waiting} у пробному` : ""}${d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""}`
+              ? `${d.conv.trials_paid} з ${d.conv.trials} пробних, оформлених у Hub, оплатили повний місяць${d.conv.paidZen ? ` (з них ${d.conv.paidZen} — у ZenEdu)` : ""}${d.conv.trials_waiting ? ` · ще ${d.conv.trials_waiting} у пробному` : ""}${d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""}`
               : `пробних через Hub, у яких уже минув пробний період, ще не було${d.conv.trials_waiting ? ` · ${d.conv.trials_waiting} зараз у пробному` : ""}`, color: "var(--c1)" },
             { name: "1-й → 2-й місяць", value: pct(d.conv.firsts_paid, d.conv.firsts), note: `${d.conv.firsts_paid} з ${d.conv.firsts} оплатили другий місяць`, color: "var(--c1)" },
           ]} /> : null}
@@ -167,8 +171,25 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
               ].filter(Boolean).join(" · ") || "причин не знайдено"}</p>
               {(l.noCard + l.notCharged) > 0 && <Alert tone="warn">У {l.noCard + l.notCharged} людей після пробного Hub не спробував списати оплату{l.noCard ? `: у ${l.noCard} з них картка не збереглась після пробної оплати` : ""}. Це втрачені продовження — подивіться підписки «пробний період» у «Продажі → Підписки» або напишіть розробнику.</Alert>}
             </>; })()}
+
         </Section>
       </div>
+
+      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати клубу були після пробного (Hub і ZenEdu). Тут видно, чому пробні не переходять у повний місяць.">
+        <details className="chart-table tbl"><summary>Показати таблицю</summary>
+            <table><thead><tr><th>Людина</th><th>Пробний</th><th>Закінчився</th><th>Підписка зараз</th><th>Спроби списання Hub</th><th>Оплати клубу після пробного</th></tr></thead><tbody>
+              {trialRows.map((t) => { const ended = new Date(t.due).getTime() <= Date.now();
+                return <tr key={t.person_id + t.at}>
+                  <td><Link href={`/people/${t.person_id}`}>{t.name}</Link>{t.username && <div className="fld-h">@{t.username}</div>}</td>
+                  <td className="mono">{dateTime(t.at)}<div className="fld-h">{t.plan} · {money(t.trial_amount, t.currency)}</div></td>
+                  <td className="mono">{dateTime(t.due)}{!ended && <div><Pill tone="moon">ще триває</Pill></div>}</td>
+                  <td><Pill tone={t.status === "active" ? "good" : t.status === "trialing" ? "moon" : t.status === "past_due" ? "warn" : "mute"}>{SUB_UA[t.status] ?? t.status}</Pill>
+                    <div className="fld-h">{t.cancel_at_period_end ? "автопродовження вимкнено · " : ""}{t.has_card ? "картка є" : "картки немає"}{t.next_charge_at ? ` · наступне списання ${dateTime(t.next_charge_at)}` : ""}</div></td>
+                  <td className="fld-h">{t.charges.length ? t.charges.map((c, i) => <div key={i}>{dateTime(c.at)} · {CHARGE_UA[c.status] ?? c.status} · {money(c.amount, t.currency)}{c.reason ? ` · ${c.reason}` : ""}</div>) : "не було"}</td>
+                  <td className="fld-h">{t.orders.length ? t.orders.map((o, i) => <div key={i}>{dateTime(o.at)} · {o.source === "zenedu" ? "ZenEdu" : "Hub"} · {o.name ?? o.type ?? ""} · {money(o.amount, o.currency)}{o.status === "refunded" ? " · повернено" : ""}</div>) : "не було"}</td>
+                </tr>; })}
+            </tbody></table></details>
+      </Section>}
 
       <div className="grid g2" style={{ marginBottom: 16 }}>
         <Section title="Останні 14 днів" description="Оплати по днях: нові підписки й продовження, ZenEdu і Hub разом. Наведіть на стовпчик, щоб побачити суму й джерела.">
