@@ -46,7 +46,7 @@ const CHARGE_UA: Record<string, string> = { approved: "списано", declined
 /** Рядок конверсії пробного для HBars: перехід — будь-яка оплата повного місяця (автосписання або сама за посиланням) до 14 днів після кінця пробного. */
 function trialBar(name: string, t: { trials: number; paid: number; waiting: number }, extra: string) {
   return { name, value: t.trials ? Math.round((t.paid / t.trials) * 100) : 0, color: "var(--c1)",
-    note: t.trials ? `${t.paid} з ${t.trials} пробних, оформлених у Hub, оплатили повний місяць (автосписанням або самі)${t.waiting ? ` · ще ${t.waiting} у пробному` : ""}${extra}`
+    note: t.trials ? `${t.paid} з ${t.trials}, у кого пробний уже закінчився, оплатили повний місяць (автосписанням або самі), ${t.trials - t.paid} — ні${t.waiting ? ` · ще ${t.waiting} у пробному — не враховуються` : ""}${extra}`
       : `пробних через Hub, у яких уже минув пробний період, ще не було${t.waiting ? ` · ${t.waiting} зараз у пробному` : ""}` };
 }
 /** Чому пробні не перейшли: відхилено / скасували / без картки / списання не було. */
