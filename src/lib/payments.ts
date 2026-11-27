@@ -339,6 +339,8 @@ async function onRenewalFailed(a: Attempt, reason: string) {
   const d = db(); const now = new Date();
   const [s] = a.subscriptionId ? await d.select().from(subscriptions).where(eq(subscriptions.id, a.subscriptionId)) : [];
   if (!s) return;
+  // ручний повтор з дашборда: невдача нічого не змінює в підписці й нічого не пише людині
+  if (silentRetry.has(s.id)) { await d.insert(events).values({ personId: s.personId, type: "payment.manual_retry_failed", source: "hub", payload: { subscriptionId: s.id, attemptId: a.id, reason } }); return; }
   const [pl] = s.planId ? await d.select().from(plans).where(eq(plans.id, s.planId)) : [];
   const retry = s.retryCount + 1;
   const link = payLink(s.personId, pl?.key ?? "", "card");
@@ -522,3 +524,56 @@ async function revokeSubscription(subId: number, attemptId: number) {
   await shchyroPushChanges().catch(() => null); // «Щиро»: revoke одразу, не чекаючи тіку (лише коли інтеграцію увімкнено)
 }
 export async function hubIdentity(personId: number) { const [i] = await db().select().from(identities).where(and(eq(identities.personId, personId), eq(identities.botKey, "hub"))); return i ?? null; }
+
+// ---------- ручний повтор автосписань, що не пройшли через 3-D Secure («Cardholder session expired») ----------
+// До виправлення 2026-11-27 запит CHARGE ішов без merchantTransactionSecureType = NON3DS, і банк чекав підтвердження власниці картки.
+// Кандидати: бойова підписка Hub (борг або закрита після повторів), остання спроба автосписання відхилена з цієї причини
+// за останні 30 днів, після першої такої відмови людина не оплатила (жодної успішної оплати Hub ≥ половини ціни),
+// автопродовження не вимкнене, не на паузі, є збережена картка WayForPay, за добу не було успішного списання.
+const silentRetry = new Set<number>();
+export type WfpRetryCandidate = { sub_id: number; person_id: number; status: string; price: string; currency: string; failed_at: string };
+export async function wfpRetryCandidates(): Promise<WfpRetryCandidate[]> {
+  const r = await db().execute(sql`
+    select s.id as sub_id, s.person_id, s.status, s.price::text as price, s.currency, f.first_fail as failed_at
+    from subscriptions s
+    join payment_methods pm on pm.id = s.payment_method_id and pm.rec_token is not null and coalesce(pm.provider, 'wayforpay') = 'wayforpay'
+    join lateral (select min(coalesce(r.processed_at, r.created_at)) as first_fail from payment_attempts r
+      where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' and r.reason ilike '%session expired%') f on true
+    where s.source = 'hub' and s.kind = 'subscription' and s.status in ('past_due','expired') and not s.cancel_at_period_end and s.paused_at is null
+      and f.first_fail is not null and f.first_fail > now() - interval '30 days'
+      and (select r.reason from payment_attempts r where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' order by r.id desc limit 1) ilike '%session expired%'
+      and not exists (select 1 from payment_attempts ok join plans pl on pl.id = ok.plan_id where ok.person_id = s.person_id and ok.mode = 'live'
+        and ok.status = 'approved' and ok.kind in ('renewal','manual','first') and ok.amount >= pl.price * 0.5 and coalesce(ok.processed_at, ok.created_at) > f.first_fail)
+      and not exists (select 1 from payment_attempts p where p.subscription_id = s.id and p.status = 'pending' and p.created_at > now() - interval '1 hour')
+      -- ручний повтор — не частіше разу на добу для однієї підписки
+      and not exists (select 1 from events e where e.type = 'payment.manual_retry' and e.payload->>'subscriptionId' = s.id::text and e.created_at > now() - interval '1 day')
+    order by f.first_fail`);
+  return r.rows as WfpRetryCandidate[];
+}
+/** Одна порція ручного повтору (функція Vercel має 60 с): списує, доки не мине ~40 с. Повертає підсумок і скільки лишилось. */
+export async function retryWfpFailed(budgetMs = 40_000) {
+  const st = await paymentSettings();
+  if (st.mode !== "live") return { ok: 0, failed: 0, left: 0, error: "Режим оплат тестовий: повтор можливий лише в бойовому режимі" };
+  const t0 = Date.now(); const list = await wfpRetryCandidates();
+  let ok = 0, failed = 0, done = 0; const reasons = new Map<string, number>();
+  for (const c of list) {
+    if (Date.now() - t0 > budgetMs) break;
+    silentRetry.add(c.sub_id);
+    try {
+      const r = await chargeSubscription(c.sub_id);
+      if (r.ok) {
+        ok++;
+        if (c.status === "expired") { // доступ уже закрили: повертаємо канал, як після звичайної оплати
+          const [s] = await db().select().from(subscriptions).where(eq(subscriptions.id, c.sub_id));
+          const [pl] = s?.planId ? await db().select().from(plans).where(eq(plans.id, s.planId)) : [];
+          const channels = await enforcedChannelKeys(Object.keys(pl?.entitlements ?? {})).catch(() => [] as string[]);
+          if (channels.length) { await syncEntitlementsFromSubscriptions().catch(() => null); await inviteAfterPayment(c.person_id, channels).catch(() => null); }
+        }
+      } else { failed++; reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1); }
+    } finally { silentRetry.delete(c.sub_id); }
+    done++;
+    await db().insert(events).values({ personId: c.person_id, type: "payment.manual_retry", source: "hub", payload: { subscriptionId: c.sub_id } });
+  }
+  const top = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return { ok, failed, left: list.length - done, topReason: top, error: null as string | null };
+}
