@@ -1104,6 +1104,6 @@ export async function retryWfpFailedAction() {
   const { retryWfpFailed } = await import("./payments");
   const r = await retryWfpFailed();
   revalidatePath("/"); revalidatePath("/payments");
-  const msg = r.error ? r.error : `Повтор автосписання: успішно ${r.ok}, не пройшло ${r.failed}${r.topReason ? ` (найчастіше: ${r.topReason})` : ""}${r.left ? `. Лишилось ${r.left} — натисніть ще раз` : ""}`;
+  const msg = r.error ? r.error : `Списання: успішно ${r.ok} (привітання надіслано), не пройшло ${r.failed}${r.topReason ? ` (найчастіше: ${r.topReason})` : ""}${r.left ? `. Лишилось ${r.left} — натисніть ще раз` : ""}`;
   redirect(`/?ok=${encodeURIComponent(msg)}`);
 }

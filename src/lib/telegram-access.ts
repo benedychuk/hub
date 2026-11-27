@@ -137,7 +137,7 @@ export async function prepareForInvite(cfg: ChannelConfig, resourceKey: string, 
   return "ok";
 }
 
-async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, pid: number): Promise<boolean | null | "in_chat"> {
+async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, pid: number, custom?: { text: string; label: string }): Promise<boolean | null | "in_chat"> {
   const d = db(); const bot = getBot(); const now = new Date();
   const state = await prepareForInvite(cfg, r.key, pid);
   if (state === "in_chat") return "in_chat";
@@ -147,8 +147,8 @@ async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, p
     const link = cfg.joinMode === "request"
       ? await bot.api.createChatInviteLink(cfg.chatId!, { name: `p${pid}`, expire_date: expire, creates_join_request: true })
       : await bot.api.createChatInviteLink(cfg.chatId!, { name: `p${pid}`, expire_date: expire, member_limit: 1 });
-    const text = (cfg.inviteText || `Доступ відкрито: ${r.name}.\nПосилання одноразове і діє ${ttl} год.`);
-    const ok = await sendTo(pid, text, new InlineKeyboard().url(`Увійти: ${r.name}`, link.invite_link));
+    const text = custom ? `${custom.text}\n\nПосилання одноразове і діє ${ttl} год.` : (cfg.inviteText || `Доступ відкрито: ${r.name}.\nПосилання одноразове і діє ${ttl} год.`);
+    const ok = await sendTo(pid, text, new InlineKeyboard().url(custom?.label ?? `Увійти: ${r.name}`, link.invite_link));
     const row = { status: "invited", inviteLink: link.invite_link, inviteExpiresAt: new Date(expire * 1000), invitedAt: now, note: ok ? null : "людина не запускала Hub-бот, посилання не доставлено", updatedAt: now };
     await d.insert(memberships).values({ personId: pid, resourceKey: r.key, ...row }).onConflictDoUpdate({ target: [memberships.personId, memberships.resourceKey], set: row });
     await d.insert(events).values({ personId: pid, type: ok ? "channel.invited" : "channel.invite_undelivered", source: "hub", payload: { resource: r.key } });
@@ -157,6 +157,10 @@ async function inviteOne(r: { key: string; name: string }, cfg: ChannelConfig, p
     await d.insert(events).values({ personId: pid, type: "channel.invite_failed", source: "hub", payload: { resource: r.key, error: String(e).slice(0, 200) } });
     return null;
   }
+}
+/** Канали й групи серед ресурсів оффера (незалежно від автоматики доступу). */
+export async function channelKeysOf(keys: string[]) {
+  return (await channelResources()).filter((x) => keys.includes(x.r.key)).map((x) => x.r.key);
 }
 /** Канали з увімкненою автоматикою доступу серед ресурсів оффера: саме туди Hub сам надсилає посилання. */
 export async function enforcedChannelKeys(keys: string[]) {
@@ -173,6 +177,22 @@ export async function inviteAfterPayment(personId: number, keys: string[]) {
     else if (ok) sent++;
   }
   return sent;
+}
+/**
+ * Привітання з кнопкою переходу в канал/групу оффера (явна дія адміністратора, тож і без увімкненої автоматики доступу,
+ * як «Запросити» з картки). Якщо людина вже в каналі — те саме привітання без одноразового посилання. Повертає, чи доставлено.
+ */
+export async function welcomeToChannels(personId: number, keys: string[], text: string, label: string) {
+  const list = (await channelResources()).filter((x) => keys.includes(x.r.key) && x.cfg.chatId);
+  if (!list.length) return sendTo(personId, text).catch(() => false);
+  let delivered = false;
+  for (const { r, cfg } of list) {
+    if (!(await hasEntitlement(personId, r.key))) continue;
+    const ok = await inviteOne(r, cfg, personId, { text, label });
+    if (ok === "in_chat") delivered = (await sendTo(personId, text).catch(() => false)) || delivered;
+    else if (ok) delivered = true;
+  }
+  return delivered;
 }
 /** Запрошення вручну з картки людини: працює і без увімкненої автоматики, бо це явна дія адміністратора; людина має мати право на ресурс. */
 export async function inviteNow(personId: number, resourceKey: string) {
