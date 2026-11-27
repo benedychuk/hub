@@ -103,7 +103,7 @@ const wfpFailedSql = sql`
   with f as (
     select r.person_id, min(coalesce(r.processed_at, r.created_at)) as first_fail
     from payment_attempts r
-    where r.mode = 'live' and r.kind = 'renewal' and r.status in ('expired','declined','error') and r.reason ilike '%session expired%'
+    where r.mode = 'live' and r.kind = 'renewal' and r.status in ('expired','declined','error') and (r.reason ilike '%session expired%' or r.reason ilike '%wait 3ds%')
     group by r.person_id)
   select f.person_id from f
   where not exists (select 1 from payment_attempts ok join plans pl on pl.id = ok.plan_id
