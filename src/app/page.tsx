@@ -4,7 +4,8 @@ import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { Section, Stat, Alert, Timeline, EmptyState, Toolbar } from "@/components/ui/layout";
 import { AutoSubmitSelect, Kebab, MenuAction } from "@/components/ui/controls";
-import { tagWfpFailed, retryWfpFailedAction } from "@/lib/actions";
+import { tagWfpFailed, retryWfpFailedAction, continueManualRetry } from "@/lib/actions";
+import { RetryProgress } from "@/components/retry-progress";
 import { wfpRetryCandidates, manualRetryState } from "@/lib/payments";
 import { wfpFailedCount, WFP_FAILED_TAG } from "@/lib/tag-stats";
 import { ColumnChart, LineChart, ShareBar, HBars, type Cat } from "@/components/ui/charts";
@@ -129,7 +130,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {d && !d.syncProblem && staleHours !== null && staleHours > 3 && <Alert tone="warn">Дані ZenEdu оновлені {dateTime(d.syncOkAt!)}: показники ZenEdu можуть відставати. Синхронізація йде щогодини; вручну — у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
       {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}
       {retryState && (retryRunning || (retryState.finishedAt && Date.now() - new Date(retryState.finishedAt).getTime() < 86400_000)) && <Alert tone={retryRunning ? "info" : "ok"}>
-        <b>{retryRunning ? "Списання йде у фоні" : "Списання завершено"}:</b> успішно {retryState.ok}, не пройшло {retryState.failed}{retryState.topReason && retryState.failed ? ` (найчастіше: ${retryState.topReason})` : ""}{retryRunning ? ` · лишилось ${retryList.length} — Hub обробляє порціями щохвилини, оновіть сторінку` : ""}.</Alert>}
+        <b>{retryRunning ? "Списання йде у фоні" : "Списання завершено"}:</b> успішно {retryState.ok}, не пройшло {retryState.failed}{retryState.topReason && retryState.failed ? ` (найчастіше: ${retryState.topReason})` : ""}{retryRunning ? ` · лишилось ${retryList.length}. Поки ця сторінка відкрита, списання йде безперервно; якщо закрити — Hub продовжить щохвилини сам` : ""}.{retryState.lastRunAt ? ` Остання порція: ${dateTime(retryState.lastRunAt)}.` : ""}{retryState.lastError ? ` Помилка: ${retryState.lastError}` : ""}</Alert>}
+      {retryRunning && <RetryProgress action={continueManualRetry} />}
       {urgent > 0 && <Alert tone="bad"><b>Термінові звернення асистентки: {urgent}.</b> Людина може бути в кризі — відкрийте <Link href="/assistant">Асистент</Link>.</Alert>}
       {(gapShchyro > 0 || gapCabinet > 0) && <Alert tone="bad"><b>Оплатили через Hub, але не отримали доступ:</b>{gapShchyro ? ` без «Щиро» — ${gapShchyro}` : ""}{gapShchyro && gapCabinet ? ";" : ""}{gapCabinet ? ` без кабінету платформи — ${gapCabinet}` : ""}. Причина й що зробити — на сторінці <Link href="/shchyro?tab=access">Бот «Щиро» → Доступ</Link>.</Alert>}
       <Toolbar><form method="get" className="row-actions"><AutoSubmitSelect name="offer" defaultValue={sp.offer ?? ""} className="btn" ariaLabel="Оффер"><option value="">Клуб: усі оффери</option>{offers.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}</AutoSubmitSelect>

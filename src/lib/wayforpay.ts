@@ -86,7 +86,8 @@ export async function checkStatus(c: Creds, orderReference: string) {
 
 export type WfpResponse = { transactionStatus?: string; reasonCode?: number | string; reason?: string; recToken?: string; cardPan?: string; cardType?: string; issuerBankName?: string; authCode?: string; amount?: number; currency?: string; orderReference?: string; merchantSignature?: string; [k: string]: unknown };
 async function api(c: Creds, body: Record<string, unknown>): Promise<WfpResponse> {
-  const res = await fetch("https://api.wayforpay.com/api", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+  // таймаут: інакше повільна відповідь тримає функцію до ліміту Vercel; якщо платіж усе ж пройде, його підсумок прийде вебхуком (serviceUrl)
+  const res = await fetch("https://api.wayforpay.com/api", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), cache: "no-store", signal: AbortSignal.timeout(25_000) });
   const text = await res.text();
   try { return JSON.parse(text) as WfpResponse; } catch { return { transactionStatus: "error", reason: `HTTP ${res.status}: ${text.slice(0, 200)}` }; }
 }
