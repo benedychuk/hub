@@ -561,44 +561,86 @@ export async function wfpRetryCandidates(): Promise<WfpRetryCandidate[]> {
   return r.rows as WfpRetryCandidate[];
 }
 /** Після ручного списання: доступ і привітання. Клуб — «повноцінна учасниця клубу» з кнопкою в канал; «Щиро» — повноцінний доступ на місяць. */
-async function welcomeAfterManualCharge(subId: number) {
+async function welcomeAfterManualCharge(subId: number): Promise<"club" | "shchyro" | "other" | null> {
   const d = db();
-  const [s] = await d.select().from(subscriptions).where(eq(subscriptions.id, subId)); if (!s) return;
+  const [s] = await d.select().from(subscriptions).where(eq(subscriptions.id, subId)); if (!s) return null;
   const [pl] = s.planId ? await d.select().from(plans).where(eq(plans.id, s.planId)) : [];
   const keys = Object.keys(pl?.entitlements ?? {});
-  await syncEntitlementsFromSubscriptions().catch(() => null); // право на канал і «Щиро» за продовженою підпискою
+  const { syncEntitlementsForSubscription } = await import("./telegram-access");
+  await syncEntitlementsForSubscription(subId).catch(() => null); // право на канал і «Щиро» лише цієї підписки (усі разом — задовго)
   const until = s.currentPeriodEnd ? s.currentPeriodEnd.toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv" }) : null;
   const { channelKeysOf, welcomeToChannels } = await import("./telegram-access");
   const channels = await channelKeysOf(keys);
   if (channels.length) {
     await welcomeToChannels(s.personId, channels, `{first_name}, вітаємо! Оплату отримано — тепер ви повноцінна учасниця клубу${until ? ` (доступ до ${until})` : ""}. Натисніть кнопку, щоб перейти в клуб.`, "Перейти в клуб").catch(() => null);
-    return;
+    return "club";
   }
   const [shRes] = await d.select().from(settings).where(eq(settings.key, "shchyro.resource_key"));
   const shKey = typeof shRes?.value === "string" && shRes.value ? shRes.value : "shchyro.access";
   if (keys.includes(shKey)) {
-    await shchyroPushChanges().catch(() => null);
     try { await sendToPerson(s.personId, `{first_name}, вітаємо! Оплату отримано — тепер у вас повноцінний доступ до «Щиро» на місяць${until ? `, до ${until}` : ""}.`, { buttons: [{ text: "Відкрити «Щиро»", url: SHCHYRO_BOT_URL }] }); } catch { /* бот не запущений */ }
-    return;
+    return "shchyro";
   }
   await notify(s.personId, `Оплату отримано. Доступ продовжено${until ? ` до ${until}` : ""}. Дякуємо, що з нами!`);
+  return "other";
 }
 /** Одна порція ручного повтору (функція Vercel має 60 с): списує, доки не мине ~40 с. Повертає підсумок і скільки лишилось. */
 export async function retryWfpFailed(budgetMs = 40_000) {
   const st = await paymentSettings();
   if (st.mode !== "live") return { ok: 0, failed: 0, left: 0, error: "Режим оплат тестовий: повтор можливий лише в бойовому режимі" };
   const t0 = Date.now(); const list = await wfpRetryCandidates();
-  let ok = 0, failed = 0, done = 0; const reasons = new Map<string, number>();
+  let ok = 0, failed = 0, done = 0, shchyro = false; const reasons = new Map<string, number>();
   for (const c of list) {
     if (Date.now() - t0 > budgetMs) break;
+    // позначка «пробували сьогодні» — ДО списання: якщо функцію перерве посеред списання, підписку не спишемо вдруге
+    await db().insert(events).values({ personId: c.person_id, type: "payment.manual_retry", source: "hub", payload: { subscriptionId: c.sub_id } });
     silentRetry.add(c.sub_id);
     try {
       const r = await chargeSubscription(c.sub_id);
-      if (r.ok) { ok++; await welcomeAfterManualCharge(c.sub_id).catch(() => null); } else { failed++; reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1); }
+      if (r.ok) { ok++; if ((await welcomeAfterManualCharge(c.sub_id).catch(() => null)) === "shchyro") shchyro = true; } else { failed++; reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1); }
     } finally { silentRetry.delete(c.sub_id); }
     done++;
-    await db().insert(events).values({ personId: c.person_id, type: "payment.manual_retry", source: "hub", payload: { subscriptionId: c.sub_id } });
   }
+  if (shchyro) await shchyroPushChanges().catch(() => null); // доступ у «Щиро» — один раз на порцію
   const top = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   return { ok, failed, left: list.length - done, topReason: top, error: null as string | null };
+}
+
+// Фонове списання: кнопка вмикає його на 6 годин, щохвилинний тік обробляє порції (~20 с), доки є кандидати.
+// Кожна підписка — раз на добу, тож коли всіх пройдено, кандидатів нема й режим вимикається сам. Підсумок — у налаштуванні.
+const RETRY_KEY = "payments.manualRetry";
+type RetryState = { until: string; startedAt: string; total: number; ok: number; failed: number; topReason: string | null; finishedAt?: string | null };
+export async function manualRetryState(): Promise<RetryState | null> {
+  const [r] = await db().select().from(settings).where(eq(settings.key, RETRY_KEY));
+  return (r?.value as RetryState | undefined) ?? null;
+}
+export async function startManualRetry() {
+  const st = await paymentSettings();
+  if (st.mode !== "live") return { error: "Режим оплат тестовий: списання можливе лише в бойовому режимі" };
+  const cur = await manualRetryState();
+  if (cur && !cur.finishedAt && new Date(cur.until).getTime() > Date.now()) { await manualRetryTick(25_000); return { error: null as string | null, total: cur.total }; } // уже йде: лише ще одна порція
+  const total = (await wfpRetryCandidates()).length;
+  const value: RetryState = { until: new Date(Date.now() + 6 * 3600_000).toISOString(), startedAt: new Date().toISOString(), total, ok: 0, failed: 0, topReason: null, finishedAt: null };
+  await setSetting(RETRY_KEY, value);
+  await manualRetryTick(25_000); // перша порція одразу
+  return { error: null as string | null, total };
+}
+export async function manualRetryTick(budgetMs = 20_000) {
+  const cur = await manualRetryState();
+  if (!cur || cur.finishedAt || new Date(cur.until).getTime() < Date.now()) return null;
+  // одночасно списує лише один процес (кнопка й тік можуть збігтися): атомарний замок у тому самому налаштуванні
+  const lock = new Date(Date.now() + budgetMs + 40_000).toISOString();
+  const got = (await db().execute(sql`update settings set value = jsonb_set(value, '{lockUntil}', to_jsonb(${lock}::text))
+    where key = ${RETRY_KEY} and (value->>'lockUntil' is null or (value->>'lockUntil')::timestamptz < now()) returning key`)).rows.length > 0;
+  if (!got) return null;
+  try {
+    const r = await retryWfpFailed(budgetMs);
+    const now = (await manualRetryState()) ?? cur;
+    const next = { ...now, ok: now.ok + r.ok, failed: now.failed + r.failed, topReason: r.topReason ?? now.topReason, finishedAt: r.error || r.left === 0 ? new Date().toISOString() : null, lockUntil: null };
+    await setSetting(RETRY_KEY, next);
+    return { ...r, state: next as RetryState };
+  } catch (e) {
+    await db().execute(sql`update settings set value = value - 'lockUntil' where key = ${RETRY_KEY}`).catch(() => null);
+    throw e;
+  }
 }

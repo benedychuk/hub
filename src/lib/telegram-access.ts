@@ -80,7 +80,18 @@ export async function syncEntitlementsFromSubscriptions() {
     .where(eq(subscriptions.source, "hub"));
   const grace = await accessGraceHours(); const now = new Date();
   let granted = 0, closed = 0;
-  for (const { s, ents } of rows) {
+  for (const { s, ents } of rows) { const r = await syncSubEntitlements(s, ents, grace, now); granted += r.granted; closed += r.closed; }
+  return { granted, closed };
+}
+/** Те саме для однієї підписки (після ручного списання: без перерахунку всіх підписок Hub). */
+export async function syncEntitlementsForSubscription(subId: number) {
+  const d = db();
+  const [row] = await d.select({ s: subscriptions, ents: plans.entitlements }).from(subscriptions).innerJoin(plans, eq(plans.id, subscriptions.planId)).where(eq(subscriptions.id, subId));
+  if (!row) return { granted: 0, closed: 0 };
+  return syncSubEntitlements(row.s, row.ents, await accessGraceHours(), new Date());
+}
+async function syncSubEntitlements(s: typeof subscriptions.$inferSelect, ents: Record<string, string> | null, grace: number, now: Date) {
+  const d = db(); let granted = 0, closed = 0;
     // єдине правило: активна підписка або грейс після кінця періоду; пауза закриває одразу
     const allowed = subscriptionAllows(s, grace, now);
     const until = accessEnd(s, grace);
@@ -98,7 +109,6 @@ export async function syncEntitlementsFromSubscriptions() {
       if (!allowed) { await d.update(entitlements).set({ revokedAt: now }).where(eq(entitlements.id, ex.id)); closed++; }
       else if ((ex.validUntil?.getTime() ?? 0) !== (until?.getTime() ?? 0)) await d.update(entitlements).set({ validUntil: until }).where(eq(entitlements.id, ex.id));
     }
-  }
   return { granted, closed };
 }
 

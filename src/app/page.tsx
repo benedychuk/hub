@@ -5,7 +5,7 @@ import { Pill } from "@/components/ui";
 import { Section, Stat, Alert, Timeline, EmptyState, Toolbar } from "@/components/ui/layout";
 import { AutoSubmitSelect, Kebab, MenuAction } from "@/components/ui/controls";
 import { tagWfpFailed, retryWfpFailedAction } from "@/lib/actions";
-import { wfpRetryCandidates } from "@/lib/payments";
+import { wfpRetryCandidates, manualRetryState } from "@/lib/payments";
 import { wfpFailedCount, WFP_FAILED_TAG } from "@/lib/tag-stats";
 import { ColumnChart, LineChart, ShareBar, HBars, type Cat } from "@/components/ui/charts";
 import { offerOptions } from "@/lib/offers";
@@ -84,6 +84,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const trialRows = hasDb() ? await safe(() => hubTrialDetails(), []) : [];
   const wfpFailed = hasDb() ? await safe(() => wfpFailedCount(), 0) : 0;
   const retryList = hasDb() ? await safe(() => wfpRetryCandidates(), []) : [];
+  const retryState = hasDb() ? await safe(() => manualRetryState(), null) : null;
+  const retryRunning = retryState && !retryState.finishedAt && new Date(retryState.until).getTime() > Date.now();
   const retrySum = retryList.reduce((a, c) => a + Number(c.price) * (c.currency === "USD" ? USD_UAH : 1), 0);
   const thisMonth = kyivMonth(Date.now());
   const staleHours = d?.syncOkAt ? (Date.now() - d.syncOkAt.getTime()) / 3600_000 : null;
@@ -126,6 +128,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {d?.syncProblem && <Alert tone="bad"><b>{d.syncProblem.title}.</b> Показники ZenEdu можуть бути неповні. {d.syncProblem.what} <Link href="/settings">Налаштування</Link>{d.syncProblem.detail && <div className="mono fld-h">{d.syncProblem.detail}</div>}</Alert>}
       {d && !d.syncProblem && staleHours !== null && staleHours > 3 && <Alert tone="warn">Дані ZenEdu оновлені {dateTime(d.syncOkAt!)}: показники ZenEdu можуть відставати. Синхронізація йде щогодини; вручну — у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
       {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}
+      {retryState && (retryRunning || (retryState.finishedAt && Date.now() - new Date(retryState.finishedAt).getTime() < 86400_000)) && <Alert tone={retryRunning ? "info" : "ok"}>
+        <b>{retryRunning ? "Списання йде у фоні" : "Списання завершено"}:</b> успішно {retryState.ok}, не пройшло {retryState.failed}{retryState.topReason && retryState.failed ? ` (найчастіше: ${retryState.topReason})` : ""}{retryRunning ? ` · лишилось ${retryList.length} — Hub обробляє порціями щохвилини, оновіть сторінку` : ""}.</Alert>}
       {urgent > 0 && <Alert tone="bad"><b>Термінові звернення асистентки: {urgent}.</b> Людина може бути в кризі — відкрийте <Link href="/assistant">Асистент</Link>.</Alert>}
       {(gapShchyro > 0 || gapCabinet > 0) && <Alert tone="bad"><b>Оплатили через Hub, але не отримали доступ:</b>{gapShchyro ? ` без «Щиро» — ${gapShchyro}` : ""}{gapShchyro && gapCabinet ? ";" : ""}{gapCabinet ? ` без кабінету платформи — ${gapCabinet}` : ""}. Причина й що зробити — на сторінці <Link href="/shchyro?tab=access">Бот «Щиро» → Доступ</Link>.</Alert>}
       <Toolbar><form method="get" className="row-actions"><AutoSubmitSelect name="offer" defaultValue={sp.offer ?? ""} className="btn" ariaLabel="Оффер"><option value="">Клуб: усі оффери</option>{offers.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}</AutoSubmitSelect>
