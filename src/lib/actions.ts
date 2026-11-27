@@ -1101,9 +1101,11 @@ export async function tagWfpFailed() {
 
 /** Дашборд → «Розбір пробних Hub» → ⋮: ще одна спроба автосписання тим, у кого не пройшло через 3-D Secure (з новим запитом). Порціями. */
 export async function retryWfpFailedAction() {
-  const { retryWfpFailed } = await import("./payments");
-  const r = await retryWfpFailed();
+  const { startManualRetry, manualRetryState } = await import("./payments");
+  const r = await startManualRetry();
   revalidatePath("/"); revalidatePath("/payments");
-  const msg = r.error ? r.error : `Списання: успішно ${r.ok} (привітання надіслано), не пройшло ${r.failed}${r.topReason ? ` (найчастіше: ${r.topReason})` : ""}${r.left ? `. Лишилось ${r.left} — натисніть ще раз` : ""}`;
-  redirect(`/?ok=${encodeURIComponent(msg)}`);
+  if (r.error) redirect(`/?ok=${encodeURIComponent(r.error)}`);
+  const st = await manualRetryState();
+  const left = (r.total ?? 0) - (st?.ok ?? 0) - (st?.failed ?? 0);
+  redirect(`/?ok=${encodeURIComponent(`Списання запущено для ${r.total}. Уже: успішно ${st?.ok ?? 0}, не пройшло ${st?.failed ?? 0}.${left > 0 ? ` Решту (${left}) Hub спише сам у фоні протягом кількох хвилин — оновлюйте сторінку.` : ""}`)}`);
 }
