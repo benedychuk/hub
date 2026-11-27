@@ -157,7 +157,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <Section title="Конверсії" description="Лише ті, у кого вже була спроба списання. Пробні — оформлені через Hub за 90 днів, пробний період закінчився (точно, з даних Hub); перші повні місяці — оплачені за 180 днів, настала дата другого списання. Продовження зараховується, якщо оплата прийшла протягом 14 днів після дати списання.">
           {d ? <HBars format="pct" max={100} rows={[
             { name: "Пробний → 1-й повний місяць (Hub)", value: d.conv.trials ? pct(d.conv.trials_paid, d.conv.trials) : 0, note: d.conv.trials
-              ? `${d.conv.trials_paid} з ${d.conv.trials} пробних, оформлених у Hub, оплатили повний місяць${d.conv.paidZen ? ` (з них ${d.conv.paidZen} — у ZenEdu)` : ""}${d.conv.trials_waiting ? ` · ще ${d.conv.trials_waiting} у пробному` : ""}${d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""}`
+              ? `${d.conv.trials_paid} з ${d.conv.trials} пробних, оформлених у Hub, оплатили повний місяць${d.conv.trials_waiting ? ` · ще ${d.conv.trials_waiting} у пробному` : ""}${d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""}`
               : `пробних через Hub, у яких уже минув пробний період, ще не було${d.conv.trials_waiting ? ` · ${d.conv.trials_waiting} зараз у пробному` : ""}`, color: "var(--c1)" },
             { name: "1-й → 2-й місяць", value: pct(d.conv.firsts_paid, d.conv.firsts), note: `${d.conv.firsts_paid} з ${d.conv.firsts} оплатили другий місяць`, color: "var(--c1)" },
           ]} /> : null}
