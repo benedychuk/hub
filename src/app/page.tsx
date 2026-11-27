@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { Activity, Tag } from "lucide-react";
+import { Activity, Tag, RefreshCw } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { Section, Stat, Alert, Timeline, EmptyState, Toolbar } from "@/components/ui/layout";
 import { AutoSubmitSelect, Kebab, MenuAction } from "@/components/ui/controls";
-import { tagWfpFailed } from "@/lib/actions";
+import { tagWfpFailed, retryWfpFailedAction } from "@/lib/actions";
+import { wfpRetryCandidates } from "@/lib/payments";
 import { wfpFailedCount, WFP_FAILED_TAG } from "@/lib/tag-stats";
 import { ColumnChart, LineChart, ShareBar, HBars, type Cat } from "@/components/ui/charts";
 import { offerOptions } from "@/lib/offers";
@@ -18,6 +19,7 @@ import { hasDb, db } from "@/db";
 import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // ручний повтор автосписань із цієї сторінки йде порціями до ~40 с
 
 const MONTHS = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"];
 const monthLabel = (m: string) => MONTHS[Number(m.slice(5, 7)) - 1];
@@ -81,6 +83,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const gapShchyro = gaps.filter((g) => g.problems.some((p) => p !== "no_cabinet")).length, gapCabinet = gaps.filter((g) => g.problems.includes("no_cabinet")).length;
   const trialRows = hasDb() ? await safe(() => hubTrialDetails(), []) : [];
   const wfpFailed = hasDb() ? await safe(() => wfpFailedCount(), 0) : 0;
+  const retryList = hasDb() ? await safe(() => wfpRetryCandidates(), []) : [];
+  const retrySum = retryList.reduce((a, c) => a + Number(c.price) * (c.currency === "USD" ? USD_UAH : 1), 0);
   const thisMonth = kyivMonth(Date.now());
   const staleHours = d?.syncOkAt ? (Date.now() - d.syncOkAt.getTime()) / 3600_000 : null;
 
@@ -188,9 +192,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         </Section>
       </div>
 
-      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати в Hub були після пробного (клуб і «Щиро» окремо). Тут видно, чому пробні не переходять у повний місяць."
-        actions={wfpFailed > 0 ? <Kebab><MenuAction action={tagWfpFailed} icon={<Tag />} confirm={`Поставити тег ${WFP_FAILED_TAG} ${wfpFailed} людям, у кого автосписання не пройшло («Cardholder session expired») і хто після цього не оплатив? Людям нічого не надсилається, автоматизації не запускаються.`}>{`Тег ${WFP_FAILED_TAG} тим, хто не оплатив (${wfpFailed})`}</MenuAction></Kebab> : undefined}>
-        <details className="chart-table tbl"><summary>Показати таблицю</summary>
+      {(trialRows.length > 0 || wfpFailed > 0 || retryList.length > 0) && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати в Hub були після пробного (клуб і «Щиро» окремо). Тут видно, чому пробні не переходять у повний місяць."
+        actions={wfpFailed > 0 || retryList.length > 0 ? <Kebab>
+          {retryList.length > 0 && <MenuAction action={retryWfpFailedAction} icon={<RefreshCw />} confirm={`Спробувати ще раз списати оплату зі збережених карток: ${retryList.length} підписок на ${money(Math.round(retrySum), "UAH")}? Це ті, у кого автосписання не пройшло через 3-D Secure («Cardholder session expired») за 30 днів і хто після цього не оплатив; без скасованих і призупинених. Хто оплатить — отримає звичайне повідомлення про продовження (а кому доступ уже закрили — посилання в канал). Якщо знову не пройде — людям нічого не надсилається й підписка не змінюється. Кожну підписку — не частіше разу на добу.`}>{`Повторити автосписання (${retryList.length})`}</MenuAction>}
+          {wfpFailed > 0 && <MenuAction action={tagWfpFailed} icon={<Tag />} confirm={`Поставити тег ${WFP_FAILED_TAG} ${wfpFailed} людям, у кого автосписання не пройшло («Cardholder session expired») і хто після цього не оплатив? Людям нічого не надсилається, автоматизації не запускаються.`}>{`Тег ${WFP_FAILED_TAG} тим, хто не оплатив (${wfpFailed})`}</MenuAction>}
+        </Kebab> : undefined}>
+        {trialRows.length > 0 && <details className="chart-table tbl"><summary>Показати таблицю</summary>
             <table><thead><tr><th>Людина</th><th>Пробний</th><th>Закінчився</th><th>Підписка зараз</th><th>Спроби списання Hub</th><th>Оплати в Hub після пробного</th></tr></thead><tbody>
               {trialRows.map((t) => { const ended = new Date(t.due).getTime() <= Date.now();
                 return <tr key={t.person_id + t.at}>
@@ -202,7 +209,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
                   <td className="fld-h">{t.charges.length ? t.charges.map((c, i) => <div key={i}>{dateTime(c.at)} · {CHARGE_UA[c.status] ?? c.status} · {money(c.amount, t.currency)}{c.reason ? ` · ${c.reason}` : ""}</div>) : "не було"}</td>
                   <td className="fld-h">{t.orders.length ? t.orders.map((o, i) => <div key={i}>{dateTime(o.at)} · {o.source === "zenedu" ? "ZenEdu" : "Hub"} · {o.name ?? o.type ?? ""} · {money(o.amount, o.currency)}{o.status === "refunded" ? " · повернено" : ""}</div>) : "не було"}</td>
                 </tr>; })}
-            </tbody></table></details>
+            </tbody></table></details>}
       </Section>}
 
       <div className="grid g2" style={{ marginBottom: 16 }}>

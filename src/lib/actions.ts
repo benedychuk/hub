@@ -1098,3 +1098,12 @@ export async function tagWfpFailed() {
   revalidatePath("/"); revalidatePath("/people");
   redirect(`/?ok=${encodeURIComponent(n ? `Тег ${WFP_FAILED_TAG} поставлено. Людей: ${n}` : `Нових людей для тегу ${WFP_FAILED_TAG} немає`)}`);
 }
+
+/** Дашборд → «Розбір пробних Hub» → ⋮: ще одна спроба автосписання тим, у кого не пройшло через 3-D Secure (з новим запитом). Порціями. */
+export async function retryWfpFailedAction() {
+  const { retryWfpFailed } = await import("./payments");
+  const r = await retryWfpFailed();
+  revalidatePath("/"); revalidatePath("/payments");
+  const msg = r.error ? r.error : `Повтор автосписання: успішно ${r.ok}, не пройшло ${r.failed}${r.topReason ? ` (найчастіше: ${r.topReason})` : ""}${r.left ? `. Лишилось ${r.left} — натисніть ще раз` : ""}`;
+  redirect(`/?ok=${encodeURIComponent(msg)}`);
+}
