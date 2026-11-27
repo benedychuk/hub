@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { Activity } from "lucide-react";
+import { Activity, Tag } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { Section, Stat, Alert, Timeline, EmptyState, Toolbar } from "@/components/ui/layout";
-import { AutoSubmitSelect } from "@/components/ui/controls";
+import { AutoSubmitSelect, Kebab, MenuAction } from "@/components/ui/controls";
+import { tagWfpFailed } from "@/lib/actions";
+import { wfpFailedCount, WFP_FAILED_TAG } from "@/lib/tag-stats";
 import { ColumnChart, LineChart, ShareBar, HBars, type Cat } from "@/components/ui/charts";
 import { offerOptions } from "@/lib/offers";
 import { navCounts, recentEvents, safe } from "@/lib/queries";
@@ -68,7 +70,7 @@ const INFO = {
   norenew: "Учасниці, які ще мають доступ, але наступного списання не буде.\n\nВимкнули продовження (ZenEdu повідомляє вебхуком, Hub — кнопкою в боті) або купили разовий доступ. Вони підуть наприкінці оплаченого періоду, якщо не оплатять знову. «Списання не пройшло» — автосписання Hub, які банк відхилив.",
 } as const;
 
-export default async function Dashboard({ searchParams }: { searchParams: Promise<{ offer?: string }> }) {
+export default async function Dashboard({ searchParams }: { searchParams: Promise<{ offer?: string; ok?: string }> }) {
   const sp = await searchParams;
   const [counts, d, offers, recent] = await Promise.all([navCounts(), hasDb() ? buildDashboard(sp.offer).catch((e) => { console.error("dashboard", e); return null; }) : null, hasDb() ? offerOptions().catch(() => []) : [], recentEvents()]);
   const offerName = offers.find((o) => o.key === sp.offer)?.name;
@@ -78,6 +80,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const urgent = hasDb() ? await safe(async () => Number(((await db().execute(sql`select count(*)::int as c from assistant_tickets where status = 'open' and priority = 'urgent'`)).rows[0] as { c: number })?.c ?? 0), 0) : 0;
   const gapShchyro = gaps.filter((g) => g.problems.some((p) => p !== "no_cabinet")).length, gapCabinet = gaps.filter((g) => g.problems.includes("no_cabinet")).length;
   const trialRows = hasDb() ? await safe(() => hubTrialDetails(), []) : [];
+  const wfpFailed = hasDb() ? await safe(() => wfpFailedCount(), 0) : 0;
   const thisMonth = kyivMonth(Date.now());
   const staleHours = d?.syncOkAt ? (Date.now() - d.syncOkAt.getTime()) / 3600_000 : null;
 
@@ -118,6 +121,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {hasDb() && !d && <Alert tone="bad">Не вдалося порахувати показники. Оновіть сторінку; якщо не допоможе, напишіть розробнику.</Alert>}
       {d?.syncProblem && <Alert tone="bad"><b>{d.syncProblem.title}.</b> Показники ZenEdu можуть бути неповні. {d.syncProblem.what} <Link href="/settings">Налаштування</Link>{d.syncProblem.detail && <div className="mono fld-h">{d.syncProblem.detail}</div>}</Alert>}
       {d && !d.syncProblem && staleHours !== null && staleHours > 3 && <Alert tone="warn">Дані ZenEdu оновлені {dateTime(d.syncOkAt!)}: показники ZenEdu можуть відставати. Синхронізація йде щогодини; вручну — у <Link href="/settings">Налаштуваннях</Link>.</Alert>}
+      {sp.ok && <Alert tone="ok">{sp.ok}</Alert>}
       {urgent > 0 && <Alert tone="bad"><b>Термінові звернення асистентки: {urgent}.</b> Людина може бути в кризі — відкрийте <Link href="/assistant">Асистент</Link>.</Alert>}
       {(gapShchyro > 0 || gapCabinet > 0) && <Alert tone="bad"><b>Оплатили через Hub, але не отримали доступ:</b>{gapShchyro ? ` без «Щиро» — ${gapShchyro}` : ""}{gapShchyro && gapCabinet ? ";" : ""}{gapCabinet ? ` без кабінету платформи — ${gapCabinet}` : ""}. Причина й що зробити — на сторінці <Link href="/shchyro?tab=access">Бот «Щиро» → Доступ</Link>.</Alert>}
       <Toolbar><form method="get" className="row-actions"><AutoSubmitSelect name="offer" defaultValue={sp.offer ?? ""} className="btn" ariaLabel="Оффер"><option value="">Клуб: усі оффери</option>{offers.map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}</AutoSubmitSelect>
@@ -184,7 +188,8 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         </Section>
       </div>
 
-      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати в Hub були після пробного (клуб і «Щиро» окремо). Тут видно, чому пробні не переходять у повний місяць.">
+      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати в Hub були після пробного (клуб і «Щиро» окремо). Тут видно, чому пробні не переходять у повний місяць."
+        actions={wfpFailed > 0 ? <Kebab><MenuAction action={tagWfpFailed} icon={<Tag />} confirm={`Поставити тег ${WFP_FAILED_TAG} ${wfpFailed} людям, у кого автосписання не пройшло («Cardholder session expired») і хто після цього не оплатив? Людям нічого не надсилається, автоматизації не запускаються.`}>{`Тег ${WFP_FAILED_TAG} тим, хто не оплатив (${wfpFailed})`}</MenuAction></Kebab> : undefined}>
         <details className="chart-table tbl"><summary>Показати таблицю</summary>
             <table><thead><tr><th>Людина</th><th>Пробний</th><th>Закінчився</th><th>Підписка зараз</th><th>Спроби списання Hub</th><th>Оплати в Hub після пробного</th></tr></thead><tbody>
               {trialRows.map((t) => { const ended = new Date(t.due).getTime() <= Date.now();
