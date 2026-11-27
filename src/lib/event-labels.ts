@@ -26,6 +26,7 @@ export function describeEvent(e: EventRow, n: Names): Described {
     case "funnel.intro": return { title: `Побачила вступ воронки «${fName}»`, href: fHref, group: "funnel" };
     case "funnel.answer": return { title: `Відповіла на крок${n.steps[Number(p.stepId)] ? ` «${n.steps[Number(p.stepId)]}»` : ""}`, detail: `${String(p.answer ?? "").slice(0, 160)}${p.correct === true ? " · правильно" : p.correct === false ? " · неправильно" : ""}`, group: "funnel" };
     case "funnel.assignment": return { title: `Надіслала завдання${n.steps[Number(p.stepId)] ? ` до кроку «${n.steps[Number(p.stepId)]}»` : ""}`, detail: String(p.answer ?? "").slice(0, 160), group: "funnel", tone: "good" };
+    case "tag.tracked": return { title: `Додано тег «${String(p.tag ?? "")}»`, detail: ({ manual: "вручну", onboarding: "платформа", zenedu: "ZenEdu" } as Record<string, string>)[e.source] ?? undefined, group: "tag" };
     case "tag.added": return { title: `Додано тег «${String(p.tag ?? "")}»`, detail: p.button ? `кнопка «${String(p.button)}»` : p.source ? String(p.source) : undefined, group: "tag" };
     case "tag.removed": return { title: `Прибрано тег «${String(p.tag ?? "")}»`, group: "tag", tone: "mute" };
     case "payment.started": return { title: `Відкрила оплату${planName ? ` «${planName}»` : ""}`, detail: `${money(p.amount, p.currency)}${p.mode === "test" ? " · тест" : ""}`, href: planId ? `/offers/${planId}` : undefined, group: "payment" };
