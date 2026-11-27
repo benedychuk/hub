@@ -609,7 +609,7 @@ export async function retryWfpFailed(budgetMs = 40_000) {
 // Фонове списання: кнопка вмикає його на 6 годин, щохвилинний тік обробляє порції (~20 с), доки є кандидати.
 // Кожна підписка — раз на добу, тож коли всіх пройдено, кандидатів нема й режим вимикається сам. Підсумок — у налаштуванні.
 const RETRY_KEY = "payments.manualRetry";
-type RetryState = { until: string; startedAt: string; total: number; ok: number; failed: number; topReason: string | null; finishedAt?: string | null };
+type RetryState = { until: string; startedAt: string; total: number; ok: number; failed: number; topReason: string | null; finishedAt?: string | null; lastRunAt?: string | null; lastError?: string | null };
 export async function manualRetryState(): Promise<RetryState | null> {
   const [r] = await db().select().from(settings).where(eq(settings.key, RETRY_KEY));
   return (r?.value as RetryState | undefined) ?? null;
@@ -618,11 +618,11 @@ export async function startManualRetry() {
   const st = await paymentSettings();
   if (st.mode !== "live") return { error: "Режим оплат тестовий: списання можливе лише в бойовому режимі" };
   const cur = await manualRetryState();
-  if (cur && !cur.finishedAt && new Date(cur.until).getTime() > Date.now()) { await manualRetryTick(25_000); return { error: null as string | null, total: cur.total }; } // уже йде: лише ще одна порція
+  if (cur && !cur.finishedAt && new Date(cur.until).getTime() > Date.now()) { await manualRetryTick(20_000); return { error: null as string | null, total: cur.total }; } // уже йде: лише ще одна порція
   const total = (await wfpRetryCandidates()).length;
   const value: RetryState = { until: new Date(Date.now() + 6 * 3600_000).toISOString(), startedAt: new Date().toISOString(), total, ok: 0, failed: 0, topReason: null, finishedAt: null };
   await setSetting(RETRY_KEY, value);
-  await manualRetryTick(25_000); // перша порція одразу
+  await manualRetryTick(20_000); // перша порція одразу
   return { error: null as string | null, total };
 }
 export async function manualRetryTick(budgetMs = 20_000) {
@@ -636,11 +636,11 @@ export async function manualRetryTick(budgetMs = 20_000) {
   try {
     const r = await retryWfpFailed(budgetMs);
     const now = (await manualRetryState()) ?? cur;
-    const next = { ...now, ok: now.ok + r.ok, failed: now.failed + r.failed, topReason: r.topReason ?? now.topReason, finishedAt: r.error || r.left === 0 ? new Date().toISOString() : null, lockUntil: null };
+    const next = { ...now, ok: now.ok + r.ok, failed: now.failed + r.failed, topReason: r.topReason ?? now.topReason, finishedAt: r.error || r.left === 0 ? new Date().toISOString() : null, lockUntil: null, lastRunAt: new Date().toISOString(), lastError: r.error };
     await setSetting(RETRY_KEY, next);
     return { ...r, state: next as RetryState };
   } catch (e) {
-    await db().execute(sql`update settings set value = value - 'lockUntil' where key = ${RETRY_KEY}`).catch(() => null);
+    await db().execute(sql`update settings set value = (value - 'lockUntil') || jsonb_build_object('lastError', ${String(e).slice(0, 300)}::text, 'lastRunAt', now()::text) where key = ${RETRY_KEY}`).catch(() => null);
     throw e;
   }
 }

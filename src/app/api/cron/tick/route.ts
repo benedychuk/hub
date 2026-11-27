@@ -19,12 +19,13 @@ export async function GET(req: Request) {
   if (!hasDb() || !process.env.TELEGRAM_BOT_TOKEN) return Response.json({ ok: false, reason: "not configured" });
   const t0 = Date.now();
   try {
+    // фонове ручне списання з дашборда («Списати з усіх, у кого не пройшло») — першим: решта тіку (перерахунок доступів) довга,
+    // і в кінці черги списання не встигало за ліміт функції
+    const manualRetry = await manualRetryTick(15_000).catch((e) => ({ error: String(e).slice(0, 200) }));
     const funnels = await processDue();
     const deletions = await processDeletions().catch((e) => ({ error: String(e).slice(0, 200) }));
     const access = await accessTick().catch((e) => ({ error: String(e).slice(0, 200) }));
     const payments = await chargeDue().catch((e) => ({ error: String(e).slice(0, 200) }));
-    // фонове ручне списання з дашборда («Списати з усіх, у кого не пройшло»), якщо його запущено
-    const manualRetry = await manualRetryTick(20_000).catch((e) => ({ error: String(e).slice(0, 200) }));
     const cabinets = await ensureHubCabinets().catch((e) => ({ error: String(e).slice(0, 200) })); // кабінет платформи кожному, хто оплатив через Hub
     const products = await syncProductAccess().catch((e) => ({ error: String(e).slice(0, 200) })); // доступ до цифрових продуктів за офферами
     const shchyro = await shchyroPushChanges().catch((e) => ({ error: String(e).slice(0, 200) })); // grant/revoke у бота «Щиро» за змінами прав (лише коли автоматика увімкнена)

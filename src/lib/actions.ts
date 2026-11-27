@@ -1109,3 +1109,10 @@ export async function retryWfpFailedAction() {
   const left = (r.total ?? 0) - (st?.ok ?? 0) - (st?.failed ?? 0);
   redirect(`/?ok=${encodeURIComponent(`Списання запущено для ${r.total}. Уже: успішно ${st?.ok ?? 0}, не пройшло ${st?.failed ?? 0}.${left > 0 ? ` Решту (${left}) Hub спише сам у фоні протягом кількох хвилин — оновлюйте сторінку.` : ""}`)}`);
 }
+
+/** Дашборд, поки відкрито й списання йде: наступна порція без очікування тіку (кнопка не потрібна). Нічого не повертає — сторінка оновлюється. */
+export async function continueManualRetry() {
+  const { manualRetryTick } = await import("./payments");
+  await manualRetryTick(20_000).catch(() => null);
+  revalidatePath("/");
+}
