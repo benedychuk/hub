@@ -13,6 +13,8 @@ import { navCounts, broadcastDetail } from "@/lib/queries";
 import { saveBroadcastContent, saveBroadcastAudience, sendBroadcast, cancelBroadcast, deleteBroadcastFromSubscribers, deleteBroadcast, duplicateBroadcast, previewBroadcast, runBroadcastsNow } from "@/lib/actions";
 import { countAudience, previewAudience, SUB_STATUSES, STATUS_UA } from "@/lib/broadcasts";
 import { dateTime, fullName } from "@/lib/format";
+import { desc } from "drizzle-orm";
+import { db, schema } from "@/db";
 import { STANDARD_VARS as VARS } from "@/lib/vars";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +31,7 @@ export default async function BroadcastEditor({ params, searchParams }: { params
   const a = b.audience ?? {};
   const hasFilters = Object.entries(a).some(([k, v]) => k !== "onlyAdmin" && (Array.isArray(v) ? v.length > 0 : Boolean(v)));
   const mode: "all" | "filters" | "me" = a.onlyAdmin ? "me" : hasFilters ? "filters" : "all";
+  const streamList = editable ? await db().select({ id: schema.streams.id, title: schema.streams.title, startsAt: schema.streams.startsAt }).from(schema.streams).orderBy(desc(schema.streams.startsAt)).limit(30).catch(() => []) : [];
   const [audCount, audPreview, total] = editable ? await Promise.all([countAudience(a).catch(() => 0), previewAudience(a, 30).catch(() => []), countAudience({}).catch(() => 0)]) : [b.totalCount, [], 0];
   const stepKey = editable ? (["content", "recipients", "send"].includes(sp.step ?? "") ? sp.step! : "content") : (["content", "recipients", "clicked"].includes(sp.step ?? "") ? sp.step! : "recipients");
   const stepIdx = ["content", "recipients", "send"].indexOf(stepKey);
@@ -41,6 +44,7 @@ export default async function BroadcastEditor({ params, searchParams }: { params
   const textLen = (b.text ?? "").replace(/<[^>]+>/g, "").length;
   const n = (arr?: unknown[]) => arr?.length ?? 0;
   const groupCounts = {
+    club: (a.clubMembers ? 1 : 0) + (a.notVisitedStream ? 1 : 0),
     sub: (a.customer && a.customer !== "any" ? 1 : 0) + n(a.subStatus) + n(a.planIds) + n(a.offerIds),
     tags: n(a.tagsAny) + n(a.tagsAll) + n(a.tagsNone), funnels: n(a.funnelRules) + n(a.funnelIn) + n(a.funnelNotIn), access: n(a.entitlements),
     activity: (a.activeDays ? 1 : 0) + (a.startedAfter ? 1 : 0) + (a.startedBefore ? 1 : 0), manual: n(a.includeIds) + n(a.excludeIds),
@@ -127,6 +131,12 @@ export default async function BroadcastEditor({ params, searchParams }: { params
           <div className="form">
             <Section title="Кому надсилати" description="Розсилка йде через Hub-бот, тому отримати її можуть лише ті, хто його запустив і не заблокував.">
               <AudienceMode initial={mode} total={total} filters={<>
+                <FilterGroup title="Клуб і етери" active={groupCounts.club}>
+                  <FormRow>
+                    <Field label="Учасниці"><Checkbox name="clubMembers" defaultChecked={a.clubMembers} label="Лише чинні учасниці клубу" hint="підписка ZenEdu чи Hub діє зараз, за тим самим правилом, що доступ до каналу" /></Field>
+                    <Field label="Не дивились етер" hint="ні онлайн, ні запис: немає переходу в журналі етеру"><select name="notVisitedStream" defaultValue={a.notVisitedStream ? String(a.notVisitedStream) : ""}><option value="">Не враховувати</option>{streamList.map((x) => <option key={x.id} value={x.id}>{x.title} · {dateTime(x.startsAt)}</option>)}</select></Field>
+                  </FormRow>
+                </FilterGroup>
                 <FilterGroup title="Підписка та оплата" active={groupCounts.sub}>
                   <FormRow>
                     <Field label="Оплати"><select name="customer" defaultValue={a.customer ?? "any"}><option value="any">Будь-хто</option><option value="customer">Customer: є хоча б одна оплата</option><option value="not">Not customer: без оплат</option></select></Field>
