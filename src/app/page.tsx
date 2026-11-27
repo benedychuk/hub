@@ -181,9 +181,6 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           {d && d.conv.hasShchyro && <TrialLosses label="«Щиро»" t={d.conv.shchyro} />}
           {d && (() => { const miss = [d.conv.lost, d.conv.shchyro.lost].reduce((a, l) => a + l.noCard + l.notCharged, 0); const nc = d.conv.lost.noCard + d.conv.shchyro.lost.noCard;
             return miss > 0 ? <Alert tone="warn">У {miss} людей після пробного Hub не спробував списати оплату{nc ? `: у ${nc} з них картка не збереглась після пробної оплати` : ""}. Це втрачені продовження — подивіться таблицю «Розбір пробних Hub» нижче або напишіть розробнику.</Alert> : null; })()}
-          {d && (() => { const all = [d.conv.lost, d.conv.shchyro.lost].filter((l) => l.declined > 0 && /session expired|3d|3ds|secure/i.test(l.topReason ?? ""));
-            const n = all.reduce((a, l) => a + l.declined, 0);
-            return n > 0 ? <Alert tone="bad"><b>Автосписання після пробного відхиляються: «{all[0].topReason}».</b> У {n} людей автосписання не пройшло, і вони не оплатили вручну протягом 14 днів. Ті, хто оплатив сам за посиланням, уже враховані як перехід. Причину відмови (вимога підтвердження власниці картки, 3-D Secure) з'ясовують у WayForPay.</Alert> : null; })()}
         </Section>
       </div>
 
