@@ -43,7 +43,7 @@ export async function actualAssumptions() {
     a: { c1, c2, r: r90, trialPrice: Math.round(d.rates.avg_trial_uah || 0), monthPrice: Math.round(d.rates.avg_month_uah || d.arpu || 0) } as Assumptions,
     basis: {
       trials: d.conv.trials, trialsPaid: d.conv.trials_paid, firsts: d.conv.firsts, firstsPaid: d.conv.firsts_paid,
-      due90: d.rates.due90, renewed90: d.rates.renewed90, left30: d.left, arpu: d.arpu,
+      due90: d.rates.due90, renewed90: d.rates.renewed90, leftMonth: d.left, arpu: d.arpu,
     },
   };
 }
