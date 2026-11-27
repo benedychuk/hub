@@ -38,6 +38,23 @@ function monthPeriod(now: Date) {
 const SUB_UA: Record<string, string> = { trialing: "пробний", active: "активна", past_due: "борг", cancelled: "скасована", expired: "закінчилась", paused: "пауза", refunded: "повернено" };
 const CHARGE_UA: Record<string, string> = { approved: "списано", declined: "відхилено", error: "помилка", expired: "прострочено", pending: "в обробці", refunded: "повернено" };
 
+/** Рядок конверсії пробного для HBars: перехід — будь-яка оплата повного місяця (автосписання або сама за посиланням) до 14 днів після кінця пробного. */
+function trialBar(name: string, t: { trials: number; paid: number; waiting: number }, extra: string) {
+  return { name, value: t.trials ? Math.round((t.paid / t.trials) * 100) : 0, color: "var(--c1)",
+    note: t.trials ? `${t.paid} з ${t.trials} пробних, оформлених у Hub, оплатили повний місяць (автосписанням або самі)${t.waiting ? ` · ще ${t.waiting} у пробному` : ""}${extra}`
+      : `пробних через Hub, у яких уже минув пробний період, ще не було${t.waiting ? ` · ${t.waiting} зараз у пробному` : ""}` };
+}
+/** Чому пробні не перейшли: відхилено / скасували / без картки / списання не було. */
+function TrialLosses({ label, t }: { label: string; t: { trials: number; paid: number; lost: { declined: number; cancelled: number; noCard: number; notCharged: number; topReason: string | null } } }) {
+  const l = t.lost; const notPaid = t.trials - t.paid; if (notPaid <= 0) return null;
+  return <p className="fld-h" style={{ marginTop: 10 }}>Пробні {label}, що не перейшли ({notPaid}): {[
+    l.declined ? `автосписання відхилено й не оплатили самі — ${l.declined}${l.topReason ? ` (найчастіше: ${l.topReason})` : ""}` : "",
+    l.cancelled ? `скасували або поставили на паузу — ${l.cancelled}` : "",
+    l.noCard ? `картка не збереглась — ${l.noCard}` : "",
+    l.notCharged ? `списання не відбулося — ${l.notCharged}` : "",
+  ].filter(Boolean).join(" · ") || "причин не знайдено"}</p>;
+}
+
 // пояснення до плиток: що це і як рахується (спливає при наведенні на «i»)
 const INFO = {
   month: "Скільки грошей надійшло з 1-го числа поточного місяця (київський час) до зараз.\n\nУсі оплачені замовлення ZenEdu і Hub (клуб і продукти), без тестових; долари за курсом. Порівняння — з минулим місяцем за ту саму кількість днів.",
@@ -154,35 +171,29 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             <ShareBar ariaLabel="Учасниці за станом оплати" parts={[{ name: "платять з автопродовженням", value: paidRenewing, color: "var(--c2)" }, { name: "пробний період", value: d.trialing, color: "var(--c2)", hatch: true }, { name: "без автопродовження", value: d.noRenew, color: "var(--c-muted)" }]} />
           </> : <EmptyState title="Немає учасниць із чинним доступом" />}
         </Section>
-        <Section title="Конверсії" description="Лише ті, у кого вже була спроба списання. Пробні — оформлені через Hub за 90 днів, пробний період закінчився (точно, з даних Hub); перші повні місяці — оплачені за 180 днів, настала дата другого списання. Продовження зараховується, якщо оплата прийшла протягом 14 днів після дати списання.">
+        <Section title="Конверсії" description="Пробні — оформлені через Hub за 90 днів, пробний період уже закінчився; клуб і «Щиро» рахуються окремо. Перехід — оплата повного місяця тієї самої групи офферів (автосписання або сама за посиланням) не пізніше 14 днів після кінця пробного. 1-й → 2-й місяць — перші повні місяці за 180 днів, у яких уже настала дата другого списання.">
           {d ? <HBars format="pct" max={100} rows={[
-            { name: "Пробний → 1-й повний місяць (Hub)", value: d.conv.trials ? pct(d.conv.trials_paid, d.conv.trials) : 0, note: d.conv.trials
-              ? `${d.conv.trials_paid} з ${d.conv.trials} пробних, оформлених у Hub, оплатили повний місяць${d.conv.trials_waiting ? ` · ще ${d.conv.trials_waiting} у пробному` : ""}${d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""}`
-              : `пробних через Hub, у яких уже минув пробний період, ще не було${d.conv.trials_waiting ? ` · ${d.conv.trials_waiting} зараз у пробному` : ""}`, color: "var(--c1)" },
+            trialBar("Пробний → повний місяць: клуб", { trials: d.conv.trials, paid: d.conv.trials_paid, waiting: d.conv.trials_waiting }, d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""),
+            ...(d.conv.hasShchyro ? [trialBar("Пробний → повний місяць: «Щиро»", d.conv.shchyro, "")] : []),
             { name: "1-й → 2-й місяць", value: pct(d.conv.firsts_paid, d.conv.firsts), note: `${d.conv.firsts_paid} з ${d.conv.firsts} оплатили другий місяць`, color: "var(--c1)" },
           ]} /> : null}
-          {d && d.conv.trials > d.conv.trials_paid && (() => { const l = d.conv.lost; const notPaid = d.conv.trials - d.conv.trials_paid;
-            return <>
-              <p className="fld-h" style={{ marginTop: 10 }}>Пробні Hub, що не перейшли ({notPaid}): {[
-                l.declined ? `списання відхилено — ${l.declined}${l.topReason ? ` (найчастіше: ${l.topReason})` : ""}` : "",
-                l.cancelled ? `скасували або поставили на паузу — ${l.cancelled}` : "",
-                l.noCard ? `картка не збереглась — ${l.noCard}` : "",
-                l.notCharged ? `списання не відбулося — ${l.notCharged}` : "",
-              ].filter(Boolean).join(" · ") || "причин не знайдено"}</p>
-              {l.declined > 0 && /session expired|3d|3ds|secure/i.test(l.topReason ?? "") && <Alert tone="bad"><b>Автосписання після пробного відхиляє WayForPay: «{l.topReason}» ({l.declined}).</b> Це не відмова банку чи брак коштів: платіжна система вимагає, щоб власниця картки підтвердила оплату (3-D Secure), а при списанні за збереженою карткою її немає. Списання за токеном без підтвердження (рекурентні платежі) вмикає WayForPay для мерчанта — напишіть у їхню підтримку. Доки цього немає, жодне автопродовження Hub через WayForPay не пройде.</Alert>}
-              {(l.noCard + l.notCharged) > 0 && <Alert tone="warn">У {l.noCard + l.notCharged} людей після пробного Hub не спробував списати оплату{l.noCard ? `: у ${l.noCard} з них картка не збереглась після пробної оплати` : ""}. Це втрачені продовження — подивіться підписки «пробний період» у «Продажі → Підписки» або напишіть розробнику.</Alert>}
-            </>; })()}
-
+          {d && <TrialLosses label="клубу" t={{ trials: d.conv.trials, paid: d.conv.trials_paid, lost: d.conv.lost }} />}
+          {d && d.conv.hasShchyro && <TrialLosses label="«Щиро»" t={d.conv.shchyro} />}
+          {d && (() => { const miss = [d.conv.lost, d.conv.shchyro.lost].reduce((a, l) => a + l.noCard + l.notCharged, 0); const nc = d.conv.lost.noCard + d.conv.shchyro.lost.noCard;
+            return miss > 0 ? <Alert tone="warn">У {miss} людей після пробного Hub не спробував списати оплату{nc ? `: у ${nc} з них картка не збереглась після пробної оплати` : ""}. Це втрачені продовження — подивіться таблицю «Розбір пробних Hub» нижче або напишіть розробнику.</Alert> : null; })()}
+          {d && (() => { const all = [d.conv.lost, d.conv.shchyro.lost].filter((l) => l.declined > 0 && /session expired|3d|3ds|secure/i.test(l.topReason ?? ""));
+            const n = all.reduce((a, l) => a + l.declined, 0);
+            return n > 0 ? <Alert tone="bad"><b>Автосписання після пробного відхиляються: «{all[0].topReason}».</b> У {n} людей автосписання не пройшло, і вони не оплатили вручну протягом 14 днів. Ті, хто оплатив сам за посиланням, уже враховані як перехід. Причину відмови (вимога підтвердження власниці картки, 3-D Secure) з'ясовують у WayForPay.</Alert> : null; })()}
         </Section>
       </div>
 
-      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати клубу в Hub були після пробного. Тут видно, чому пробні не переходять у повний місяць.">
+      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати в Hub були після пробного (клуб і «Щиро» окремо). Тут видно, чому пробні не переходять у повний місяць.">
         <details className="chart-table tbl"><summary>Показати таблицю</summary>
-            <table><thead><tr><th>Людина</th><th>Пробний</th><th>Закінчився</th><th>Підписка зараз</th><th>Спроби списання Hub</th><th>Оплати клубу в Hub після пробного</th></tr></thead><tbody>
+            <table><thead><tr><th>Людина</th><th>Пробний</th><th>Закінчився</th><th>Підписка зараз</th><th>Спроби списання Hub</th><th>Оплати в Hub після пробного</th></tr></thead><tbody>
               {trialRows.map((t) => { const ended = new Date(t.due).getTime() <= Date.now();
                 return <tr key={t.person_id + t.at}>
                   <td><Link href={`/people/${t.person_id}`}>{t.name}</Link>{t.username && <div className="fld-h">@{t.username}</div>}</td>
-                  <td className="mono">{dateTime(t.at)}<div className="fld-h">{t.plan} · {money(t.trial_amount, t.currency)}</div></td>
+                  <td className="mono">{dateTime(t.at)}<div className="fld-h">{t.shchyro ? "«Щиро» · " : "клуб · "}{t.plan} · {money(t.trial_amount, t.currency)}</div></td>
                   <td className="mono">{dateTime(t.due)}{!ended && <div><Pill tone="moon">ще триває</Pill></div>}</td>
                   <td><Pill tone={t.status === "active" ? "good" : t.status === "trialing" ? "moon" : t.status === "past_due" ? "warn" : "mute"}>{SUB_UA[t.status] ?? t.status}</Pill>
                     <div className="fld-h">{t.cancel_at_period_end ? "автопродовження вимкнено · " : ""}{t.has_card ? "картка є" : "картки немає"}{t.next_charge_at ? ` · наступне списання ${dateTime(t.next_charge_at)}` : ""}</div></td>

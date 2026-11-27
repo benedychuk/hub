@@ -32,6 +32,10 @@ export async function buildDashboard(offerKey?: string) {
   const chans = (await d.select({ key: schema.resources.key, kind: schema.resources.kind }).from(schema.resources)).filter((r) => r.kind === "telegram_channel" || r.kind === "telegram_group").map((r) => r.key);
   const plans = await d.select({ id: schema.plans.id, name: schema.plans.name, ents: schema.plans.entitlements }).from(schema.plans);
   const clubPlanIds = plans.filter((p) => Object.keys(p.ents ?? {}).some((k) => chans.includes(k))).map((p) => p.id);
+  // оффери «Щиро»: дають доступ до бота «Щиро» (ресурс із налаштувань «Щиро») і не відкривають канал клубу
+  const [shRes] = await d.select({ v: schema.settings.value }).from(schema.settings).where(sql`${schema.settings.key} = 'shchyro.resource_key'`);
+  const shchyroKey = typeof shRes?.v === "string" && shRes.v ? shRes.v : "shchyro.access";
+  const shchyroPlanIds = plans.filter((p) => !clubPlanIds.includes(p.id) && Object.keys(p.ents ?? {}).includes(shchyroKey)).map((p) => p.id);
   const idList = (ids: number[]) => sql.raw(ids.length ? ids.join(",") : "0");
 
   const clubSub: SQL = sc ? scopeSql(sc, "s") : sql`(s.source = 'zenedu' or s.plan_id in (${idList(clubPlanIds)}))`;
@@ -185,15 +189,15 @@ export async function buildDashboard(offerKey?: string) {
   // клубу від цієї людини за повною ціною (автосписання, ручна оплата за посиланням, інший оффер клубу) після пробної
   // і не пізніше ніж за 14 днів після кінця пробного. Лише ті, у кого пробний закінчився щонайменше день тому, за 90 днів.
   // Для тих, хто не перейшов, — причина: списання відхилено / скасували / картка не збереглась / списання не було.
-  const clubPlans = sql.raw(clubPlanIds.length ? clubPlanIds.join(",") : "0");
-  const q15 = run(d.execute(sql`
+  // Те саме окремо для офферів «Щиро» (дають доступ до бота «Щиро», а не до каналу клубу): пробний «Щиро» → оплата «Щиро».
+  const trialConv = (subCond: SQL, ids: number[]) => { const clubPlans = sql.raw(ids.length ? ids.join(",") : "0"); return run(d.execute(sql`
     with t as (
       select pa.id, pa.person_id, pa.order_id, s.id as sub_id, coalesce(pa.processed_at, pa.created_at) as at,
         coalesce(pa.processed_at, pa.created_at) + pl.trial_days * interval '1 day' as due,
         pl.price * ${rateSql("pl")} as full_uah, s.status, s.cancel_at_period_end, s.payment_method_id
       from payment_attempts pa join plans pl on pl.id = pa.plan_id join subscriptions s on s.id = pa.subscription_id
       where pa.kind = 'first' and pa.mode = 'live' and pa.status in ('approved','refunded') and pl.trial_days > 0 and pa.amount < pl.price
-        and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and ${clubSub}
+        and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and ${subCond}
     ), x as (
       select t.*,
         -- перехід: бойова оплата Hub за повною ціною (автосписання, ручна, інший оффер клубу) — за спробами оплати або замовленнями Hub.
@@ -219,7 +223,9 @@ export async function buildDashboard(offerKey?: string) {
       count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is null and not (cancel_at_period_end or status in ('cancelled','refunded','paused')) and payment_method_id is null)::int as no_card,
       count(*) filter (where due <= now() - interval '1 day' and not paid and decline_reason is null and not (cancel_at_period_end or status in ('cancelled','refunded','paused')) and payment_method_id is not null)::int as not_charged,
       (select mode() within group (order by decline_reason) from x where due <= now() - interval '1 day' and not paid and decline_reason is not null) as top_reason
-    from x`));
+    from x`)); };
+  const q15 = trialConv(clubSub, clubPlanIds);
+  const q17 = trialConv(sql`s.plan_id in (${idList(shchyroPlanIds)})`, shchyroPlanIds);
   const q9 = run(d.execute(sql`select o.currency as cur, o.source, coalesce(sum(o.price),0)::text as sum, coalesce(sum(o.price * ${rateSql("o")}),0)::text as uah, count(*)::int as c from orders o
     where o.status = 'paid' and coalesce(o.paid_at, o.created_at) >= ${M0} and ${scopeO} and ${notTestOrder("o")} group by 1, 2`));
   // отримано за поточний календарний місяць (київський час), усі оплачені замовлення (клуб і продукти), без тестових; і минулий місяць до того самого дня
@@ -285,11 +291,16 @@ export async function buildDashboard(offerKey?: string) {
   // пробний → 1-й повний місяць: пробні, розпочаті 17–90 днів тому; продовжила, якщо була наступна оплата клубу
   // 1-й → 2-й місяць: перша повна місячна оплата (старт без пробного або перша оплата після пробного) 34–120 днів тому
   const [conv0] = (await q8).rows as { trials: number; trials_paid: number; trials_zen: number; trials_paid_zen: number; firsts: number; firsts_paid: number }[];
-  const [hubTrials] = (await q15).rows as { trials: number; trials_paid: number; charged: number; waiting: number; declined: number; cancelled: number; no_card: number; not_charged: number; top_reason: string | null }[];
+  type TrialRow = { trials: number; trials_paid: number; charged: number; waiting: number; declined: number; cancelled: number; no_card: number; not_charged: number; top_reason: string | null };
+  const [hubTrials] = (await q15).rows as TrialRow[];
+  const [shTrials] = (await q17).rows as TrialRow[];
+  const trialStats = (t?: TrialRow) => ({ trials: t?.trials ?? 0, paid: t?.trials_paid ?? 0, waiting: t?.waiting ?? 0, charged: t?.charged ?? 0,
+    lost: { declined: t?.declined ?? 0, cancelled: t?.cancelled ?? 0, noCard: t?.no_card ?? 0, notCharged: t?.not_charged ?? 0, topReason: t?.top_reason ?? null } });
   // пробний → 1-й місяць: лише пробні, оформлені через Hub; ZenEdu — окремо для порівняння
-  const conv = conv0 ? { ...conv0, trials: hubTrials?.trials ?? 0, trials_paid: hubTrials?.trials_paid ?? 0, trials_waiting: hubTrials?.waiting ?? 0,
-    charged: hubTrials?.charged ?? 0,
-    lost: { declined: hubTrials?.declined ?? 0, cancelled: hubTrials?.cancelled ?? 0, noCard: hubTrials?.no_card ?? 0, notCharged: hubTrials?.not_charged ?? 0, topReason: hubTrials?.top_reason ?? null } } : undefined;
+  const club = trialStats(hubTrials);
+  // trials/trials_paid — клубні пробні (їх же бере «Прорахунок»); shchyro — пробні офферів «Щиро» за тією самою логікою
+  const conv = { trials_zen: conv0?.trials_zen ?? 0, trials_paid_zen: conv0?.trials_paid_zen ?? 0, firsts: conv0?.firsts ?? 0, firsts_paid: conv0?.firsts_paid ?? 0,
+    trials: club.trials, trials_paid: club.paid, trials_waiting: club.waiting, charged: club.charged, lost: club.lost, shchyro: trialStats(shTrials), hasShchyro: shchyroPlanIds.length > 0 };
 
   // поточний місяць у розрізі валют: скільки з суми прийшло в доларах і кількість оплат
   const rev = (await q9).rows as { cur: string; source: string; sum: string; uah: string; c: number }[];
@@ -357,7 +368,7 @@ export async function buildDashboard(offerKey?: string) {
 
   return {
     members, zenOnly, hubOnly, both, trialing, pastDue, noRenew, left: left?.c ?? 0,
-    last14, conv: conv ?? { trials: 0, trials_paid: 0, trials_waiting: 0, trials_zen: 0, trials_paid_zen: 0, firsts: 0, firsts_paid: 0, charged: 0, lost: { declined: 0, cancelled: 0, noCard: 0, notCharged: 0, topReason: null as string | null } },
+    last14, conv,
     // ARPU: щомісячний дохід (MRR) на учасницю з автопродовженням
     arpu: renewingPersons.size ? Math.round(mrrUah / renewingPersons.size) : 0,
     arpu90Prev: a90?.people_prev ? Math.round(Number(a90.uah_prev) / a90.people_prev) : 0, leftPrev: leftPrev?.c ?? 0,
@@ -431,8 +442,12 @@ export async function hubTrialDetails(limit = 200) {
   const d = db();
   const chans = (await d.select({ key: schema.resources.key, kind: schema.resources.kind }).from(schema.resources)).filter((r) => r.kind === "telegram_channel" || r.kind === "telegram_group").map((r) => r.key);
   const plans = await d.select({ id: schema.plans.id, ents: schema.plans.entitlements }).from(schema.plans);
-  const ids = plans.filter((p) => Object.keys(p.ents ?? {}).some((k) => chans.includes(k))).map((p) => p.id);
-  const club = sql.raw(ids.length ? ids.join(",") : "0");
+  const clubIds = plans.filter((p) => Object.keys(p.ents ?? {}).some((k) => chans.includes(k))).map((p) => p.id);
+  const [shRes] = await d.select({ v: schema.settings.value }).from(schema.settings).where(sql`${schema.settings.key} = 'shchyro.resource_key'`);
+  const shKey = typeof shRes?.v === "string" && shRes.v ? shRes.v : "shchyro.access";
+  const shIds = plans.filter((p) => !clubIds.includes(p.id) && Object.keys(p.ents ?? {}).includes(shKey)).map((p) => p.id);
+  // клуб і «Щиро»; оплати після пробного — тієї самої групи офферів, що й пробний
+  const club = sql.raw(clubIds.length ? clubIds.join(",") : "0"), sh = sql.raw(shIds.length ? shIds.join(",") : "0");
   const r = await d.execute(sql`
     select pa.person_id, coalesce(nullif(trim(concat_ws(' ', p.first_name, p.last_name)), ''), 'tg ' || p.telegram_user_id) as name, p.username,
       pl.name as plan, pa.amount::text as trial_amount, pa.currency, coalesce(pa.processed_at, pa.created_at) as at,
@@ -442,16 +457,18 @@ export async function hubTrialDetails(limit = 200) {
         from payment_attempts r where r.subscription_id = s.id and r.kind = 'renewal' and r.mode = 'live') as charges,
       (select coalesce(json_agg(json_build_object('at', coalesce(o.paid_at, o.created_at), 'source', o.source, 'type', o.type, 'name', o.offer_name, 'amount', o.price, 'currency', o.currency, 'status', o.status) order by coalesce(o.paid_at, o.created_at)), '[]'::json)
         from orders o where o.person_id = pa.person_id and o.id is distinct from pa.order_id and o.status in ('paid','refunded')
-          and o.source = 'hub' and o.plan_id in (${club})
-          and coalesce(o.paid_at, o.created_at) > coalesce(pa.processed_at, pa.created_at) - interval '1 day') as orders
+          and o.source = 'hub' and (case when s.plan_id in (${sh}) then o.plan_id in (${sh}) else o.plan_id in (${club}) end)
+          and coalesce(o.paid_at, o.created_at) > coalesce(pa.processed_at, pa.created_at) - interval '1 day') as orders,
+      s.plan_id in (${sh}) as shchyro
     from payment_attempts pa join plans pl on pl.id = pa.plan_id join subscriptions s on s.id = pa.subscription_id join persons p on p.id = pa.person_id
     where pa.kind = 'first' and pa.mode = 'live' and pa.status in ('approved','refunded') and pl.trial_days > 0 and pa.amount < pl.price
-      and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and s.plan_id in (${club})
+      and coalesce(pa.processed_at, pa.created_at) >= now() - interval '90 days' and (s.plan_id in (${club}) or s.plan_id in (${sh}))
     order by coalesce(pa.processed_at, pa.created_at) desc limit ${limit}`);
   return r.rows as {
     person_id: number; name: string; username: string | null; plan: string; trial_amount: string; currency: string; at: string; due: string;
     status: string; cancel_at_period_end: boolean; has_card: boolean; next_charge_at: string | null; current_period_end: string | null;
     charges: { at: string; status: string; amount: string; reason: string | null }[];
     orders: { at: string; source: string; type: string | null; name: string | null; amount: string; currency: string; status: string }[];
+    shchyro: boolean;
   }[];
 }
