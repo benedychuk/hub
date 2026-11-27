@@ -95,3 +95,31 @@ export async function knownTags() {
     where e.type in ('tag.added','tag.tracked') and e.created_at > now() - interval '90 days' and coalesce(e.payload->>'tag', '') <> '' group by 1 order by 2 desc limit 300`);
   return r.rows as { tag: string; n: number }[];
 }
+
+// ---------- тег для тих, у кого автосписання WayForPay не пройшло і хто так і не оплатив ----------
+export const WFP_FAILED_TAG = "WFP_failed";
+/** Люди з відмовою автосписання «Cardholder session expired» (бойові), після якої не було жодної успішної оплати Hub за повну ціну. */
+const wfpFailedSql = sql`
+  with f as (
+    select r.person_id, min(coalesce(r.processed_at, r.created_at)) as first_fail
+    from payment_attempts r
+    where r.mode = 'live' and r.kind = 'renewal' and r.status in ('expired','declined','error') and r.reason ilike '%session expired%'
+    group by r.person_id)
+  select f.person_id from f
+  where not exists (select 1 from payment_attempts ok join plans pl on pl.id = ok.plan_id
+      where ok.person_id = f.person_id and ok.mode = 'live' and ok.status = 'approved' and ok.kind in ('renewal','manual','first')
+        and ok.amount >= pl.price * 0.5 and coalesce(ok.processed_at, ok.created_at) > f.first_fail)`;
+export async function wfpFailedCount() {
+  const r = await db().execute(sql`select count(*)::int as c from (${wfpFailedSql}) x`);
+  return Number((r.rows[0] as { c: number }).c);
+}
+/** Ставить тег (без запуску автоматизацій і без повідомлень людям). Повертає, скільки людей отримали тег уперше. */
+export async function tagWfpFailed() {
+  const ids = ((await db().execute(wfpFailedSql)).rows as { person_id: number }[]).map((x) => x.person_id);
+  if (!ids.length) return 0;
+  const tag = JSON.stringify([WFP_FAILED_TAG]);
+  const fresh = (await db().execute(sql`update persons set tags = coalesce(tags, '[]'::jsonb) || ${tag}::jsonb, updated_at = now()
+    where id in (${sql.join(ids.map((i) => sql`${i}`), sql`, `)}) and not coalesce(tags, '[]'::jsonb) @> ${tag}::jsonb returning id`)).rows as { id: number }[];
+  for (const r of fresh) await trackTags(r.id, [WFP_FAILED_TAG], "manual", null, { reason: "wfp_session_expired" });
+  return fresh.length;
+}

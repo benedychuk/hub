@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
 import { myTelegramId, currentUser } from "./auth";
-import { trackTags } from "./tag-stats";
+import { trackTags, tagWfpFailed as runTagWfpFailed, WFP_FAILED_TAG } from "./tag-stats";
 import { periodDaysFromOfferName } from "./zenedu";
 import { installWebhook, sendToPerson, getBot, botToken } from "./bot";
 import { grantOffer, newLinkToken } from "./offers";
@@ -1090,4 +1090,11 @@ export async function assistantTicketAction(fd: FormData) {
   await db().update(schema.assistantTickets).set({ status, resolvedBy: me?.email ?? "admin", resolvedAt: new Date() }).where(eq(schema.assistantTickets.id, id));
   revalidatePath("/assistant");
   redirect("/assistant?ok=" + encodeURIComponent(status === "done" ? "Звернення закрито" : "Звернення відхилено"));
+}
+
+/** Дашборд → «Розбір пробних Hub»: тег WFP_failed усім, у кого автосписання не пройшло («Cardholder session expired») і хто не оплатив. Нічого не надсилає. */
+export async function tagWfpFailed() {
+  const n = await runTagWfpFailed();
+  revalidatePath("/"); revalidatePath("/people");
+  redirect(`/?ok=${encodeURIComponent(n ? `Тег ${WFP_FAILED_TAG} поставлено. Людей: ${n}` : `Нових людей для тегу ${WFP_FAILED_TAG} немає`)}`);
 }
