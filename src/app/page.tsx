@@ -157,7 +157,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <Section title="Конверсії" description="Лише ті, у кого вже була спроба списання. Пробні — оформлені через Hub за 90 днів, пробний період закінчився (точно, з даних Hub); перші повні місяці — оплачені за 180 днів, настала дата другого списання. Продовження зараховується, якщо оплата прийшла протягом 14 днів після дати списання.">
           {d ? <HBars format="pct" max={100} rows={[
             { name: "Пробний → 1-й повний місяць (Hub)", value: d.conv.trials ? pct(d.conv.trials_paid, d.conv.trials) : 0, note: d.conv.trials
-              ? `${d.conv.trials_paid} з ${d.conv.trials} пробних, оформлених у Hub, оплатили повний місяць${d.conv.paidZen ? ` (з них ${d.conv.paidZen} — у ZenEdu)` : ""}${d.conv.trials_waiting ? ` · ще ${d.conv.trials_waiting} у пробному` : ""}${d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""}`
+              ? `${d.conv.trials_paid} з ${d.conv.trials} пробних, оформлених у Hub, оплатили повний місяць${d.conv.trials_waiting ? ` · ще ${d.conv.trials_waiting} у пробному` : ""}${d.conv.trials_zen ? ` · ZenEdu для порівняння: ${pct(d.conv.trials_paid_zen, d.conv.trials_zen)}% (${d.conv.trials_paid_zen} з ${d.conv.trials_zen})` : ""}`
               : `пробних через Hub, у яких уже минув пробний період, ще не було${d.conv.trials_waiting ? ` · ${d.conv.trials_waiting} зараз у пробному` : ""}`, color: "var(--c1)" },
             { name: "1-й → 2-й місяць", value: pct(d.conv.firsts_paid, d.conv.firsts), note: `${d.conv.firsts_paid} з ${d.conv.firsts} оплатили другий місяць`, color: "var(--c1)" },
           ]} /> : null}
@@ -169,15 +169,16 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
                 l.noCard ? `картка не збереглась — ${l.noCard}` : "",
                 l.notCharged ? `списання не відбулося — ${l.notCharged}` : "",
               ].filter(Boolean).join(" · ") || "причин не знайдено"}</p>
+              {l.declined > 0 && /session expired|3d|3ds|secure/i.test(l.topReason ?? "") && <Alert tone="bad"><b>Автосписання після пробного відхиляє WayForPay: «{l.topReason}» ({l.declined}).</b> Це не відмова банку чи брак коштів: платіжна система вимагає, щоб власниця картки підтвердила оплату (3-D Secure), а при списанні за збереженою карткою її немає. Списання за токеном без підтвердження (рекурентні платежі) вмикає WayForPay для мерчанта — напишіть у їхню підтримку. Доки цього немає, жодне автопродовження Hub через WayForPay не пройде.</Alert>}
               {(l.noCard + l.notCharged) > 0 && <Alert tone="warn">У {l.noCard + l.notCharged} людей після пробного Hub не спробував списати оплату{l.noCard ? `: у ${l.noCard} з них картка не збереглась після пробної оплати` : ""}. Це втрачені продовження — подивіться підписки «пробний період» у «Продажі → Підписки» або напишіть розробнику.</Alert>}
             </>; })()}
 
         </Section>
       </div>
 
-      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати клубу були після пробного (Hub і ZenEdu). Тут видно, чому пробні не переходять у повний місяць.">
+      {trialRows.length > 0 && <Section title={`Розбір пробних Hub (${trialRows.length})`} description="Кожен пробний, оформлений через Hub за 90 днів: чи є картка, чи пробував Hub списати оплату і які оплати клубу в Hub були після пробного. Тут видно, чому пробні не переходять у повний місяць.">
         <details className="chart-table tbl"><summary>Показати таблицю</summary>
-            <table><thead><tr><th>Людина</th><th>Пробний</th><th>Закінчився</th><th>Підписка зараз</th><th>Спроби списання Hub</th><th>Оплати клубу після пробного</th></tr></thead><tbody>
+            <table><thead><tr><th>Людина</th><th>Пробний</th><th>Закінчився</th><th>Підписка зараз</th><th>Спроби списання Hub</th><th>Оплати клубу в Hub після пробного</th></tr></thead><tbody>
               {trialRows.map((t) => { const ended = new Date(t.due).getTime() <= Date.now();
                 return <tr key={t.person_id + t.at}>
                   <td><Link href={`/people/${t.person_id}`}>{t.name}</Link>{t.username && <div className="fld-h">@{t.username}</div>}</td>
