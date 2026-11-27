@@ -11,7 +11,7 @@ import { adminTelegramId } from "./auth";
 import { periodDaysOf, accessEndFor, offerAvailability, syncProductAccess, expireOneTime } from "./offers";
 import { DEFAULT_GRACE_HOURS, accessGraceHours, subscriptionAllowsSql } from "./access-rule";
 import { onboardingConfigured, ensureAccountForPerson } from "./onboarding";
-import { shchyroPushChanges } from "./shchyro";
+import { shchyroPushChanges, SHCHYRO_BOT_URL } from "./shchyro";
 
 const { persons, plans, subscriptions, orders, events, settings, paymentMethods, paymentAttempts, identities } = schema;
 export type Attempt = typeof paymentAttempts.$inferSelect;
@@ -335,7 +335,8 @@ async function extendAfterCharge(s: Sub, a: Attempt, name: string, pmId: number 
   const [ns] = await d.update(subscriptions).set({ status: "active", currentPeriodEnd: end, nextChargeAt: chargeTime(end), nextRetryAt: null, retryCount: 0, lastPaymentAt: now, paymentsCount: s.paymentsCount + 1, paymentMethodId: pmId ?? s.paymentMethodId, updatedAt: now }).where(eq(subscriptions.id, s.id)).returning();
   await recordOrder(a, ns, name, "subscription_renew");
   await d.insert(events).values({ personId: s.personId, type: "payment.approved", source: "wayforpay", payload: { attemptId: a.id, kind: "renewal", amount: a.amount, until: end } });
-  await notify(s.personId, `Списано ${money(a.amount, a.currency)} за підписку. Доступ продовжено до ${end.toLocaleDateString("uk-UA")}. Дякуємо, що з нами!`);
+  // ручне списання з дашборда надсилає власне привітання (клуб / «Щиро»), тож звичайне повідомлення не дублюємо
+  if (!silentRetry.has(s.id)) await notify(s.personId, `Списано ${money(a.amount, a.currency)} за підписку. Доступ продовжено до ${end.toLocaleDateString("uk-UA")}. Дякуємо, що з нами!`);
 }
 async function onRenewalFailed(a: Attempt, reason: string) {
   const d = db(); const now = new Date();
@@ -536,9 +537,10 @@ export async function hubIdentity(personId: number) { const [i] = await db().sel
 
 // ---------- ручний повтор автосписань, що не пройшли через 3-D Secure («Cardholder session expired») ----------
 // До виправлення 2026-11-27 запит CHARGE ішов без merchantTransactionSecureType = NON3DS, і банк чекав підтвердження власниці картки.
-// Кандидати: бойова підписка Hub (борг або закрита після повторів), остання спроба автосписання відхилена з цієї причини
-// за останні 30 днів, після першої такої відмови людина не оплатила (жодної успішної оплати Hub ≥ половини ціни),
-// автопродовження не вимкнене, не на паузі, є збережена картка WayForPay, за добу не було успішного списання.
+// Кандидати (власник, 2026-11-27: «списати з усіх, в кого була помилка і вручну вони потім не оплатили»): бойова підписка Hub
+// (борг або закрита після повторів), колись автосписання відхилено з цієї причини (або 5100 «Wait 3ds data»), після першої такої
+// відмови людина не оплатила (жодної успішної оплати Hub ≥ половини ціни), автопродовження не вимкнене, не на паузі,
+// є збережена картка WayForPay; кожну підписку — не частіше разу на добу.
 const silentRetry = new Set<number>();
 export type WfpRetryCandidate = { sub_id: number; person_id: number; status: string; price: string; currency: string; failed_at: string };
 export async function wfpRetryCandidates(): Promise<WfpRetryCandidate[]> {
@@ -549,8 +551,7 @@ export async function wfpRetryCandidates(): Promise<WfpRetryCandidate[]> {
     join lateral (select min(coalesce(r.processed_at, r.created_at)) as first_fail from payment_attempts r
       where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' and (r.reason ilike '%session expired%' or r.reason ilike '%wait 3ds%')) f on true
     where s.source = 'hub' and s.kind = 'subscription' and s.status in ('past_due','expired') and not s.cancel_at_period_end and s.paused_at is null
-      and f.first_fail is not null and f.first_fail > now() - interval '30 days'
-      and (select r.reason from payment_attempts r where r.subscription_id = s.id and r.mode = 'live' and r.kind = 'renewal' order by r.id desc limit 1) similar to '%(session expired|Wait 3ds)%'
+      and f.first_fail is not null
       and not exists (select 1 from payment_attempts ok join plans pl on pl.id = ok.plan_id where ok.person_id = s.person_id and ok.mode = 'live'
         and ok.status = 'approved' and ok.kind in ('renewal','manual','first') and ok.amount >= pl.price * 0.5 and coalesce(ok.processed_at, ok.created_at) > f.first_fail)
       and not exists (select 1 from payment_attempts p where p.subscription_id = s.id and p.status = 'pending' and p.created_at > now() - interval '1 hour')
@@ -558,6 +559,29 @@ export async function wfpRetryCandidates(): Promise<WfpRetryCandidate[]> {
       and not exists (select 1 from events e where e.type = 'payment.manual_retry' and e.payload->>'subscriptionId' = s.id::text and e.created_at > now() - interval '1 day')
     order by f.first_fail`);
   return r.rows as WfpRetryCandidate[];
+}
+/** Після ручного списання: доступ і привітання. Клуб — «повноцінна учасниця клубу» з кнопкою в канал; «Щиро» — повноцінний доступ на місяць. */
+async function welcomeAfterManualCharge(subId: number) {
+  const d = db();
+  const [s] = await d.select().from(subscriptions).where(eq(subscriptions.id, subId)); if (!s) return;
+  const [pl] = s.planId ? await d.select().from(plans).where(eq(plans.id, s.planId)) : [];
+  const keys = Object.keys(pl?.entitlements ?? {});
+  await syncEntitlementsFromSubscriptions().catch(() => null); // право на канал і «Щиро» за продовженою підпискою
+  const until = s.currentPeriodEnd ? s.currentPeriodEnd.toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv" }) : null;
+  const { channelKeysOf, welcomeToChannels } = await import("./telegram-access");
+  const channels = await channelKeysOf(keys);
+  if (channels.length) {
+    await welcomeToChannels(s.personId, channels, `{first_name}, вітаємо! Оплату отримано — тепер ви повноцінна учасниця клубу${until ? ` (доступ до ${until})` : ""}. Натисніть кнопку, щоб перейти в клуб.`, "Перейти в клуб").catch(() => null);
+    return;
+  }
+  const [shRes] = await d.select().from(settings).where(eq(settings.key, "shchyro.resource_key"));
+  const shKey = typeof shRes?.value === "string" && shRes.value ? shRes.value : "shchyro.access";
+  if (keys.includes(shKey)) {
+    await shchyroPushChanges().catch(() => null);
+    try { await sendToPerson(s.personId, `{first_name}, вітаємо! Оплату отримано — тепер у вас повноцінний доступ до «Щиро» на місяць${until ? `, до ${until}` : ""}.`, { buttons: [{ text: "Відкрити «Щиро»", url: SHCHYRO_BOT_URL }] }); } catch { /* бот не запущений */ }
+    return;
+  }
+  await notify(s.personId, `Оплату отримано. Доступ продовжено${until ? ` до ${until}` : ""}. Дякуємо, що з нами!`);
 }
 /** Одна порція ручного повтору (функція Vercel має 60 с): списує, доки не мине ~40 с. Повертає підсумок і скільки лишилось. */
 export async function retryWfpFailed(budgetMs = 40_000) {
@@ -570,15 +594,7 @@ export async function retryWfpFailed(budgetMs = 40_000) {
     silentRetry.add(c.sub_id);
     try {
       const r = await chargeSubscription(c.sub_id);
-      if (r.ok) {
-        ok++;
-        if (c.status === "expired") { // доступ уже закрили: повертаємо канал, як після звичайної оплати
-          const [s] = await db().select().from(subscriptions).where(eq(subscriptions.id, c.sub_id));
-          const [pl] = s?.planId ? await db().select().from(plans).where(eq(plans.id, s.planId)) : [];
-          const channels = await enforcedChannelKeys(Object.keys(pl?.entitlements ?? {})).catch(() => [] as string[]);
-          if (channels.length) { await syncEntitlementsFromSubscriptions().catch(() => null); await inviteAfterPayment(c.person_id, channels).catch(() => null); }
-        }
-      } else { failed++; reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1); }
+      if (r.ok) { ok++; await welcomeAfterManualCharge(c.sub_id).catch(() => null); } else { failed++; reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1); }
     } finally { silentRetry.delete(c.sub_id); }
     done++;
     await db().insert(events).values({ personId: c.person_id, type: "payment.manual_retry", source: "hub", payload: { subscriptionId: c.sub_id } });
