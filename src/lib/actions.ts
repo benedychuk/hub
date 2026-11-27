@@ -280,6 +280,19 @@ export async function createBroadcast(fd: FormData) {
   const [b] = await db().insert(broadcasts).values({ name: str(fd, "name") || "Нова розсилка", status: "draft", audience: {} }).returning({ id: broadcasts.id });
   revalidatePath("/broadcasts"); redirect(`/broadcasts/${b.id}?step=content`);
 }
+/** Етер → «Розсилка тим, хто не дивився»: чернетка з аудиторією «чинні учасниці клубу без переходу на цей етер».
+ * Текст пише команда, надсилання чи розклад — звичайним кроком «Надсилання». Сама нічого не надсилає. */
+export async function createStreamBroadcast(fd: FormData) {
+  const sid = Number(fd.get("streamId"));
+  const [st] = await db().select().from(schema.streams).where(eq(schema.streams.id, sid));
+  if (!st) redirect("/streams");
+  const { platformStreamLink, streamLinks, hubBotUsername } = await import("./streams");
+  const url = platformStreamLink() ?? streamLinks(st.code, await hubBotUsername()).bot;
+  const buttons: BroadcastButton[] = url ? [{ text: "Дивитись запис", type: "link", url, tags: [], actions: [] }] : [];
+  const day = st.startsAt.toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit" });
+  const [b] = await db().insert(broadcasts).values({ name: `Етер «${st.title}» ${day} — не дивились`.slice(0, 120), status: "draft", text: "", buttons, audience: { clubMembers: true, notVisitedStream: st.id } }).returning({ id: broadcasts.id });
+  revalidatePath("/broadcasts"); redirect(`/broadcasts/${b.id}?step=content`);
+}
 export async function saveBroadcastContent(fd: FormData) {
   const id = Number(fd.get("id"));
   let buttons: BroadcastButton[] = [];
@@ -309,6 +322,8 @@ export async function saveBroadcastAudience(fd: FormData) {
     funnelRules: parseRules(str(fd, "funnelRulesJson")), planIds: nums(fd, "planIds"), offerIds: nums(fd, "offerIds"), entitlements: list(fd, "entitlements"),
     activeDays: Number(fd.get("activeDays") || 0) || undefined, startedAfter: str(fd, "startedAfter") || undefined, startedBefore: str(fd, "startedBefore") || undefined,
     excludeIds: str(fd, "excludeIds").split(/[\s,]+/).map(Number).filter((n) => n > 0), includeIds: str(fd, "includeIds").split(/[\s,]+/).map(Number).filter((n) => n > 0),
+
+    clubMembers: fd.get("clubMembers") === "on" || undefined, notVisitedStream: Number(fd.get("notVisitedStream") || 0) || undefined,
   };
   await db().update(broadcasts).set({ audience: a, updatedAt: new Date() }).where(eq(broadcasts.id, id));
   const [b] = await db().select({ status: broadcasts.status }).from(broadcasts).where(eq(broadcasts.id, id));

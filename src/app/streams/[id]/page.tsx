@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Radio, Download, Trash2, Save } from "lucide-react";
+import { Radio, Download, Trash2, Save, Send } from "lucide-react";
 import Shell from "@/components/shell";
 import { Pill } from "@/components/ui";
 import { PageHeader, Section, Field, Alert, EmptyState, Stat } from "@/components/ui/layout";
@@ -8,7 +8,8 @@ import { Kebab, MenuAction, MenuLink, MenuSep } from "@/components/ui/controls";
 import { CopyField } from "@/components/ui/copy-field";
 import { navCounts, safe } from "@/lib/queries";
 import { streamDetail, streamLinks, hubBotUsername, platformStreamLink, cabinetArchive, ARCHIVE_DAYS } from "@/lib/streams";
-import { saveStream, deleteStream } from "@/lib/actions";
+import { saveStream, deleteStream, createStreamBroadcast } from "@/lib/actions";
+import { countAudience } from "@/lib/broadcasts";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +26,12 @@ export default async function StreamPage({ params, searchParams }: { params: Pro
   const archiveUntil = ended ? new Date(s.startsAt.getTime() + ARCHIVE_DAYS * 86400_000) : null;
   const links = streamLinks(s.code, botUser); const platform = platformStreamLink(); const main = links.miniapp ?? links.bot;
   const club = visitors.filter((v) => v.zen || v.hub).length;
+  const started = now.getTime() >= s.startsAt.getTime();
+  const missed = started ? await safe(() => countAudience({ clubMembers: true, notVisitedStream: s.id }), null) : null;
   return (
     <Shell title="Етери" counts={counts}>
       <PageHeader back="/streams" backLabel="Етери" icon={<Radio size={16} />} title={s.title} status={<><Pill tone="moon">{when(s.startsAt)}</Pill>{archiveUntil && (inArchive ? <Pill tone="good">запис у кабінеті до {archiveUntil.toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit" })}</Pill> : <Pill tone="mute">запис прибрано з кабінету</Pill>)}</>}
-        actions={<Kebab><MenuLink href={`/api/export/streams?id=${s.id}`} icon={<Download />}>Завантажити список (CSV)</MenuLink><MenuSep /><MenuAction action={deleteStream} fields={{ id: s.id }} icon={<Trash2 />} danger confirm={`Видалити «${s.title}» разом зі списком тих, хто перейшов? Теги в людей лишаться.`}>Видалити етер</MenuAction></Kebab>} />
+        actions={<>{started && <form action={createStreamBroadcast}><input type="hidden" name="streamId" value={s.id} /><button className="btn sm" type="submit" title="Чернетка розсилки: чинні учасниці клубу, які не перейшли на цей етер ні онлайн, ні в записі. Текст і час надсилання задає команда."><Send size={15} /> Розсилка тим, хто не дивився{missed !== null ? ` · ${missed}` : ""}</button></form>}<Kebab><MenuLink href={`/api/export/streams?id=${s.id}`} icon={<Download />}>Завантажити список (CSV)</MenuLink><MenuSep /><MenuAction action={deleteStream} fields={{ id: s.id }} icon={<Trash2 />} danger confirm={`Видалити «${s.title}» разом зі списком тих, хто перейшов? Теги в людей лишаться.`}>Видалити етер</MenuAction></Kebab></>} />
       {sp.created && <Alert tone="ok">Етер створено. Скопіюйте посилання нижче й опублікуйте в каналі (текстом або кнопкою під постом). Кожен, хто перейде, з'явиться в списку.</Alert>}
       {sp.saved && <Alert tone="ok">Збережено.</Alert>}
       {sp.err && <Alert tone="bad">{sp.err}</Alert>}

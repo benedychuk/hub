@@ -22,8 +22,10 @@ export const SUB_STATUSES: [string, string][] = [["active", "Active"], ["trialin
 
 // ---------- аудиторія ----------
 /** Умова вибору людей: усі, хто запустив Hub-бот і не заблокував його, звужена фільтрами. Псевдоніми: p = persons, i = identities. */
-export function audienceWhere(a: BroadcastAudience) {
+export async function audienceWhere(a: BroadcastAudience) {
   const parts = [sql`i.bot_key = ${BOT_KEY} and i.chat_id is not null and i.blocked_at is null`];
+  if (a.clubMembers) { const { clubMemberSql } = await import("./club"); parts.push(sql`${await clubMemberSql("p.id")}`); }
+  if (a.notVisitedStream) parts.push(sql`not exists (select 1 from stream_visits sv where sv.person_id = p.id and sv.stream_id = ${a.notVisitedStream})`);
   if (a.onlyAdmin) parts.push(sql`p.telegram_user_id = ${a.onlyTelegramId || adminTelegramId()}`);
   if (a.customer === "customer") parts.push(sql`exists (select 1 from orders o where o.person_id = p.id and o.status = 'paid')`);
   if (a.customer === "not") parts.push(sql`not exists (select 1 from orders o where o.person_id = p.id and o.status = 'paid')`);
@@ -55,7 +57,7 @@ export function audienceWhere(a: BroadcastAudience) {
 }
 
 export async function countAudience(a: BroadcastAudience) {
-  const r = await db().execute(sql`select count(distinct p.id)::int as c from persons p join identities i on i.person_id = p.id where ${audienceWhere(a)}`);
+  const r = await db().execute(sql`select count(distinct p.id)::int as c from persons p join identities i on i.person_id = p.id where ${await audienceWhere(a)}`);
   return Number((r.rows[0] as { c: number }).c);
 }
 export type AudienceRow = { id: number; first_name: string | null; last_name: string | null; username: string | null; telegram_user_id: number; customer: boolean; sub_status: string | null };
@@ -63,7 +65,7 @@ export async function previewAudience(a: BroadcastAudience, limit = 50, offset =
   const r = await db().execute(sql`select distinct p.id, p.first_name, p.last_name, p.username, p.telegram_user_id,
       exists (select 1 from orders o where o.person_id = p.id and o.status = 'paid') as customer,
       (select s.status from subscriptions s where s.person_id = p.id order by (s.status in ('active','trialing','past_due')) desc, s.updated_at desc limit 1) as sub_status
-    from persons p join identities i on i.person_id = p.id where ${audienceWhere(a)} order by p.id desc limit ${limit} offset ${offset}`);
+    from persons p join identities i on i.person_id = p.id where ${await audienceWhere(a)} order by p.id desc limit ${limit} offset ${offset}`);
   return r.rows as AudienceRow[];
 }
 
@@ -71,7 +73,7 @@ export async function previewAudience(a: BroadcastAudience, limit = 50, offset =
 export async function snapshotRecipients(id: number) {
   const d = db();
   const [b] = await d.select().from(broadcasts).where(eq(broadcasts.id, id)); if (!b) return 0;
-  await d.execute(sql`insert into broadcast_recipients (broadcast_id, person_id, status) select distinct ${id}::int, p.id, 'pending' from persons p join identities i on i.person_id = p.id where ${audienceWhere(b.audience)} on conflict do nothing`);
+  await d.execute(sql`insert into broadcast_recipients (broadcast_id, person_id, status) select distinct ${id}::int, p.id, 'pending' from persons p join identities i on i.person_id = p.id where ${await audienceWhere(b.audience)} on conflict do nothing`);
   const [t] = await d.select({ c: sql<number>`count(*)::int` }).from(broadcastRecipients).where(eq(broadcastRecipients.broadcastId, id));
   await d.update(broadcasts).set({ totalCount: t.c, updatedAt: new Date() }).where(eq(broadcasts.id, id));
   return t.c;
@@ -181,7 +183,8 @@ export async function processBroadcasts(budgetMs = 45_000) {
   const now = new Date();
   // 1. заплановані, чий час настав
   const due = await d.select().from(broadcasts).where(and(eq(broadcasts.status, "scheduled"), lte(broadcasts.scheduledAt, now)));
-  for (const b of due) { await snapshotRecipients(b.id); await d.update(broadcasts).set({ status: "sending", startedAt: now, updatedAt: now }).where(and(eq(broadcasts.id, b.id), eq(broadcasts.status, "scheduled"))); }
+  // «не дивились етер» / «лише учасниці клубу»: аудиторію перераховуємо на момент надсилання — хто встиг подивитись запис чи вийшов з клубу після планування, не отримає
+  for (const b of due) { await (b.audience?.notVisitedStream || b.audience?.clubMembers ? resnapshot(b.id) : snapshotRecipients(b.id)); await d.update(broadcasts).set({ status: "sending", startedAt: now, updatedAt: now }).where(and(eq(broadcasts.id, b.id), eq(broadcasts.status, "scheduled"))); }
   // 2. зависли в «sending» понад 10 хв (функція перервалась): не надсилаємо повторно, щоб не було дублів
   await d.execute(sql`update broadcast_recipients set status = 'failed', error = 'перервано під час надсилання' where status = 'sending' and claimed_at < now() - interval '10 minutes'`);
   let sent = 0, failed = 0;

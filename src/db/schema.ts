@@ -364,6 +364,8 @@ export type BroadcastAudience = {
   includeIds?: number[]; excludeIds?: number[];
   onlyAdmin?: boolean;       // тест: лише той, хто налаштовує (Telegram із «Мій акаунт» або власник)
   onlyTelegramId?: number;
+  clubMembers?: boolean;     // лише чинні учасниці клубу (ZenEdu чи Hub, за тим самим правилом, що доступ до платформи)
+  notVisitedStream?: number; // не дивились етер (ні онлайн, ні запис): немає переходу на цей етер у stream_visits
 };
 
 // Розсилки (структура як у ZenEdu: Зміст → Отримувачі → Надсилання).
